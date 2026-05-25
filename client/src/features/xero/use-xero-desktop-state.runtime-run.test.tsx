@@ -23,6 +23,7 @@ import type {
   SyncNotificationAdaptersResponseDto,
   UpsertNotificationRouteCredentialsRequestDto,
   UpsertNotificationRouteCredentialsResponseDto,
+  WriteProjectFileResponseDto,
 } from '@/src/lib/xero-model'
 import type { ProviderProfilesDto } from '@/src/test/legacy-provider-profiles'
 import { useXeroDesktopState } from '@/src/features/xero/use-xero-desktop-state'
@@ -41,14 +42,33 @@ function makeProjectSummary(id: string, name: string) {
   }
 }
 
+function writeFileResponse(
+  projectId: string,
+  path: string,
+  content = '',
+): WriteProjectFileResponseDto {
+  return {
+    projectId,
+    path,
+    byteLength: content.length,
+    modifiedAt: '2026-01-01T00:00:01Z',
+    contentHash: `saved-${path}-${content.length}`,
+    mimeType: 'text/plain; charset=utf-8',
+    rendererKind: 'code',
+    preview: null,
+  }
+}
+
 function makeAgentSession(projectId: string) {
   return {
     projectId,
     agentSessionId: 'agent-session-main',
+    sessionKind: 'standard' as const,
     title: 'Main session',
     summary: 'Primary project session',
     status: 'active' as const,
     selected: true,
+    remoteVisible: false,
     createdAt: '2026-04-15T20:00:00Z',
     updatedAt: '2026-04-15T20:00:00Z',
     archivedAt: null,
@@ -263,6 +283,7 @@ function makeDiff(id: string, scope: 'staged' | 'unstaged' | 'worktree'): Reposi
     },
     scope,
     patch: '',
+    files: [],
     truncated: false,
     baseRevision: null,
   }
@@ -331,6 +352,7 @@ function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00Z',
       },
@@ -472,6 +494,60 @@ function makeStreamResponse(
   }
 }
 
+function makeRuntimeStreamEvent(
+  projectId: string,
+  overrides: Omit<Partial<RuntimeStreamEventDto>, 'item'> & {
+    item?: Partial<RuntimeStreamEventDto['item']>
+  } = {},
+): RuntimeStreamEventDto {
+  const runId = overrides.runId ?? overrides.item?.runId ?? `run-${projectId}`
+  const sessionId = overrides.sessionId ?? overrides.item?.sessionId ?? 'session-1'
+  const flowId = overrides.flowId ?? overrides.item?.flowId ?? 'flow-1'
+  const kind = overrides.item?.kind ?? 'transcript'
+
+  return {
+    projectId,
+    agentSessionId: overrides.agentSessionId ?? 'agent-session-main',
+    runtimeKind: overrides.runtimeKind ?? 'openai_codex',
+    runId,
+    sessionId,
+    flowId,
+    subscribedItemKinds:
+      overrides.subscribedItemKinds ??
+      ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+    item: {
+      kind,
+      runId,
+      sequence: overrides.item?.sequence ?? 1,
+      sessionId,
+      flowId,
+      text: kind === 'transcript' ? 'Assistant response.' : null,
+      transcriptRole: kind === 'transcript' ? 'assistant' : null,
+      toolCallId: null,
+      toolName: null,
+      toolState: null,
+      toolSummary: null,
+      toolResultPreview: null,
+      skillId: null,
+      skillStage: null,
+      skillResult: null,
+      skillSource: null,
+      skillCacheStatus: null,
+      skillDiagnostic: null,
+      actionId: null,
+      boundaryId: null,
+      actionType: null,
+      title: null,
+      detail: kind === 'complete' ? 'Runtime completed.' : null,
+      code: null,
+      message: null,
+      retryable: null,
+      createdAt: '2026-04-16T13:30:00Z',
+      ...overrides.item,
+    },
+  }
+}
+
 function makeNotificationSyncResponse(
   projectId: string,
   overrides: Partial<SyncNotificationAdaptersResponseDto> = {},
@@ -525,6 +601,7 @@ function createMockAdapter(options?: {
   upsertRouteErrors?: Record<string, Error>
   startRuntimeRunErrors?: Record<string, Error>
   updateRuntimeRunControlErrors?: Record<string, Error>
+  autoNameAgentSessionError?: Error
   subscribeResponses?: Record<string, SubscribeRuntimeStreamResponseDto>
 }) {
   let projectUpdatedHandler: ((payload: ProjectUpdatedPayloadDto) => void) | null = null
@@ -725,6 +802,10 @@ function createMockAdapter(options?: {
     prompt: string
     controls?: RuntimeRunControlInputDto | null
   }) => {
+    if (options?.autoNameAgentSessionError) {
+      throw options.autoNameAgentSessionError
+    }
+
     const snapshot = snapshots[request.projectId]
     const existing = snapshot?.agentSessions.find((session) => session.agentSessionId === request.agentSessionId)
     if (!snapshot || !existing) {
@@ -733,7 +814,7 @@ function createMockAdapter(options?: {
 
     const nextSession = {
       ...existing,
-      title: existing.title.trim().toLowerCase() === 'new chat' ? 'System Prompt Investigation' : existing.title,
+      title: 'System Prompt Investigation',
       updatedAt: '2026-04-15T20:00:02Z',
     }
     snapshots[request.projectId] = {
@@ -741,6 +822,37 @@ function createMockAdapter(options?: {
       agentSessions: snapshot.agentSessions.map((session) =>
         session.agentSessionId === request.agentSessionId ? nextSession : session,
       ),
+    }
+    return nextSession
+  })
+  const updateAgentSession = vi.fn(async (request: {
+    projectId: string
+    agentSessionId: string
+    title?: string | null
+    summary?: string | null
+    selected?: boolean | null
+  }) => {
+    const snapshot = snapshots[request.projectId]
+    const existing = snapshot?.agentSessions.find((session) => session.agentSessionId === request.agentSessionId)
+    if (!snapshot || !existing) {
+      throw new Error(`Missing agent session ${request.agentSessionId}`)
+    }
+
+    const nextSession = {
+      ...existing,
+      title: request.title?.trim() || existing.title,
+      summary: request.summary ?? existing.summary,
+      selected: request.selected ?? existing.selected,
+      updatedAt: '2026-04-15T20:00:03Z',
+    }
+    snapshots[request.projectId] = {
+      ...snapshot,
+      agentSessions: snapshot.agentSessions.map((session) => {
+        if (session.agentSessionId === request.agentSessionId) {
+          return nextSession
+        }
+        return request.selected ? { ...session, selected: false } : session
+      }),
     }
     return nextSession
   })
@@ -773,6 +885,34 @@ function createMockAdapter(options?: {
         type: 'folder' as const,
         children: [],
       },
+      view: {
+        rootPath: '/',
+        nodesByPath: {
+          '/': {
+            id: '/',
+            name: 'root',
+            path: '/',
+            type: 'folder' as const,
+            childrenLoaded: true,
+            truncated: false,
+            omittedEntryCount: 0,
+          },
+        },
+        childPathsByPath: {
+          '/': [],
+        },
+        loadedPaths: ['/'],
+        stats: {
+          byteSize: 1,
+          childListCount: 1,
+          nodeCount: 1,
+          unloadedFolderCount: 0,
+        },
+        truncated: false,
+        omittedEntryCount: 0,
+      },
+      truncated: false,
+      omittedEntryCount: 0,
     })),
     readProjectFile: vi.fn(async (projectId: string, path: string) => ({
       kind: 'text' as const,
@@ -785,7 +925,9 @@ function createMockAdapter(options?: {
       rendererKind: 'code' as const,
       text: '',
     })),
-    writeProjectFile: vi.fn(async (projectId: string, path: string) => ({ projectId, path })),
+    writeProjectFile: vi.fn(async (projectId: string, path: string, content = '') =>
+      writeFileResponse(projectId, path, content),
+    ),
     createProjectEntry: vi.fn(async (request) => ({
       projectId: request.projectId,
       path: request.parentPath === '/' ? `/${request.name}` : `${request.parentPath}/${request.name}`,
@@ -807,6 +949,7 @@ function createMockAdapter(options?: {
     getAutonomousRun,
     getRuntimeRun,
     getRuntimeSession,
+    updateAgentSession,
     autoNameAgentSession,
     getProviderModelCatalog: vi.fn(async (profileId: string): Promise<ProviderModelCatalogDto> => {
       const profile = providerProfiles.profiles.find((candidate) => candidate.profileId === profileId)
@@ -815,6 +958,7 @@ function createMockAdapter(options?: {
       }
 
       return {
+        contractVersion: 1,
         profileId,
         providerId: profile.providerId,
         configuredModelId: profile.modelId,
@@ -855,6 +999,7 @@ function createMockAdapter(options?: {
                   },
                 },
               ],
+        contractDiagnostics: [],
       }
     }),
     startOpenAiLogin: vi.fn(
@@ -899,6 +1044,7 @@ function createMockAdapter(options?: {
               thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
               approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
               planModeRequired: options?.initialControls?.planModeRequired ?? false,
+              autoCompactEnabled: true,
               revision: 1,
               appliedAt: '2026-04-15T20:00:00Z',
             },
@@ -910,6 +1056,7 @@ function createMockAdapter(options?: {
                   thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
                   approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
                   planModeRequired: options?.initialControls?.planModeRequired ?? false,
+                  autoCompactEnabled: true,
                   revision: 2,
                   queuedAt: '2026-04-15T20:00:01Z',
                   queuedPrompt: options.initialPrompt,
@@ -960,6 +1107,10 @@ function createMockAdapter(options?: {
               request.controls?.planModeRequired ??
               basePending?.planModeRequired ??
               currentRun.controls.active.planModeRequired,
+            autoCompactEnabled:
+              request.controls?.autoCompactEnabled ??
+              basePending?.autoCompactEnabled ??
+              currentRun.controls.active.autoCompactEnabled,
             revision: basePending ? basePending.revision + 1 : currentRun.controls.active.revision + 1,
             queuedAt,
             queuedPrompt: request.prompt ?? basePending?.queuedPrompt ?? null,
@@ -1011,6 +1162,7 @@ function createMockAdapter(options?: {
         _itemKinds,
         handler: (payload: RuntimeStreamEventDto) => void,
         onError?: (error: XeroDesktopError) => void,
+        _options?: { afterSequence?: number | null; replayLimit?: number | null },
       ) => {
         const subscription = {
           projectId,
@@ -1071,6 +1223,7 @@ function createMockAdapter(options?: {
     upsertNotificationRoute,
     startRuntimeRun: adapter.startRuntimeRun,
     autoNameAgentSession,
+    updateAgentSession,
     updateRuntimeRunControls: adapter.updateRuntimeRunControls,
     resumeOperatorRun,
     subscribeRuntimeStream: adapter.subscribeRuntimeStream,
@@ -1176,6 +1329,9 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
       <div data-testid="runtime-run-error">{state.agentView?.runtimeRunErrorMessage ?? 'none'}</div>
       <div data-testid="runtime-run-action-error">{state.agentView?.runtimeRunActionError?.message ?? 'none'}</div>
       <div data-testid="runtime-run-reason">{state.agentView?.runtimeRunUnavailableReason ?? 'none'}</div>
+      <div data-testid="unread-completed-session-count">
+        {String(state.activeProjectUnreadCompletedSessionCount)}
+      </div>
       <div data-testid="autonomous-run-id">{state.agentView?.autonomousRun?.runId ?? 'none'}</div>
       <div data-testid="autonomous-run-provider-id">{state.agentView?.autonomousRun?.providerId ?? 'none'}</div>
       <div data-testid="autonomous-run-status">{state.agentView?.autonomousRun?.status ?? 'none'}</div>
@@ -1276,6 +1432,7 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
                 thinkingEffort: 'high',
                 approvalMode: 'auto_edit',
                 planModeRequired: false,
+                autoCompactEnabled: true,
               },
               prompt: 'Review the latest diff before continuing.',
             })
@@ -1295,6 +1452,7 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
                 thinkingEffort: 'high',
                 approvalMode: 'auto_edit',
                 planModeRequired: false,
+                autoCompactEnabled: true,
               },
               prompt: 'Review the latest diff before continuing.',
             })
@@ -1314,6 +1472,7 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
                 thinkingEffort: 'high',
                 approvalMode: 'auto_edit',
                 planModeRequired: false,
+                autoCompactEnabled: true,
               },
             })
             .catch(() => undefined)
@@ -1388,6 +1547,18 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
       >
         Disable telegram route
       </button>
+      <button
+        onClick={() =>
+          state.acknowledgeCompletedAgentSessions(
+            state.activeProject?.selectedAgentSessionId
+              ? [state.activeProject.selectedAgentSessionId]
+              : [],
+          )
+        }
+        type="button"
+      >
+        View selected session
+      </button>
     </div>
   )
 }
@@ -1442,6 +1613,91 @@ describe('useXeroDesktopState runtime-run hydration', () => {
         thinkingEffort: 'high',
       }),
     })
+  })
+
+  it('falls back to a prompt-derived title when model title generation fails', async () => {
+    const newChatSnapshot = makeSnapshot('project-1', 'Xero')
+    newChatSnapshot.agentSessions = [
+      {
+        ...makeAgentSession('project-1'),
+        title: 'New Chat',
+        summary: '',
+        lastRunId: null,
+      },
+    ]
+    const setup = createMockAdapter({
+      snapshots: {
+        'project-1': newChatSnapshot,
+      },
+      runtimeRuns: {
+        'project-1': null,
+      },
+      autoNameAgentSessionError: new Error('title provider unavailable'),
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('none'))
+    expect(screen.getByTestId('selected-session-title')).toHaveTextContent('New Chat')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start runtime run with controls' }))
+    })
+
+    await waitFor(() => expect(setup.autoNameAgentSession).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(setup.updateAgentSession).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+        title: 'Review the latest diff before continuing',
+      }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-session-title')).toHaveTextContent('Review the latest diff before continuing'),
+    )
+  })
+
+  it('refreshes the session title from follow-up prompts after the first run exists', async () => {
+    const existingChatSnapshot = makeSnapshot('project-1', 'Xero')
+    existingChatSnapshot.agentSessions = [
+      {
+        ...makeAgentSession('project-1'),
+        title: 'Diff Review',
+        summary: '',
+        lastRunId: 'run-project-1',
+      },
+    ]
+    const setup = createMockAdapter({
+      snapshots: {
+        'project-1': existingChatSnapshot,
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1'),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1'))
+    expect(screen.getByTestId('selected-session-title')).toHaveTextContent('Diff Review')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Queue runtime controls' }))
+    })
+
+    await waitFor(() => expect(setup.autoNameAgentSession).toHaveBeenCalledTimes(1))
+    expect(setup.autoNameAgentSession).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      prompt: 'Review the latest diff before continuing.',
+      controls: expect.objectContaining({
+        modelId: 'openai/gpt-5-mini',
+        thinkingEffort: 'high',
+      }),
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-session-title')).toHaveTextContent('System Prompt Investigation'),
+    )
   })
 
   it('preserves the last truthful runtime-run view when a later run refresh fails', async () => {
@@ -1507,6 +1763,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
               thinkingEffort: 'medium',
               approvalMode: 'suggest',
               planModeRequired: false,
+              autoCompactEnabled: true,
               revision: 1,
               appliedAt: '2026-04-15T20:00:00Z',
             },
@@ -1517,6 +1774,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
               thinkingEffort: 'medium',
               approvalMode: 'suggest',
               planModeRequired: false,
+              autoCompactEnabled: true,
               revision: 2,
               queuedAt: '2026-04-15T20:00:01Z',
               queuedPrompt: 'First queued prompt.',
@@ -1549,6 +1807,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
               thinkingEffort: 'medium',
               approvalMode: 'suggest',
               planModeRequired: false,
+              autoCompactEnabled: true,
               revision: 1,
               appliedAt: '2026-04-15T20:00:00Z',
             },
@@ -1558,6 +1817,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
               thinkingEffort: 'medium',
               approvalMode: 'yolo',
               planModeRequired: false,
+              autoCompactEnabled: true,
               revision: 2,
               queuedAt: '2026-04-15T20:00:07Z',
               queuedPrompt: null,
@@ -1791,26 +2051,114 @@ describe('useXeroDesktopState runtime-run hydration', () => {
     expect(vi.mocked(setup.syncNotificationAdapters).mock.calls.length).toBe(syncRefreshesBeforeEvent)
   })
 
-  it('hydrates gate-linked pending approvals from durable snapshot truth on project:updated refresh', async () => {
+  it('resubscribes on runtime_run:updated when the active session queues a prompt on the same run id', async () => {
+    const initialRun = makeRuntimeRun('project-1', { runId: 'run-project-1' })
     const setup = createMockAdapter({
-      listProjects: { projects: [makeProjectSummary('project-1', 'Xero')] },
-    })
-
-    let includeGatePause = false
-    vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
-      const snapshot = makeSnapshot(projectId, projectId === 'project-1' ? 'Xero' : 'orchestra')
-
-      if (projectId === 'project-1' && includeGatePause) {
-        return {
-          ...snapshot,
-          approvalRequests: [makeGateLinkedPendingApproval()],
-        }
-      }
-
-      return snapshot
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': initialRun,
+      },
     })
 
     render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
+    expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      setup.emitRuntimeStream(
+        0,
+        makeRuntimeStreamEvent('project-1', {
+          runId: 'run-project-1',
+          item: {
+            kind: 'complete',
+            sequence: 9,
+            runId: 'run-project-1',
+            detail: 'Previous turn completed.',
+            text: 'Previous turn completed.',
+          },
+        }),
+      )
+    })
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('complete'))
+    expect(screen.getByTestId('stream-last-sequence')).toHaveTextContent('9')
+
+    act(() => {
+      setup.emitRuntimeRunUpdated({
+        projectId: 'project-1',
+        run: makeRuntimeRun('project-1', {
+          runId: 'run-project-1',
+          updatedAt: '2026-04-15T20:01:00Z',
+          lastCheckpointSequence: 3,
+          lastCheckpointAt: '2026-04-15T20:01:00Z',
+          checkpoints: [
+            ...initialRun.checkpoints,
+            {
+              sequence: 3,
+              kind: 'state',
+              summary: 'Owned agent runtime queued a cloud prompt.',
+              createdAt: '2026-04-15T20:01:00Z',
+            },
+          ],
+          controls: {
+            active: initialRun.controls.active,
+            pending: {
+              providerProfileId: initialRun.controls.active.providerProfileId,
+              runtimeAgentId: initialRun.controls.active.runtimeAgentId,
+              modelId: initialRun.controls.active.modelId,
+              thinkingEffort: initialRun.controls.active.thinkingEffort,
+              approvalMode: initialRun.controls.active.approvalMode,
+              planModeRequired: initialRun.controls.active.planModeRequired,
+              autoCompactEnabled: true,
+              revision: 2,
+              queuedAt: '2026-04-15T20:01:00Z',
+              queuedPrompt: 'What is 1+1?',
+              queuedPromptAt: '2026-04-15T20:01:00Z',
+            },
+          },
+        }),
+      })
+    })
+
+    await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(2))
+    expect(setup.streamSubscriptions[0]?.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1')
+    expect(screen.getByTestId('pending-control-prompt')).toHaveTextContent('What is 1+1?')
+    expect(vi.mocked(setup.subscribeRuntimeStream).mock.calls.at(-1)?.[5]).toEqual({
+      afterSequence: 9,
+      replayLimit: 200,
+    })
+  })
+
+  it('hydrates gate-linked pending approvals from durable snapshot truth on project:updated refresh', async () => {
+    const setup = createMockAdapter()
+
+    let includeGatePause = false
+    const baseSnapshot = makeSnapshot('project-1', 'Xero')
+    const gatePauseSnapshot = {
+      ...baseSnapshot,
+      approvalRequests: [makeGateLinkedPendingApproval()],
+    }
+    vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
+      if (projectId !== 'project-1') {
+        return makeSnapshot(projectId, 'orchestra')
+      }
+
+      return includeGatePause ? gatePauseSnapshot : baseSnapshot
+    })
+
+    await act(async () => {
+      render(<Harness adapter={setup.adapter} />)
+    })
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
     expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0')
@@ -2130,7 +2478,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
     await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('subscribing'))
 
-    act(() => {
+    await act(async () => {
       setup.emitRuntimeStream(0, {
         projectId: 'project-1',
         runtimeKind: 'openai_codex',
@@ -2183,6 +2531,72 @@ describe('useXeroDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('stream-skill-first-id')).toHaveTextContent('find-skills')
     expect(screen.getByTestId('stream-skill-first-stage')).toHaveTextContent('invoke')
     expect(screen.getByTestId('stream-skill-first-result')).toHaveTextContent('failed')
+  })
+
+  it('counts completed runtime sessions until that session is viewed again', async () => {
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+      },
+      subscribeResponses: {
+        'project-1': makeStreamResponse('project-1', {
+          runId: 'run-project-1',
+        }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('0')
+
+    await act(async () => {
+      setup.emitRuntimeStream(0, makeRuntimeStreamEvent('project-1', {
+        runId: 'run-project-1',
+        item: {
+          kind: 'complete',
+          runId: 'run-project-1',
+          sequence: 8,
+          text: null,
+          detail: 'Agent response complete.',
+          createdAt: '2026-04-16T13:30:08Z',
+        },
+      }))
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('complete'))
+    expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('1')
+
+    await act(async () => {
+      setup.emitRuntimeStream(0, makeRuntimeStreamEvent('project-1', {
+        runId: 'run-project-1',
+        item: {
+          kind: 'complete',
+          runId: 'run-project-1',
+          sequence: 9,
+          text: null,
+          detail: 'Duplicate completion.',
+          createdAt: '2026-04-16T13:30:09Z',
+        },
+      }))
+    })
+    expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'View selected session' }))
+    await waitFor(() => expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('0'))
   })
 
   it('projects MCP capability tool summaries into the agent tool lane projection', async () => {
@@ -2920,7 +3334,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
 
     const syncCallsAfterImmediateRefresh = project1SyncCount()
 
-    act(() => {
+    await act(async () => {
       setup.emitRuntimeStream(0, {
         projectId: 'project-1',
         runtimeKind: 'openai_codex',
@@ -2956,12 +3370,16 @@ describe('useXeroDesktopState runtime-run hydration', () => {
 
     snapshotMode = 'resolved'
 
-    await new Promise((resolve) => setTimeout(resolve, 650))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650))
+    })
     expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('1')
     expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('false')
 
     const syncCallsAfterBoundaryClear = project1SyncCount()
-    await new Promise((resolve) => setTimeout(resolve, 650))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650))
+    })
     expect(project1SyncCount()).toBe(syncCallsAfterBoundaryClear)
   })
 
@@ -3042,7 +3460,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
     project1Blocked = true
 
-    act(() => {
+    await act(async () => {
       setup.emitRuntimeStream(0, {
         projectId: 'project-1',
         runtimeKind: 'openai_codex',
@@ -3076,13 +3494,17 @@ describe('useXeroDesktopState runtime-run hydration', () => {
     await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('1'))
     expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('false')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+    })
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
     expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('false')
 
     const project1SyncCallsAfterSwitch = project1SyncCount()
-    await new Promise((resolve) => setTimeout(resolve, 650))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650))
+    })
     expect(project1SyncCount()).toBe(project1SyncCallsAfterSwitch)
   })
 

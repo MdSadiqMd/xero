@@ -3,10 +3,11 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ZodError, z } from 'zod'
 import {
+  backendRequestKey,
   createBackendRequestCoordinator,
-  stableBackendRequestKey,
 } from '@/src/lib/backend-request-coordinator'
 import { recordIpcPayloadSample } from '@/src/lib/ipc-payload-budget'
+import { createSafeTauriUnlisten } from '@/src/lib/tauri-events'
 import {
   autonomousRunStateSchema,
   cancelAutonomousRunRequestSchema,
@@ -18,19 +19,129 @@ import {
   type StartAutonomousRunRequestDto,
 } from '@/src/lib/xero-model/autonomous'
 import {
+  agentDefinitionPreviewResponseSchema,
   agentDefinitionSummarySchema,
+  agentDefinitionVersionDiffSchema,
   agentDefinitionVersionSummarySchema,
+  agentDefinitionWriteResponseSchema,
   archiveAgentDefinitionRequestSchema,
+  getAgentDefinitionVersionDiffRequestSchema,
   getAgentDefinitionVersionRequestSchema,
   listAgentDefinitionsRequestSchema,
   listAgentDefinitionsResponseSchema,
+  previewAgentDefinitionRequestSchema,
+  saveAgentDefinitionRequestSchema,
+  updateAgentDefinitionRequestSchema,
+  type AgentDefinitionPreviewResponseDto,
   type AgentDefinitionSummaryDto,
+  type AgentDefinitionVersionDiffDto,
   type AgentDefinitionVersionSummaryDto,
+  type AgentDefinitionWriteResponseDto,
   type ArchiveAgentDefinitionRequestDto,
+  type GetAgentDefinitionVersionDiffRequestDto,
   type GetAgentDefinitionVersionRequestDto,
   type ListAgentDefinitionsRequestDto,
   type ListAgentDefinitionsResponseDto,
+  type PreviewAgentDefinitionRequestDto,
+  type SaveAgentDefinitionRequestDto,
+  type UpdateAgentDefinitionRequestDto,
 } from '@/src/lib/xero-model/agent-definition'
+import {
+  agentHandoffContextSummarySchema,
+  agentKnowledgeInspectionSchema,
+  getAgentHandoffContextSummaryRequestSchema,
+  getAgentKnowledgeInspectionRequestSchema,
+  type AgentHandoffContextSummaryDto,
+  type AgentKnowledgeInspectionDto,
+  type GetAgentHandoffContextSummaryRequestDto,
+  type GetAgentKnowledgeInspectionRequestDto,
+} from '@/src/lib/xero-model/agent-reports'
+import {
+  agentAuthoringCatalogSchema,
+  agentToolPackCatalogSchema,
+  getAgentAuthoringCatalogRequestSchema,
+  getAgentToolPackCatalogRequestSchema,
+  getWorkflowAgentDetailRequestSchema,
+  getWorkflowAgentGraphProjectionRequestSchema,
+  listWorkflowAgentsRequestSchema,
+  listWorkflowAgentsResponseSchema,
+  resolveAgentAuthoringSkillRequestSchema,
+  searchAgentAuthoringSkillsRequestSchema,
+  searchAgentAuthoringSkillsResponseSchema,
+  setAgentDefaultModelRequestSchema,
+  setAgentDefaultModelResponseSchema,
+  agentAuthoringAttachableSkillSchema,
+  workflowAgentGraphProjectionSchema,
+  workflowAgentDetailSchema,
+  type AgentAuthoringAttachableSkillDto,
+  type AgentAuthoringCatalogDto,
+  type AgentToolPackCatalogDto,
+  type GetAgentAuthoringCatalogRequestDto,
+  type GetAgentToolPackCatalogRequestDto,
+  type GetWorkflowAgentDetailRequestDto,
+  type GetWorkflowAgentGraphProjectionRequestDto,
+  type ListWorkflowAgentsRequestDto,
+  type ListWorkflowAgentsResponseDto,
+  type ResolveAgentAuthoringSkillRequestDto,
+  type SearchAgentAuthoringSkillsRequestDto,
+  type SearchAgentAuthoringSkillsResponseDto,
+  type SetAgentDefaultModelRequestDto,
+  type SetAgentDefaultModelResponseDto,
+  type WorkflowAgentDetailDto,
+  type WorkflowAgentGraphProjectionDto,
+} from '@/src/lib/xero-model/workflow-agents'
+import {
+  cancelWorkflowRunRequestSchema,
+  createWorkflowDefinitionRequestSchema,
+  explainWorkflowRunBlockerRequestSchema,
+  exportWorkflowDeliveryStateRequestSchema,
+  exportWorkflowRunBundleRequestSchema,
+  getWorkflowDefinitionRequestSchema,
+  getWorkflowRunRequestSchema,
+  listWorkflowDefinitionsRequestSchema,
+  listWorkflowDefinitionsResponseSchema,
+  listWorkflowRunsRequestSchema,
+  listWorkflowRunsResponseSchema,
+  readWorkflowDeliveryStateRequestSchema,
+  resumeWorkflowCheckpointRequestSchema,
+  resumeWorkflowNextIncompletePhaseRequestSchema,
+  retryWorkflowNodeRunRequestSchema,
+  skipWorkflowBranchRequestSchema,
+  startWorkflowRunRequestSchema,
+  updateWorkflowDefinitionRequestSchema,
+  wipeWorkflowDeliveryStateRequestSchema,
+  workflowDeliveryStateResponseSchema,
+  workflowDefinitionResponseSchema,
+  workflowRunBlockerResponseSchema,
+  workflowRunBundleResponseSchema,
+  workflowRunResponseSchema,
+  writeWorkflowDeliveryStateRequestSchema,
+  type CancelWorkflowRunRequestDto,
+  type CreateWorkflowDefinitionRequestDto,
+  type ExplainWorkflowRunBlockerRequestDto,
+  type ExportWorkflowDeliveryStateRequestDto,
+  type ExportWorkflowRunBundleRequestDto,
+  type GetWorkflowDefinitionRequestDto,
+  type GetWorkflowRunRequestDto,
+  type ListWorkflowDefinitionsRequestDto,
+  type ListWorkflowDefinitionsResponseDto,
+  type ListWorkflowRunsRequestDto,
+  type ListWorkflowRunsResponseDto,
+  type ReadWorkflowDeliveryStateRequestDto,
+  type ResumeWorkflowCheckpointRequestDto,
+  type ResumeWorkflowNextIncompletePhaseRequestDto,
+  type RetryWorkflowNodeRunRequestDto,
+  type SkipWorkflowBranchRequestDto,
+  type StartWorkflowRunRequestDto,
+  type UpdateWorkflowDefinitionRequestDto,
+  type WipeWorkflowDeliveryStateRequestDto,
+  type WorkflowDeliveryStateResponseDto,
+  type WorkflowDefinitionResponseDto,
+  type WorkflowRunBlockerResponseDto,
+  type WorkflowRunBundleResponseDto,
+  type WorkflowRunResponseDto,
+  type WriteWorkflowDeliveryStateRequestDto,
+} from '@/src/lib/xero-model/workflow-run'
 import {
   agentRunEventSchema,
   agentRunSchema,
@@ -130,17 +241,34 @@ import {
   type ResumeOperatorRunResponseDto,
 } from '@/src/lib/xero-model/operator-actions'
 import {
+  returnSessionToHereRequestSchema,
+  returnSessionToHereResponseSchema,
+  selectiveUndoRequestSchema,
+  selectiveUndoResponseSchema,
+  type ReturnSessionToHereRequestDto,
+  type ReturnSessionToHereResponseDto,
+  type SelectiveUndoRequestDto,
+  type SelectiveUndoResponseDto,
+} from '@/src/lib/xero-model/code-history'
+import {
+  importRepositoryResponseSchema,
   createProjectEntryRequestSchema,
   createProjectEntryResponseSchema,
   deleteProjectEntryResponseSchema,
-  importRepositoryResponseSchema,
+  listProjectFileIndexRequestSchema,
+  listProjectFileIndexResponseSchema,
   listProjectFilesRequestSchema,
   listProjectFilesResponseSchema,
   listProjectsResponseSchema,
+  projectSummarySchema,
   moveProjectEntryRequestSchema,
   moveProjectEntryResponseSchema,
+  appUiStateResponseSchema,
   projectFileRequestSchema,
+  projectUiStateResponseSchema,
   projectUpdatedPayloadSchema,
+  readAppUiStateRequestSchema,
+  readProjectUiStateRequestSchema,
   readProjectFileResponseSchema,
   renameProjectEntryRequestSchema,
   renameProjectEntryResponseSchema,
@@ -150,8 +278,16 @@ import {
   repositoryStatusChangedPayloadSchema,
   repositoryStatusResponseSchema,
   revokeProjectAssetTokensRequestSchema,
+  runProjectTypecheckRequestSchema,
+  projectTypecheckResponseSchema,
+  formatProjectDocumentRequestSchema,
+  formatProjectDocumentResponseSchema,
+  runProjectLintRequestSchema,
+  projectLintResponseSchema,
   searchProjectRequestSchema,
   searchProjectResponseSchema,
+  statProjectFilesRequestSchema,
+  statProjectFilesResponseSchema,
   workspaceExplainRequestSchema,
   workspaceExplainResponseSchema,
   workspaceIndexRequestSchema,
@@ -161,6 +297,8 @@ import {
   workspaceQueryResponseSchema,
   writeProjectFileRequestSchema,
   writeProjectFileResponseSchema,
+  writeAppUiStateRequestSchema,
+  writeProjectUiStateRequestSchema,
   gitCommitRequestSchema,
   gitCommitResponseSchema,
   gitGenerateCommitMessageRequestSchema,
@@ -169,6 +307,7 @@ import {
   gitPathsRequestSchema,
   gitPullResponseSchema,
   gitPushResponseSchema,
+  gitRevertPatchRequestSchema,
   gitRemoteRequestSchema,
   type CreateProjectEntryRequestDto,
   type CreateProjectEntryResponseDto,
@@ -179,14 +318,22 @@ import {
   type GitFetchResponseDto,
   type GitPullResponseDto,
   type GitPushResponseDto,
+  type GitRevertPatchRequestDto,
   type ImportRepositoryResponseDto,
+  type ListProjectFileIndexRequestDto,
+  type ListProjectFileIndexResponseDto,
   type ListProjectFilesRequestDto,
   type ListProjectFilesResponseDto,
   type ListProjectsResponseDto,
   type MoveProjectEntryRequestDto,
   type MoveProjectEntryResponseDto,
+  type ProjectSummaryDto,
   type ProjectUpdatedPayloadDto,
+  type AppUiStateResponseDto,
   type ReadProjectFileResponseDto,
+  type ReadAppUiStateRequestDto,
+  type ProjectUiStateResponseDto,
+  type ReadProjectUiStateRequestDto,
   type RenameProjectEntryRequestDto,
   type RenameProjectEntryResponseDto,
   type ReplaceInProjectRequestDto,
@@ -196,8 +343,14 @@ import {
   type RepositoryStatusChangedPayloadDto,
   type RepositoryStatusResponseDto,
   type RevokeProjectAssetTokensRequestDto,
+  type RunProjectTypecheckRequestDto,
+  type FormatProjectDocumentRequestDto,
+  type FormatProjectDocumentResponseDto,
+  type RunProjectLintRequestDto,
+  type ProjectLintResponseDto,
   type SearchProjectRequestDto,
   type SearchProjectResponseDto,
+  type StatProjectFilesResponseDto,
   type WorkspaceExplainRequestDto,
   type WorkspaceExplainResponseDto,
   type WorkspaceIndexRequestDto,
@@ -205,14 +358,21 @@ import {
   type WorkspaceIndexStatusDto,
   type WorkspaceQueryRequestDto,
   type WorkspaceQueryResponseDto,
+  type WriteAppUiStateRequestDto,
+  type WriteProjectFileRequestDto,
   type WriteProjectFileResponseDto,
+  type WriteProjectUiStateRequestDto,
+  type ProjectTypecheckResponseDto,
 } from '@/src/lib/xero-model/project'
+export type { StartTargetDto } from '@/src/lib/xero-model/project'
 import {
   runtimeRunSchema,
   runtimeRunUpdatedPayloadSchema,
   runtimeSessionSchema,
   providerAuthSessionSchema,
   runtimeUpdatedPayloadSchema,
+  agentToolingSettingsSchema,
+  upsertAgentToolingSettingsRequestSchema,
   archiveAgentSessionRequestSchema,
   autoNameAgentSessionRequestSchema,
   createAgentSessionRequestSchema,
@@ -230,6 +390,7 @@ import {
   updateRuntimeRunControlsRequestSchema,
   updateAgentSessionRequestSchema,
   type AgentSessionDto,
+  type AgentToolingSettingsDto,
   type ArchiveAgentSessionRequestDto,
   type AutoNameAgentSessionRequestDto,
   type CreateAgentSessionRequestDto,
@@ -243,25 +404,33 @@ import {
   type RuntimeRunDto,
   type RuntimeRunUpdatedPayloadDto,
   type RuntimeSessionDto,
+  type RuntimeAgentIdDto,
   type ProviderAuthSessionDto,
   type RuntimeUpdatedPayloadDto,
   type StagedAgentAttachmentDto,
   type StartRuntimeRunRequestDto,
   type StartRuntimeSessionRequestDto,
   type StopRuntimeRunRequestDto,
+  type UpsertAgentToolingSettingsRequestDto,
   type UpdateAgentSessionRequestDto,
   type UpdateRuntimeRunControlsRequestDto,
 } from '@/src/lib/xero-model/runtime'
 import {
   completeOAuthCallbackRequestSchema,
   deleteProviderCredentialRequestSchema,
+  pollXaiDeviceCodeLoginRequestSchema,
   providerCredentialsSnapshotSchema,
   startOAuthLoginRequestSchema,
+  startXaiDeviceCodeLoginRequestSchema,
   upsertProviderCredentialRequestSchema,
+  xaiDeviceCodeLoginSchema,
   type CompleteOAuthCallbackRequestDto,
+  type PollXaiDeviceCodeLoginRequestDto,
   type ProviderCredentialsSnapshotDto,
   type StartOAuthLoginRequestDto,
+  type StartXaiDeviceCodeLoginRequestDto,
   type UpsertProviderCredentialRequestDto,
+  type XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model/provider-credentials'
 import {
   createPreflightProviderProfileRequest,
@@ -274,21 +443,19 @@ import {
 } from '@/src/lib/xero-model/provider-models'
 import {
   xeroDoctorReportSchema,
-  checkProviderProfileRequestSchema,
-  providerProfileDiagnosticsSchema,
   runDoctorReportRequestSchema,
   type XeroDoctorReportDto,
-  type ProviderProfileDiagnosticsDto,
   type RunDoctorReportRequestDto,
 } from '@/src/lib/xero-model/diagnostics'
 import {
-  runtimeStreamItemKindSchema,
   runtimeStreamItemSchema,
+  runtimeStreamPatchSchema,
   subscribeRuntimeStreamRequestSchema,
   subscribeRuntimeStreamResponseSchema,
   type RuntimeStreamEventDto,
   type RuntimeStreamItemKindDto,
   type RuntimeStreamItemDto,
+  type RuntimeStreamPatchDto,
   type SubscribeRuntimeStreamResponseDto,
 } from '@/src/lib/xero-model/runtime-stream'
 import {
@@ -312,6 +479,16 @@ import {
   type UpsertBrowserControlSettingsRequestDto,
 } from '@/src/lib/xero-model/browser'
 import {
+  adrenalineModeSettingsSchema,
+  closedLidModeSettingsSchema,
+  upsertAdrenalineModeSettingsRequestSchema,
+  upsertClosedLidModeSettingsRequestSchema,
+  type AdrenalineModeSettingsDto,
+  type ClosedLidModeSettingsDto,
+  type UpsertAdrenalineModeSettingsRequestDto,
+  type UpsertClosedLidModeSettingsRequestDto,
+} from '@/src/lib/xero-model/adrenaline-mode'
+import {
   soulSettingsSchema,
   upsertSoulSettingsRequestSchema,
   type SoulSettingsDto,
@@ -322,11 +499,15 @@ import {
   compactSessionHistoryResponseSchema,
   agentSessionBranchResponseSchema,
   branchAgentSessionRequestSchema,
+  correctSessionMemoryRequestSchema,
+  correctSessionMemoryResponseSchema,
   deleteSessionMemoryRequestSchema,
   extractSessionMemoryCandidatesRequestSchema,
   extractSessionMemoryCandidatesResponseSchema,
   exportSessionTranscriptRequestSchema,
   getSessionContextSnapshotRequestSchema,
+  getSessionMemoryReviewQueueRequestSchema,
+  getSessionMemoryReviewQueueResponseSchema,
   getSessionTranscriptRequestSchema,
   listSessionMemoriesRequestSchema,
   listSessionMemoriesResponseSchema,
@@ -343,10 +524,14 @@ import {
   type BranchAgentSessionRequestDto,
   type CompactSessionHistoryRequestDto,
   type CompactSessionHistoryResponseDto,
+  type CorrectSessionMemoryRequestDto,
+  type CorrectSessionMemoryResponseDto,
   type DeleteSessionMemoryRequestDto,
   type ExtractSessionMemoryCandidatesRequestDto,
   type ExtractSessionMemoryCandidatesResponseDto,
   type GetSessionContextSnapshotRequestDto,
+  type GetSessionMemoryReviewQueueRequestDto,
+  type GetSessionMemoryReviewQueueResponseDto,
   type GetSessionTranscriptRequestDto,
   type ListSessionMemoriesRequestDto,
   type ListSessionMemoriesResponseDto,
@@ -361,13 +546,60 @@ import {
   type UpdateSessionMemoryRequestDto,
   updateSessionMemoryRequestSchema,
 } from '@/src/lib/xero-model/session-context'
-import { projectSnapshotResponseSchema, type ProjectSnapshotResponseDto } from '@/src/lib/xero-model'
+import {
+  projectLoadBundleRequestSchema,
+  projectLoadBundleSchema,
+  projectSnapshotResponseSchema,
+  type ProjectLoadBundleDto,
+  type ProjectLoadBundleRequestDto,
+  type ProjectSnapshotResponseDto,
+} from '@/src/lib/xero-model'
+import {
+  deleteProjectContextRecordRequestSchema,
+  deleteProjectContextRecordResponseSchema,
+  listProjectContextRecordsRequestSchema,
+  listProjectContextRecordsResponseSchema,
+  supersedeProjectContextRecordRequestSchema,
+  supersedeProjectContextRecordResponseSchema,
+  type DeleteProjectContextRecordRequestDto,
+  type DeleteProjectContextRecordResponseDto,
+  type ListProjectContextRecordsRequestDto,
+  type ListProjectContextRecordsResponseDto,
+  type SupersedeProjectContextRecordRequestDto,
+  type SupersedeProjectContextRecordResponseDto,
+} from '@/src/lib/xero-model/project-records'
 import {
   agentUsageUpdatedPayloadSchema,
   projectUsageSummarySchema,
   type AgentUsageUpdatedPayloadDto,
   type ProjectUsageSummaryDto,
 } from '@/src/lib/xero-model/usage'
+import {
+  createProjectStateBackupRequestSchema,
+  listProjectStateBackupsRequestSchema,
+  listProjectStateBackupsResponseSchema,
+  projectStateBackupResponseSchema,
+  projectStateRepairResponseSchema,
+  projectStateRestoreResponseSchema,
+  repairProjectStateRequestSchema,
+  restoreProjectStateBackupRequestSchema,
+  type CreateProjectStateBackupRequestDto,
+  type ListProjectStateBackupsRequestDto,
+  type ListProjectStateBackupsResponseDto,
+  type ProjectStateBackupResponseDto,
+  type ProjectStateRepairResponseDto,
+  type ProjectStateRestoreResponseDto,
+  type RepairProjectStateRequestDto,
+  type RestoreProjectStateBackupRequestDto,
+} from '@/src/lib/xero-model/project-state'
+import {
+  wipeAllDataResponseSchema,
+  wipeProjectDataRequestSchema,
+  wipeProjectDataResponseSchema,
+  type WipeAllDataResponseDto,
+  type WipeProjectDataRequestDto,
+  type WipeProjectDataResponseDto,
+} from '@/src/lib/xero-model/wipe-data'
 import {
   environmentDiscoveryStatusSchema,
   environmentProbeReportSchema,
@@ -390,21 +622,44 @@ const COMMANDS = {
   createRepository: 'create_repository',
   listProjects: 'list_projects',
   removeProject: 'remove_project',
+  wipeProjectData: 'wipe_project_data',
+  wipeAllXeroData: 'wipe_all_xero_data',
+  readAppUiState: 'read_app_ui_state',
+  writeAppUiState: 'write_app_ui_state',
+  bridgePublishTheme: 'bridge_publish_theme',
+  readProjectUiState: 'read_project_ui_state',
+  writeProjectUiState: 'write_project_ui_state',
+  createProjectStateBackup: 'create_project_state_backup',
+  listProjectStateBackups: 'list_project_state_backups',
+  restoreProjectStateBackup: 'restore_project_state_backup',
+  repairProjectState: 'repair_project_state',
+  getProjectLoadBundle: 'get_project_load_bundle',
+  updateProjectStartTargets: 'update_project_start_targets',
+  suggestProjectStartTargets: 'suggest_project_start_targets',
+  terminalOpen: 'terminal_open',
+  terminalWrite: 'terminal_write',
+  terminalResize: 'terminal_resize',
+  terminalClose: 'terminal_close',
   getProjectSnapshot: 'get_project_snapshot',
   getProjectUsageSummary: 'get_project_usage_summary',
   getRepositoryStatus: 'get_repository_status',
   getRepositoryDiff: 'get_repository_diff',
+  applySelectiveUndo: 'apply_selective_undo',
+  returnSessionToHere: 'apply_session_rollback',
   gitStagePaths: 'git_stage_paths',
   gitUnstagePaths: 'git_unstage_paths',
   gitDiscardChanges: 'git_discard_changes',
+  gitRevertPatch: 'git_revert_patch',
   gitCommit: 'git_commit',
   gitGenerateCommitMessage: 'git_generate_commit_message',
   gitFetch: 'git_fetch',
   gitPull: 'git_pull',
   gitPush: 'git_push',
+  listProjectFileIndex: 'list_project_file_index',
   listProjectFiles: 'list_project_files',
   readProjectFile: 'read_project_file',
   writeProjectFile: 'write_project_file',
+  statProjectFiles: 'stat_project_files',
   revokeProjectAssetTokens: 'revoke_project_asset_tokens',
   openProjectFileExternal: 'open_project_file_external',
   createProjectEntry: 'create_project_entry',
@@ -413,15 +668,54 @@ const COMMANDS = {
   deleteProjectEntry: 'delete_project_entry',
   searchProject: 'search_project',
   replaceInProject: 'replace_in_project',
+  runProjectTypecheck: 'run_project_typecheck',
+  formatProjectDocument: 'format_project_document',
+  runProjectLint: 'run_project_lint',
   workspaceIndex: 'workspace_index',
   workspaceStatus: 'workspace_status',
   workspaceQuery: 'workspace_query',
   workspaceExplain: 'workspace_explain',
   workspaceReset: 'workspace_reset',
+  listProjectContextRecords: 'list_project_context_records',
+  deleteProjectContextRecord: 'delete_project_context_record',
+  supersedeProjectContextRecord: 'supersede_project_context_record',
+  ensureGlobalComputerUseSession: 'ensure_global_computer_use_session',
   createAgentSession: 'create_agent_session',
   listAgentDefinitions: 'list_agent_definitions',
   archiveAgentDefinition: 'archive_agent_definition',
   getAgentDefinitionVersion: 'get_agent_definition_version',
+  getAgentDefinitionVersionDiff: 'get_agent_definition_version_diff',
+  saveAgentDefinition: 'save_agent_definition',
+  updateAgentDefinition: 'update_agent_definition',
+  previewAgentDefinition: 'preview_agent_definition',
+  setAgentDefaultModel: 'set_agent_default_model',
+  getAgentKnowledgeInspection: 'get_agent_knowledge_inspection',
+  getAgentHandoffContextSummary: 'get_agent_handoff_context_summary',
+  listWorkflowAgents: 'list_workflow_agents',
+  getWorkflowAgentDetail: 'get_workflow_agent_detail',
+  getWorkflowAgentGraphProjection: 'get_workflow_agent_graph_projection',
+  createWorkflowDefinition: 'create_workflow_definition',
+  updateWorkflowDefinition: 'update_workflow_definition',
+  listWorkflowDefinitions: 'list_workflow_definitions',
+  getWorkflowDefinition: 'get_workflow_definition',
+  startWorkflowRun: 'start_workflow_run',
+  getWorkflowRun: 'get_workflow_run',
+  explainWorkflowRunBlocker: 'explain_workflow_run_blocker',
+  exportWorkflowRunBundle: 'export_workflow_run_bundle',
+  resumeWorkflowNextIncompletePhase: 'resume_workflow_next_incomplete_phase',
+  listWorkflowRuns: 'list_workflow_runs',
+  cancelWorkflowRun: 'cancel_workflow_run',
+  retryWorkflowNodeRun: 'retry_workflow_node_run',
+  skipWorkflowBranch: 'skip_workflow_branch',
+  resumeWorkflowCheckpoint: 'resume_workflow_checkpoint',
+  readWorkflowDeliveryState: 'read_workflow_delivery_state',
+  writeWorkflowDeliveryState: 'write_workflow_delivery_state',
+  exportWorkflowDeliveryState: 'export_workflow_delivery_state',
+  wipeWorkflowDeliveryState: 'wipe_workflow_delivery_state',
+  getAgentAuthoringCatalog: 'get_agent_authoring_catalog',
+  getAgentToolPackCatalog: 'get_agent_tool_pack_catalog',
+  searchAgentAuthoringSkills: 'search_agent_authoring_skills',
+  resolveAgentAuthoringSkill: 'resolve_agent_authoring_skill',
   listAgentSessions: 'list_agent_sessions',
   getAgentSession: 'get_agent_session',
   updateAgentSession: 'update_agent_session',
@@ -448,7 +742,9 @@ const COMMANDS = {
   rewindAgentSession: 'rewind_agent_session',
   listSessionMemories: 'list_session_memories',
   extractSessionMemoryCandidates: 'extract_session_memory_candidates',
+  getSessionMemoryReviewQueue: 'get_session_memory_review_queue',
   updateSessionMemory: 'update_session_memory',
+  correctSessionMemory: 'correct_session_memory',
   deleteSessionMemory: 'delete_session_memory',
   getRuntimeRun: 'get_runtime_run',
   getRuntimeSession: 'get_runtime_session',
@@ -472,12 +768,13 @@ const COMMANDS = {
   getProviderModelCatalog: 'get_provider_model_catalog',
   preflightProviderProfile: 'preflight_provider_profile',
   runDoctorReport: 'run_doctor_report',
-  checkProviderProfile: 'check_provider_profile',
   listProviderCredentials: 'list_provider_credentials',
   upsertProviderCredential: 'upsert_provider_credential',
   deleteProviderCredential: 'delete_provider_credential',
   startOAuthLogin: 'start_oauth_login',
   completeOAuthCallback: 'complete_oauth_callback',
+  startXaiDeviceCodeLogin: 'start_xai_device_code_login',
+  pollXaiDeviceCodeLogin: 'poll_xai_device_code_login',
   startOpenAiLogin: 'start_openai_login',
   submitOpenAiCallback: 'submit_openai_callback',
   startAutonomousRun: 'start_autonomous_run',
@@ -507,8 +804,14 @@ const COMMANDS = {
   subscribeRuntimeStream: 'subscribe_runtime_stream',
   browserControlSettings: 'browser_control_settings',
   browserControlUpdateSettings: 'browser_control_update_settings',
+  adrenalineModeSettings: 'adrenaline_mode_settings',
+  adrenalineModeUpdateSettings: 'adrenaline_mode_update_settings',
+  closedLidModeSettings: 'closed_lid_mode_settings',
+  closedLidModeUpdateSettings: 'closed_lid_mode_update_settings',
   soulSettings: 'soul_settings',
   soulUpdateSettings: 'soul_update_settings',
+  agentToolingSettings: 'agent_tooling_settings',
+  agentToolingUpdateSettings: 'agent_tooling_update_settings',
   browserShow: 'browser_show',
   browserResize: 'browser_resize',
   browserHide: 'browser_hide',
@@ -547,6 +850,25 @@ const COMMANDS = {
   startEnvironmentDiscovery: 'start_environment_discovery',
 } as const
 
+export const bridgeThemeSyncRequestSchema = z
+  .object({
+    themeId: z.string().trim().min(1),
+    customTheme: z.unknown().nullable().optional(),
+  })
+  .strict()
+
+export type BridgeThemeSyncRequestDto = z.infer<typeof bridgeThemeSyncRequestSchema>
+
+const globalComputerUseSessionSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    session: agentSessionSchema,
+  })
+  .strict()
+
+export type GlobalComputerUseSessionDto = z.infer<typeof globalComputerUseSessionSchema>
+
 const EVENTS = {
   projectUpdated: 'project:updated',
   repositoryStatusChanged: 'repository:status_changed',
@@ -557,7 +879,84 @@ const EVENTS = {
   browserConsole: 'browser:console',
   browserTabUpdated: 'browser:tab_updated',
   agentUsageUpdated: 'agent_usage_updated',
+  terminalData: 'terminal:data',
+  terminalExit: 'terminal:exit',
+  terminalTitle: 'terminal:title',
 } as const
+
+// ---------------------------------------------------------------------------
+// Terminal sidebar + project-runner commands
+// ---------------------------------------------------------------------------
+
+const openTerminalResponseSchema = z.object({
+  terminalId: z.string().min(1),
+  shell: z.string(),
+  cwd: z.string(),
+  startedAt: z.string(),
+})
+export type OpenTerminalResponseDto = z.infer<typeof openTerminalResponseSchema>
+
+const suggestedStartTargetSchema = z.object({
+  name: z.string(),
+  command: z.string(),
+})
+const suggestedStartTargetsSchema = z.object({
+  targets: z.array(suggestedStartTargetSchema),
+  providerId: z.string(),
+  modelId: z.string(),
+})
+export type SuggestedStartTargetDto = z.infer<typeof suggestedStartTargetSchema>
+export type SuggestedStartTargetsDto = z.infer<typeof suggestedStartTargetsSchema>
+
+export const terminalDataEventSchema = z.object({
+  terminalId: z.string(),
+  data: z.string(),
+})
+export type TerminalDataEventPayload = z.infer<typeof terminalDataEventSchema>
+
+export const terminalExitEventSchema = z.object({
+  terminalId: z.string(),
+  exitCode: z.number().int().nullable().optional(),
+})
+export type TerminalExitEventPayload = z.infer<typeof terminalExitEventSchema>
+
+export const terminalTitleEventSchema = z.object({
+  terminalId: z.string(),
+  title: z.string(),
+})
+export type TerminalTitleEventPayload = z.infer<typeof terminalTitleEventSchema>
+
+export interface StartTargetInputDto {
+  id?: string | null
+  name: string
+  command: string
+}
+
+export interface UpdateProjectStartTargetsRequestDto {
+  projectId: string
+  targets: StartTargetInputDto[]
+}
+
+export interface OpenTerminalRequestDto {
+  projectId?: string | null
+  cols?: number
+  rows?: number
+}
+
+export interface SuggestProjectStartTargetsRequestDto {
+  projectId: string
+  modelId: string
+  providerProfileId?: string | null
+  runtimeAgentId?: RuntimeAgentIdDto | null
+  thinkingEffort?:
+    | 'none'
+    | 'minimal'
+    | 'low'
+    | 'medium'
+    | 'high'
+    | 'x_high'
+    | null
+}
 
 const commandErrorSchema = z.object({
   code: z.string(),
@@ -705,6 +1104,11 @@ export interface XeroDictationSession {
   cancel: () => Promise<void>
 }
 
+export type WriteProjectFileOptions = Pick<
+  WriteProjectFileRequestDto,
+  'expectedContentHash' | 'expectedModifiedAt' | 'overwrite'
+>
+
 export interface XeroDesktopAdapter {
   isDesktopRuntime(): boolean
   pickRepositoryFolder(): Promise<string | null>
@@ -713,13 +1117,46 @@ export interface XeroDesktopAdapter {
   createRepository(parentPath: string, name: string): Promise<ImportRepositoryResponseDto>
   listProjects(): Promise<ListProjectsResponseDto>
   removeProject(projectId: string): Promise<ListProjectsResponseDto>
+  wipeProjectData?(request: WipeProjectDataRequestDto): Promise<WipeProjectDataResponseDto>
+  wipeAllXeroData?(): Promise<WipeAllDataResponseDto>
+  readAppUiState?(request: ReadAppUiStateRequestDto): Promise<AppUiStateResponseDto>
+  writeAppUiState?(request: WriteAppUiStateRequestDto): Promise<AppUiStateResponseDto>
+  publishThemeToCloud?(request: BridgeThemeSyncRequestDto): Promise<void>
+  readProjectUiState?(request: ReadProjectUiStateRequestDto): Promise<ProjectUiStateResponseDto>
+  writeProjectUiState?(request: WriteProjectUiStateRequestDto): Promise<ProjectUiStateResponseDto>
+  listProjectStateBackups?(
+    request: ListProjectStateBackupsRequestDto,
+  ): Promise<ListProjectStateBackupsResponseDto>
+  createProjectStateBackup?(
+    request: CreateProjectStateBackupRequestDto,
+  ): Promise<ProjectStateBackupResponseDto>
+  restoreProjectStateBackup?(
+    request: RestoreProjectStateBackupRequestDto,
+  ): Promise<ProjectStateRestoreResponseDto>
+  repairProjectState?(request: RepairProjectStateRequestDto): Promise<ProjectStateRepairResponseDto>
   getProjectSnapshot(projectId: string): Promise<ProjectSnapshotResponseDto>
+  getProjectLoadBundle?(
+    request: ProjectLoadBundleRequestDto,
+  ): Promise<ProjectLoadBundleDto>
+  updateProjectStartTargets?(
+    request: UpdateProjectStartTargetsRequestDto,
+  ): Promise<ProjectSummaryDto>
+  suggestProjectStartTargets?(
+    request: SuggestProjectStartTargetsRequestDto,
+  ): Promise<SuggestedStartTargetsDto>
+  terminalOpen?(request: OpenTerminalRequestDto): Promise<OpenTerminalResponseDto>
+  terminalWrite?(terminalId: string, data: string): Promise<void>
+  terminalResize?(terminalId: string, cols: number, rows: number): Promise<void>
+  terminalClose?(terminalId: string): Promise<void>
   getProjectUsageSummary(projectId: string): Promise<ProjectUsageSummaryDto>
   getRepositoryStatus(projectId: string): Promise<RepositoryStatusResponseDto>
   getRepositoryDiff(projectId: string, scope: RepositoryDiffScope): Promise<RepositoryDiffResponseDto>
+  applySelectiveUndo(request: SelectiveUndoRequestDto): Promise<SelectiveUndoResponseDto>
+  returnSessionToHere(request: ReturnSessionToHereRequestDto): Promise<ReturnSessionToHereResponseDto>
   gitStagePaths(projectId: string, paths: string[]): Promise<void>
   gitUnstagePaths(projectId: string, paths: string[]): Promise<void>
   gitDiscardChanges(projectId: string, paths: string[]): Promise<void>
+  gitRevertPatch(request: GitRevertPatchRequestDto): Promise<void>
   gitCommit(projectId: string, message: string): Promise<GitCommitResponseDto>
   gitGenerateCommitMessage(
     request: GitGenerateCommitMessageRequestDto,
@@ -727,9 +1164,16 @@ export interface XeroDesktopAdapter {
   gitFetch(projectId: string, remote?: string | null): Promise<GitFetchResponseDto>
   gitPull(projectId: string, remote?: string | null): Promise<GitPullResponseDto>
   gitPush(projectId: string, remote?: string | null): Promise<GitPushResponseDto>
+  listProjectFileIndex(request: ListProjectFileIndexRequestDto): Promise<ListProjectFileIndexResponseDto>
   listProjectFiles(projectId: string, path?: string): Promise<ListProjectFilesResponseDto>
   readProjectFile(projectId: string, path: string): Promise<ReadProjectFileResponseDto>
-  writeProjectFile(projectId: string, path: string, content: string): Promise<WriteProjectFileResponseDto>
+  writeProjectFile(
+    projectId: string,
+    path: string,
+    content: string,
+    options?: Partial<WriteProjectFileOptions>,
+  ): Promise<WriteProjectFileResponseDto>
+  statProjectFiles?(projectId: string, paths: string[]): Promise<StatProjectFilesResponseDto>
   revokeProjectAssetTokens?(projectId: string, paths?: string[]): Promise<void>
   openProjectFileExternal?(projectId: string, path: string): Promise<void>
   createProjectEntry(request: CreateProjectEntryRequestDto): Promise<CreateProjectEntryResponseDto>
@@ -738,11 +1182,26 @@ export interface XeroDesktopAdapter {
   deleteProjectEntry(projectId: string, path: string): Promise<DeleteProjectEntryResponseDto>
   searchProject(request: SearchProjectRequestDto): Promise<SearchProjectResponseDto>
   replaceInProject(request: ReplaceInProjectRequestDto): Promise<ReplaceInProjectResponseDto>
+  runProjectTypecheck?(request: RunProjectTypecheckRequestDto): Promise<ProjectTypecheckResponseDto>
+  formatProjectDocument?(
+    request: FormatProjectDocumentRequestDto,
+  ): Promise<FormatProjectDocumentResponseDto>
+  runProjectLint?(request: RunProjectLintRequestDto): Promise<ProjectLintResponseDto>
   workspaceIndex(request: WorkspaceIndexRequestDto): Promise<WorkspaceIndexResponseDto>
   workspaceStatus(projectId: string): Promise<WorkspaceIndexStatusDto>
   workspaceQuery(request: WorkspaceQueryRequestDto): Promise<WorkspaceQueryResponseDto>
   workspaceExplain(request: WorkspaceExplainRequestDto): Promise<WorkspaceExplainResponseDto>
   workspaceReset(projectId: string): Promise<WorkspaceIndexStatusDto>
+  listProjectContextRecords(
+    request: ListProjectContextRecordsRequestDto,
+  ): Promise<ListProjectContextRecordsResponseDto>
+  deleteProjectContextRecord(
+    request: DeleteProjectContextRecordRequestDto,
+  ): Promise<DeleteProjectContextRecordResponseDto>
+  supersedeProjectContextRecord(
+    request: SupersedeProjectContextRecordRequestDto,
+  ): Promise<SupersedeProjectContextRecordResponseDto>
+  ensureGlobalComputerUseSession?(): Promise<GlobalComputerUseSessionDto>
   createAgentSession(request: CreateAgentSessionRequestDto): Promise<AgentSessionDto>
   listAgentDefinitions(
     request: ListAgentDefinitionsRequestDto,
@@ -753,6 +1212,94 @@ export interface XeroDesktopAdapter {
   getAgentDefinitionVersion(
     request: GetAgentDefinitionVersionRequestDto,
   ): Promise<AgentDefinitionVersionSummaryDto | null>
+  getAgentDefinitionVersionDiff(
+    request: GetAgentDefinitionVersionDiffRequestDto,
+  ): Promise<AgentDefinitionVersionDiffDto>
+  saveAgentDefinition(
+    request: SaveAgentDefinitionRequestDto,
+  ): Promise<AgentDefinitionWriteResponseDto>
+  updateAgentDefinition(
+    request: UpdateAgentDefinitionRequestDto,
+  ): Promise<AgentDefinitionWriteResponseDto>
+  previewAgentDefinition(
+    request: PreviewAgentDefinitionRequestDto,
+  ): Promise<AgentDefinitionPreviewResponseDto>
+  setAgentDefaultModel(
+    request: SetAgentDefaultModelRequestDto,
+  ): Promise<SetAgentDefaultModelResponseDto>
+  getAgentKnowledgeInspection?(
+    request: GetAgentKnowledgeInspectionRequestDto,
+  ): Promise<AgentKnowledgeInspectionDto>
+  getAgentHandoffContextSummary?(
+    request: GetAgentHandoffContextSummaryRequestDto,
+  ): Promise<AgentHandoffContextSummaryDto>
+  listWorkflowAgents(
+    request: ListWorkflowAgentsRequestDto,
+  ): Promise<ListWorkflowAgentsResponseDto>
+  getWorkflowAgentDetail(
+    request: GetWorkflowAgentDetailRequestDto,
+  ): Promise<WorkflowAgentDetailDto>
+  getWorkflowAgentGraphProjection?(
+    request: GetWorkflowAgentGraphProjectionRequestDto,
+  ): Promise<WorkflowAgentGraphProjectionDto>
+  createWorkflowDefinition?(
+    request: CreateWorkflowDefinitionRequestDto,
+  ): Promise<WorkflowDefinitionResponseDto>
+  updateWorkflowDefinition?(
+    request: UpdateWorkflowDefinitionRequestDto,
+  ): Promise<WorkflowDefinitionResponseDto>
+  listWorkflowDefinitions?(
+    request: ListWorkflowDefinitionsRequestDto,
+  ): Promise<ListWorkflowDefinitionsResponseDto>
+  getWorkflowDefinition?(
+    request: GetWorkflowDefinitionRequestDto,
+  ): Promise<WorkflowDefinitionResponseDto>
+  startWorkflowRun?(request: StartWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  getWorkflowRun?(request: GetWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  explainWorkflowRunBlocker?(
+    request: ExplainWorkflowRunBlockerRequestDto,
+  ): Promise<WorkflowRunBlockerResponseDto>
+  exportWorkflowRunBundle?(
+    request: ExportWorkflowRunBundleRequestDto,
+  ): Promise<WorkflowRunBundleResponseDto>
+  resumeWorkflowNextIncompletePhase?(
+    request: ResumeWorkflowNextIncompletePhaseRequestDto,
+  ): Promise<WorkflowRunResponseDto>
+  listWorkflowRuns?(
+    request: ListWorkflowRunsRequestDto,
+  ): Promise<ListWorkflowRunsResponseDto>
+  cancelWorkflowRun?(request: CancelWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  retryWorkflowNodeRun?(
+    request: RetryWorkflowNodeRunRequestDto,
+  ): Promise<WorkflowRunResponseDto>
+  skipWorkflowBranch?(request: SkipWorkflowBranchRequestDto): Promise<WorkflowRunResponseDto>
+  resumeWorkflowCheckpoint?(
+    request: ResumeWorkflowCheckpointRequestDto,
+  ): Promise<WorkflowRunResponseDto>
+  readWorkflowDeliveryState?(
+    request: ReadWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  writeWorkflowDeliveryState?(
+    request: WriteWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  exportWorkflowDeliveryState?(
+    request: ExportWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  wipeWorkflowDeliveryState?(
+    request: WipeWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  getAgentAuthoringCatalog(
+    request: GetAgentAuthoringCatalogRequestDto,
+  ): Promise<AgentAuthoringCatalogDto>
+  getAgentToolPackCatalog?(
+    request: GetAgentToolPackCatalogRequestDto,
+  ): Promise<AgentToolPackCatalogDto>
+  searchAgentAuthoringSkills?(
+    request: SearchAgentAuthoringSkillsRequestDto,
+  ): Promise<SearchAgentAuthoringSkillsResponseDto>
+  resolveAgentAuthoringSkill?(
+    request: ResolveAgentAuthoringSkillRequestDto,
+  ): Promise<AgentAuthoringAttachableSkillDto>
   listAgentSessions(request: ListAgentSessionsRequestDto): Promise<ListAgentSessionsResponseDto>
   getAgentSession(request: GetAgentSessionRequestDto): Promise<AgentSessionDto | null>
   updateAgentSession(request: UpdateAgentSessionRequestDto): Promise<AgentSessionDto>
@@ -803,7 +1350,13 @@ export interface XeroDesktopAdapter {
   extractSessionMemoryCandidates?(
     request: ExtractSessionMemoryCandidatesRequestDto,
   ): Promise<ExtractSessionMemoryCandidatesResponseDto>
+  getSessionMemoryReviewQueue?(
+    request: GetSessionMemoryReviewQueueRequestDto,
+  ): Promise<GetSessionMemoryReviewQueueResponseDto>
   updateSessionMemory?(request: UpdateSessionMemoryRequestDto): Promise<SessionMemoryRecordDto>
+  correctSessionMemory?(
+    request: CorrectSessionMemoryRequestDto,
+  ): Promise<CorrectSessionMemoryResponseDto>
   deleteSessionMemory?(request: DeleteSessionMemoryRequestDto): Promise<void>
   getRuntimeRun(projectId: string, agentSessionId: string): Promise<RuntimeRunDto | null>
   getRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
@@ -837,10 +1390,6 @@ export interface XeroDesktopAdapter {
     },
   ): Promise<ProviderPreflightSnapshotDto>
   runDoctorReport(request?: Partial<RunDoctorReportRequestDto>): Promise<XeroDoctorReportDto>
-  checkProviderProfile(
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ): Promise<ProviderProfileDiagnosticsDto>
   startOpenAiLogin(options?: StartOpenAiLoginOptions): Promise<ProviderAuthSessionDto>
   submitOpenAiCallback(
     flowId: string,
@@ -870,6 +1419,8 @@ export interface XeroDesktopAdapter {
   deleteProviderCredential(providerId: string): Promise<ProviderCredentialsSnapshotDto>
   startOAuthLogin(request: StartOAuthLoginRequestDto): Promise<ProviderAuthSessionDto>
   completeOAuthCallback(request: CompleteOAuthCallbackRequestDto): Promise<ProviderAuthSessionDto>
+  startXaiDeviceCodeLogin(request: StartXaiDeviceCodeLoginRequestDto): Promise<XaiDeviceCodeLoginDto>
+  pollXaiDeviceCodeLogin(request: PollXaiDeviceCodeLoginRequestDto): Promise<XaiDeviceCodeLoginDto>
   resolveOperatorAction(
     projectId: string,
     actionId: string,
@@ -927,8 +1478,20 @@ export interface XeroDesktopAdapter {
   browserControlUpdateSettings?(
     request: UpsertBrowserControlSettingsRequestDto,
   ): Promise<BrowserControlSettingsDto>
+  adrenalineModeSettings?(): Promise<AdrenalineModeSettingsDto>
+  adrenalineModeUpdateSettings?(
+    request: UpsertAdrenalineModeSettingsRequestDto,
+  ): Promise<AdrenalineModeSettingsDto>
+  closedLidModeSettings?(): Promise<ClosedLidModeSettingsDto>
+  closedLidModeUpdateSettings?(
+    request: UpsertClosedLidModeSettingsRequestDto,
+  ): Promise<ClosedLidModeSettingsDto>
   soulSettings?(): Promise<SoulSettingsDto>
   soulUpdateSettings?(request: UpsertSoulSettingsRequestDto): Promise<SoulSettingsDto>
+  agentToolingSettings?(): Promise<AgentToolingSettingsDto>
+  agentToolingUpdateSettings?(
+    request: UpsertAgentToolingSettingsRequestDto,
+  ): Promise<AgentToolingSettingsDto>
   browserEval(js: string, options?: { timeoutMs?: number }): Promise<unknown>
   browserCurrentUrl(): Promise<string | null>
   browserScreenshot(): Promise<string>
@@ -992,7 +1555,7 @@ export interface XeroDesktopAdapter {
     projectId: string,
     agentSessionId: string,
     itemKinds: RuntimeStreamItemKindDto[],
-    handler: (payload: RuntimeStreamEventDto) => void,
+    handler: (payload: RuntimeStreamChannelPayloadDto) => void,
     onError?: (error: XeroDesktopError) => void,
     options?: { afterSequence?: number | null; replayLimit?: number | null },
   ): Promise<XeroRuntimeStreamSubscription>
@@ -1033,6 +1596,24 @@ function ensureDesktopRuntime(context: string): void {
   }
 }
 
+function formatZodIssueSummary(error: ZodError): string {
+  // Pull the first few issues into the message so consumers (the panel,
+  // logs, the error toast) can see *what* failed without having to dig
+  // into the cause. The full list still lives on the cause for debugging.
+  const issues = error.issues.slice(0, 3)
+  if (issues.length === 0) return ''
+  const summary = issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join('.') : '(root)'
+      return `${path}: ${issue.message}`
+    })
+    .join(' | ')
+  const more = error.issues.length > issues.length
+    ? ` (+${error.issues.length - issues.length} more)`
+    : ''
+  return ` ${summary}${more}`
+}
+
 function normalizeError(error: unknown, context: string): XeroDesktopError {
   const commandError = commandErrorSchema.safeParse(error)
   if (commandError.success) {
@@ -1049,7 +1630,9 @@ function normalizeError(error: unknown, context: string): XeroDesktopError {
     return new XeroDesktopError({
       code: 'adapter_contract_mismatch',
       errorClass: 'adapter_contract_mismatch',
-      message: `${context} returned an unexpected payload shape.`,
+      message: `${context} returned an unexpected payload shape.${formatZodIssueSummary(
+        error,
+      )}`,
       cause: error,
     })
   }
@@ -1071,6 +1654,29 @@ function normalizeError(error: unknown, context: string): XeroDesktopError {
   })
 }
 
+const LARGE_RESPONSE_CONTRACT_COMMANDS = new Set<string>([
+  'get_agent_authoring_catalog',
+  'get_provider_model_catalog',
+  'get_project_load_bundle',
+  'get_workflow_agent_detail',
+  'get_workflow_agent_graph_projection',
+  'list_agent_definitions',
+  'list_skill_registry',
+  'list_workflow_agents',
+  'reload_skill_registry',
+])
+
+export function shouldValidateCommandResponse(
+  command: string,
+  mode: string | undefined = import.meta.env?.MODE,
+): boolean {
+  const normalizedMode = mode ?? 'production'
+  if (normalizedMode === 'development' || normalizedMode === 'test') {
+    return true
+  }
+  return !LARGE_RESPONSE_CONTRACT_COMMANDS.has(command)
+}
+
 async function invokeTyped<TResponse>(
   command: string,
   schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
@@ -1081,6 +1687,9 @@ async function invokeTyped<TResponse>(
   try {
     const response = await invoke(command, args)
     recordIpcPayloadSample({ boundary: 'command', name: command, payload: response })
+    if (!shouldValidateCommandResponse(command)) {
+      return response as TResponse
+    }
     return schema.parse(response)
   } catch (error) {
     throw normalizeError(error, `Command ${command}`)
@@ -1092,7 +1701,7 @@ async function invokeTypedDeduped<TResponse>(
   schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
   args?: Record<string, unknown>,
 ): Promise<TResponse> {
-  const requestKey = stableBackendRequestKey([command, args ?? null])
+  const requestKey = backendRequestKey(command, args)
   return backendRequestCoordinator.runDeduped(requestKey, () => invokeTyped(command, schema, args))
 }
 
@@ -1125,28 +1734,34 @@ async function listenTyped<TPayload>(
     }
   })
 
-  return createSafeUnlisten(unlisten)
+  return createSafeTauriUnlisten(unlisten)
 }
 
-function createSafeUnlisten(unlisten: UnlistenFn): UnlistenFn {
-  let disposed = false
+const RUNTIME_STREAM_ITEM_KINDS = new Set<string>([
+  'transcript',
+  'tool',
+  'skill',
+  'activity',
+  'action_required',
+  'plan',
+  'complete',
+  'failure',
+  'subagent_lifecycle',
+])
 
-  return () => {
-    if (disposed) {
-      return
-    }
+type RuntimeStreamChannelPayloadDto = RuntimeStreamEventDto | RuntimeStreamPatchDto
 
-    disposed = true
+const RUNTIME_STREAM_DELIVERY_BATCH_SIZE = 24
+const RUNTIME_STREAM_DELIVERY_TIME_BUDGET_MS = 4
 
-    try {
-      const maybePromise = unlisten() as unknown
-      if (maybePromise && typeof (maybePromise as PromiseLike<unknown>).then === 'function') {
-        void Promise.resolve(maybePromise).catch(() => undefined)
-      }
-    } catch {
-      // Tauri can drop WebView listener internals during teardown; cleanup is best-effort.
-    }
-  }
+function scheduleRuntimeStreamDelivery(callback: () => void): ReturnType<typeof setTimeout> {
+  return setTimeout(callback, 0)
+}
+
+function nowForDeliveryBudget(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
 }
 
 function hasCheapRuntimeStreamItemShape(payload: unknown): payload is RuntimeStreamItemDto {
@@ -1156,7 +1771,8 @@ function hasCheapRuntimeStreamItemShape(payload: unknown): payload is RuntimeStr
 
   const item = payload as Record<string, unknown>
   return (
-    runtimeStreamItemKindSchema.safeParse(item.kind).success &&
+    typeof item.kind === 'string' &&
+    RUNTIME_STREAM_ITEM_KINDS.has(item.kind) &&
     typeof item.runId === 'string' &&
     item.runId.trim().length > 0 &&
     typeof item.sequence === 'number' &&
@@ -1167,15 +1783,60 @@ function hasCheapRuntimeStreamItemShape(payload: unknown): payload is RuntimeStr
   )
 }
 
+function hasRuntimeStreamPatchEnvelope(payload: unknown): payload is { schema: string } {
+  return (
+    Boolean(payload)
+    && typeof payload === 'object'
+    && (payload as { schema?: unknown }).schema === 'xero.runtime_stream_patch.v1'
+  )
+}
+
+function hasCheapRuntimeStreamPatchShape(payload: unknown): payload is RuntimeStreamPatchDto {
+  if (!hasRuntimeStreamPatchEnvelope(payload)) {
+    return false
+  }
+
+  const patch = payload as {
+    item?: unknown
+    snapshot?: {
+      schema?: unknown
+      projectId?: unknown
+      agentSessionId?: unknown
+      runId?: unknown
+      sessionId?: unknown
+      lastSequence?: unknown
+    }
+  }
+  const snapshot = patch.snapshot
+  return (
+    hasCheapRuntimeStreamItemShape(patch.item)
+    && Boolean(snapshot)
+    && snapshot?.schema === 'xero.runtime_stream_view_snapshot.v1'
+    && typeof snapshot.projectId === 'string'
+    && snapshot.projectId.trim().length > 0
+    && typeof snapshot.agentSessionId === 'string'
+    && snapshot.agentSessionId.trim().length > 0
+    && typeof snapshot.runId === 'string'
+    && snapshot.runId.trim().length > 0
+    && typeof snapshot.sessionId === 'string'
+    && snapshot.sessionId.trim().length > 0
+    && (
+      snapshot.lastSequence == null
+      || (typeof snapshot.lastSequence === 'number' && Number.isInteger(snapshot.lastSequence))
+    )
+  )
+}
+
 function shouldUseFullRuntimeStreamChannelValidation(): boolean {
   return import.meta.env.MODE === 'test' || import.meta.env.VITE_XERO_RUNTIME_STREAM_ZOD === '1'
 }
 
-function parseRuntimeStreamChannelItem(payload: unknown): RuntimeStreamItemDto {
+function parseRuntimeStreamChannelPayload(payload: unknown): RuntimeStreamItemDto | RuntimeStreamPatchDto {
+  const isPatchEnvelope = hasRuntimeStreamPatchEnvelope(payload)
   const budgetSample = recordIpcPayloadSample({
     boundary: 'channel',
     budgetKey: 'runtimeStreamItem',
-    name: 'subscribe_runtime_stream:item',
+    name: isPatchEnvelope ? 'subscribe_runtime_stream:patch' : 'subscribe_runtime_stream:item',
     payload,
   })
   if (budgetSample?.overMaxBudget) {
@@ -1188,7 +1849,14 @@ function parseRuntimeStreamChannelItem(payload: unknown): RuntimeStreamItemDto {
   }
 
   if (shouldUseFullRuntimeStreamChannelValidation()) {
+    if (isPatchEnvelope) {
+      return runtimeStreamPatchSchema.parse(payload)
+    }
     return runtimeStreamItemSchema.parse(payload)
+  }
+
+  if (hasCheapRuntimeStreamPatchShape(payload)) {
+    return payload
   }
 
   if (hasCheapRuntimeStreamItemShape(payload)) {
@@ -1202,11 +1870,17 @@ function parseRuntimeStreamChannelItem(payload: unknown): RuntimeStreamItemDto {
   })
 }
 
+function isRuntimeStreamPatchPayload(
+  payload: RuntimeStreamItemDto | RuntimeStreamPatchDto,
+): payload is RuntimeStreamPatchDto {
+  return 'schema' in payload && payload.schema === 'xero.runtime_stream_patch.v1'
+}
+
 async function createRuntimeStreamSubscription(
   projectId: string,
   agentSessionId: string,
   itemKinds: RuntimeStreamItemKindDto[],
-  handler: (payload: RuntimeStreamEventDto) => void,
+  handler: (payload: RuntimeStreamChannelPayloadDto) => void,
   onError?: (error: XeroDesktopError) => void,
   options: { afterSequence?: number | null; replayLimit?: number | null } = {},
 ): Promise<XeroRuntimeStreamSubscription> {
@@ -1215,13 +1889,20 @@ async function createRuntimeStreamSubscription(
   let disposed = false
   let response: SubscribeRuntimeStreamResponseDto | null = null
   let lastDeliveredSequence: number | null = null
-  const pendingPayloads: unknown[] = []
+  const deliveryQueue: unknown[] = []
+  let deliveryQueueCursor = 0
+  let scheduledDelivery: ReturnType<typeof setTimeout> | null = null
   const channel = new Channel<unknown>()
 
   const unsubscribe = () => {
     disposed = true
     lastDeliveredSequence = null
-    pendingPayloads.length = 0
+    deliveryQueue.length = 0
+    deliveryQueueCursor = 0
+    if (scheduledDelivery) {
+      clearTimeout(scheduledDelivery)
+      scheduledDelivery = null
+    }
     channel.onmessage = () => undefined
   }
 
@@ -1231,7 +1912,9 @@ async function createRuntimeStreamSubscription(
     }
 
     try {
-      const item = parseRuntimeStreamChannelItem(payload)
+      const channelPayload = parseRuntimeStreamChannelPayload(payload)
+      const isPatch = isRuntimeStreamPatchPayload(channelPayload)
+      const item = isPatch ? channelPayload.item : channelPayload
       if (item.runId !== activeResponse.runId) {
         throw new XeroDesktopError({
           code: 'adapter_contract_mismatch',
@@ -1239,18 +1922,45 @@ async function createRuntimeStreamSubscription(
           message: `Command ${COMMANDS.subscribeRuntimeStream} channel returned a stream item for run ${item.runId} while ${activeResponse.runId} is subscribed.`,
         })
       }
+      if (isPatch) {
+        if (channelPayload.snapshot.runId !== activeResponse.runId) {
+          throw new XeroDesktopError({
+            code: 'adapter_contract_mismatch',
+            errorClass: 'adapter_contract_mismatch',
+            message: `Command ${COMMANDS.subscribeRuntimeStream} channel returned a stream snapshot for run ${channelPayload.snapshot.runId} while ${activeResponse.runId} is subscribed.`,
+          })
+        }
+        if (
+          channelPayload.snapshot.projectId !== activeResponse.projectId
+          || channelPayload.snapshot.agentSessionId !== activeResponse.agentSessionId
+        ) {
+          throw new XeroDesktopError({
+            code: 'adapter_contract_mismatch',
+            errorClass: 'adapter_contract_mismatch',
+            message: `Command ${COMMANDS.subscribeRuntimeStream} channel returned a stream snapshot for a different project or agent session.`,
+          })
+        }
+      }
 
+      const deliveredSequence = isPatch
+        ? channelPayload.snapshot.lastSequence ?? item.sequence
+        : item.sequence
       if (lastDeliveredSequence !== null) {
-        if (item.sequence < lastDeliveredSequence) {
+        if (deliveredSequence < lastDeliveredSequence) {
           return
         }
 
-        if (item.sequence === lastDeliveredSequence) {
+        if (deliveredSequence === lastDeliveredSequence) {
           return
         }
       }
 
-      lastDeliveredSequence = item.sequence
+      lastDeliveredSequence = deliveredSequence
+
+      if (isPatch) {
+        handler(channelPayload)
+        return
+      }
 
       handler({
         projectId: activeResponse.projectId,
@@ -1267,18 +1977,70 @@ async function createRuntimeStreamSubscription(
     }
   }
 
-  channel.onmessage = (payload) => {
+  const hasQueuedPayloads = () => deliveryQueueCursor < deliveryQueue.length
+
+  const compactDeliveryQueue = () => {
+    if (deliveryQueueCursor === 0) {
+      return
+    }
+
+    if (deliveryQueueCursor >= deliveryQueue.length) {
+      deliveryQueue.length = 0
+      deliveryQueueCursor = 0
+      return
+    }
+
+    if (deliveryQueueCursor >= 256) {
+      deliveryQueue.splice(0, deliveryQueueCursor)
+      deliveryQueueCursor = 0
+    }
+  }
+
+  const scheduleDelivery = () => {
+    if (disposed || !response || scheduledDelivery || !hasQueuedPayloads()) {
+      return
+    }
+
+    scheduledDelivery = scheduleRuntimeStreamDelivery(() => {
+      scheduledDelivery = null
+      const activeResponse = response
+      if (disposed || !activeResponse) {
+        return
+      }
+
+      const startedAt = nowForDeliveryBudget()
+      let deliveredCount = 0
+      while (deliveryQueueCursor < deliveryQueue.length) {
+        const payload = deliveryQueue[deliveryQueueCursor]
+        deliveryQueueCursor += 1
+        deliver(payload, activeResponse)
+        deliveredCount += 1
+
+        if (
+          deliveredCount >= RUNTIME_STREAM_DELIVERY_BATCH_SIZE ||
+          nowForDeliveryBudget() - startedAt >= RUNTIME_STREAM_DELIVERY_TIME_BUDGET_MS
+        ) {
+          break
+        }
+      }
+
+      compactDeliveryQueue()
+      if (hasQueuedPayloads()) {
+        scheduleDelivery()
+      }
+    })
+  }
+
+  const enqueueDelivery = (payload: unknown) => {
     if (disposed) {
       return
     }
 
-    if (!response) {
-      pendingPayloads.push(payload)
-      return
-    }
-
-    deliver(payload, response)
+    deliveryQueue.push(payload)
+    scheduleDelivery()
   }
+
+  channel.onmessage = enqueueDelivery
 
   try {
     const request = subscribeRuntimeStreamRequestSchema.parse({
@@ -1299,9 +2061,7 @@ async function createRuntimeStreamSubscription(
       },
     })
 
-    for (const pendingPayload of pendingPayloads.splice(0, pendingPayloads.length)) {
-      deliver(pendingPayload, response)
-    }
+    scheduleDelivery()
 
     return {
       response,
@@ -1548,10 +2308,145 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  wipeProjectData(request) {
+    const parsed = wipeProjectDataRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.wipeProjectData, wipeProjectDataResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  wipeAllXeroData() {
+    return invokeTyped(COMMANDS.wipeAllXeroData, wipeAllDataResponseSchema)
+  },
+
+  readAppUiState(request) {
+    const parsed = readAppUiStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.readAppUiState, appUiStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  writeAppUiState(request) {
+    const parsed = writeAppUiStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.writeAppUiState, appUiStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  async publishThemeToCloud(request) {
+    const parsed = bridgeThemeSyncRequestSchema.parse(request)
+    await invokeRaw(COMMANDS.bridgePublishTheme, { request: parsed })
+  },
+
+  readProjectUiState(request) {
+    const parsed = readProjectUiStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.readProjectUiState, projectUiStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  writeProjectUiState(request) {
+    const parsed = writeProjectUiStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.writeProjectUiState, projectUiStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  listProjectStateBackups(request) {
+    const parsed = listProjectStateBackupsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listProjectStateBackups, listProjectStateBackupsResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  createProjectStateBackup(request) {
+    const parsed = createProjectStateBackupRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.createProjectStateBackup, projectStateBackupResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  restoreProjectStateBackup(request) {
+    const parsed = restoreProjectStateBackupRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.restoreProjectStateBackup, projectStateRestoreResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  repairProjectState(request) {
+    const parsed = repairProjectStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.repairProjectState, projectStateRepairResponseSchema, {
+      request: parsed,
+    })
+  },
+
   getProjectSnapshot(projectId) {
     return invokeTyped(COMMANDS.getProjectSnapshot, projectSnapshotResponseSchema, {
       request: { projectId },
     })
+  },
+
+  getProjectLoadBundle(request) {
+    const parsed = projectLoadBundleRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getProjectLoadBundle, projectLoadBundleSchema, {
+      request: parsed,
+    })
+  },
+
+  updateProjectStartTargets(request) {
+    return invokeTyped(COMMANDS.updateProjectStartTargets, projectSummarySchema, {
+      request: {
+        projectId: request.projectId,
+        targets: request.targets.map((target) => ({
+          id: target.id ?? null,
+          name: target.name,
+          command: target.command,
+        })),
+      },
+    })
+  },
+
+  terminalOpen(request) {
+    return invokeTyped(COMMANDS.terminalOpen, openTerminalResponseSchema, {
+      request: {
+        projectId: request.projectId ?? null,
+        cols: request.cols ?? null,
+        rows: request.rows ?? null,
+      },
+    })
+  },
+
+  async terminalWrite(terminalId, data) {
+    await invokeRaw(COMMANDS.terminalWrite, {
+      request: { terminalId, data },
+    })
+  },
+
+  async terminalResize(terminalId, cols, rows) {
+    await invokeRaw(COMMANDS.terminalResize, {
+      request: { terminalId, cols, rows },
+    })
+  },
+
+  async terminalClose(terminalId) {
+    await invokeRaw(COMMANDS.terminalClose, { request: { terminalId } })
+  },
+
+  suggestProjectStartTargets(request) {
+    const trimmedModel = request.modelId.trim()
+    return invokeTyped(
+      COMMANDS.suggestProjectStartTargets,
+      suggestedStartTargetsSchema,
+      {
+        request: {
+          projectId: request.projectId,
+          modelId: trimmedModel.length > 0 ? trimmedModel : null,
+          providerProfileId: request.providerProfileId ?? null,
+          runtimeAgentId: request.runtimeAgentId ?? null,
+          thinkingEffort: request.thinkingEffort ?? null,
+        },
+      },
+    )
   },
 
   getProjectUsageSummary(projectId) {
@@ -1572,6 +2467,16 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  applySelectiveUndo(request) {
+    const parsedRequest = selectiveUndoRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.applySelectiveUndo, selectiveUndoResponseSchema, { request: parsedRequest })
+  },
+
+  returnSessionToHere(request) {
+    const parsedRequest = returnSessionToHereRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.returnSessionToHere, returnSessionToHereResponseSchema, { request: parsedRequest })
+  },
+
   async gitStagePaths(projectId, paths) {
     const request = gitPathsRequestSchema.parse({ projectId, paths })
     await invokeRaw(COMMANDS.gitStagePaths, { request })
@@ -1585,6 +2490,11 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   async gitDiscardChanges(projectId, paths) {
     const request = gitPathsRequestSchema.parse({ projectId, paths })
     await invokeRaw(COMMANDS.gitDiscardChanges, { request })
+  },
+
+  async gitRevertPatch(request) {
+    const parsedRequest = gitRevertPatchRequestSchema.parse(request)
+    await invokeRaw(COMMANDS.gitRevertPatch, { request: parsedRequest })
   },
 
   gitCommit(projectId, message) {
@@ -1616,6 +2526,13 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     return invokeTyped(COMMANDS.gitPush, gitPushResponseSchema, { request })
   },
 
+  listProjectFileIndex(request) {
+    const parsedRequest = listProjectFileIndexRequestSchema.parse(request)
+    return invokeTypedDeduped(COMMANDS.listProjectFileIndex, listProjectFileIndexResponseSchema, {
+      request: parsedRequest,
+    })
+  },
+
   listProjectFiles(projectId, path = '/') {
     const request: ListProjectFilesRequestDto = listProjectFilesRequestSchema.parse({ projectId, path })
     return invokeTypedDeduped(COMMANDS.listProjectFiles, listProjectFilesResponseSchema, {
@@ -1630,9 +2547,16 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
-  writeProjectFile(projectId, path, content) {
-    const request = writeProjectFileRequestSchema.parse({ projectId, path, content })
+  writeProjectFile(projectId, path, content, options = {}) {
+    const request = writeProjectFileRequestSchema.parse({ projectId, path, content, ...options })
     return invokeTyped(COMMANDS.writeProjectFile, writeProjectFileResponseSchema, {
+      request,
+    })
+  },
+
+  statProjectFiles(projectId, paths) {
+    const request = statProjectFilesRequestSchema.parse({ projectId, paths })
+    return invokeTypedDeduped(COMMANDS.statProjectFiles, statProjectFilesResponseSchema, {
       request,
     })
   },
@@ -1692,6 +2616,27 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  runProjectTypecheck(request) {
+    const parsed = runProjectTypecheckRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.runProjectTypecheck, projectTypecheckResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  formatProjectDocument(request) {
+    const parsed = formatProjectDocumentRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.formatProjectDocument, formatProjectDocumentResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  runProjectLint(request) {
+    const parsed = runProjectLintRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.runProjectLint, projectLintResponseSchema, {
+      request: parsed,
+    })
+  },
+
   workspaceIndex(request) {
     const parsed = workspaceIndexRequestSchema.parse(request)
     return invokeTyped(COMMANDS.workspaceIndex, workspaceIndexResponseSchema, {
@@ -1727,6 +2672,41 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  listProjectContextRecords(request) {
+    const parsed = listProjectContextRecordsRequestSchema.parse(request)
+    return invokeTypedDeduped(
+      COMMANDS.listProjectContextRecords,
+      listProjectContextRecordsResponseSchema,
+      { request: parsed },
+    )
+  },
+
+  deleteProjectContextRecord(request) {
+    const parsed = deleteProjectContextRecordRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.deleteProjectContextRecord,
+      deleteProjectContextRecordResponseSchema,
+      { request: parsed },
+    )
+  },
+
+  supersedeProjectContextRecord(request) {
+    const parsed = supersedeProjectContextRecordRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.supersedeProjectContextRecord,
+      supersedeProjectContextRecordResponseSchema,
+      { request: parsed },
+    )
+  },
+
+  ensureGlobalComputerUseSession() {
+    return invokeTyped(
+      COMMANDS.ensureGlobalComputerUseSession,
+      globalComputerUseSessionSchema,
+      {},
+    )
+  },
+
   createAgentSession(request) {
     const parsed = createAgentSessionRequestSchema.parse(request)
     return invokeTyped(COMMANDS.createAgentSession, agentSessionSchema, {
@@ -1735,6 +2715,8 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
         title: parsed.title ?? null,
         summary: parsed.summary ?? '',
         selected: parsed.selected ?? false,
+        sessionKind: parsed.sessionKind,
+        runtimeAgentId: parsed.runtimeAgentId ?? null,
       },
     })
   },
@@ -1763,6 +2745,279 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
       agentDefinitionVersionSummarySchema.nullable(),
       { request: parsed },
     )
+  },
+
+  getAgentDefinitionVersionDiff(request) {
+    const parsed = getAgentDefinitionVersionDiffRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.getAgentDefinitionVersionDiff,
+      agentDefinitionVersionDiffSchema,
+      { request: parsed },
+    )
+  },
+
+  saveAgentDefinition(request) {
+    const parsed = saveAgentDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.saveAgentDefinition, agentDefinitionWriteResponseSchema, {
+      request: {
+        projectId: parsed.projectId,
+        definition: parsed.definition,
+        definitionId: parsed.definitionId ?? null,
+        dryRun: parsed.dryRun ?? false,
+      },
+    })
+  },
+
+  updateAgentDefinition(request) {
+    const parsed = updateAgentDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.updateAgentDefinition, agentDefinitionWriteResponseSchema, {
+      request: {
+        projectId: parsed.projectId,
+        definitionId: parsed.definitionId,
+        definition: parsed.definition,
+        dryRun: parsed.dryRun ?? false,
+      },
+    })
+  },
+
+  previewAgentDefinition(request) {
+    const parsed = previewAgentDefinitionRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.previewAgentDefinition,
+      agentDefinitionPreviewResponseSchema,
+      {
+        request: {
+          projectId: parsed.projectId,
+          definitionId: parsed.definitionId ?? null,
+          definition: parsed.definition,
+        },
+      },
+    )
+  },
+
+  setAgentDefaultModel(request) {
+    const parsed = setAgentDefaultModelRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.setAgentDefaultModel, setAgentDefaultModelResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  getAgentKnowledgeInspection(request) {
+    const parsed = getAgentKnowledgeInspectionRequestSchema.parse(request)
+    return invokeTypedDeduped(
+      COMMANDS.getAgentKnowledgeInspection,
+      agentKnowledgeInspectionSchema,
+      {
+        request: {
+          projectId: parsed.projectId,
+          agentSessionId: parsed.agentSessionId ?? null,
+          runId: parsed.runId ?? null,
+          limit: parsed.limit ?? null,
+        },
+      },
+    )
+  },
+
+  getAgentHandoffContextSummary(request) {
+    const parsed = getAgentHandoffContextSummaryRequestSchema.parse(request)
+    return invokeTypedDeduped(
+      COMMANDS.getAgentHandoffContextSummary,
+      agentHandoffContextSummarySchema,
+      {
+        request: {
+          projectId: parsed.projectId,
+          handoffId: parsed.handoffId ?? null,
+          targetRunId: parsed.targetRunId ?? null,
+          sourceRunId: parsed.sourceRunId ?? null,
+        },
+      },
+    )
+  },
+
+  listWorkflowAgents(request) {
+    const parsed = listWorkflowAgentsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listWorkflowAgents, listWorkflowAgentsResponseSchema, {
+      request: {
+        projectId: parsed.projectId,
+        includeArchived: parsed.includeArchived,
+      },
+    })
+  },
+
+  getWorkflowAgentDetail(request) {
+    const parsed = getWorkflowAgentDetailRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getWorkflowAgentDetail, workflowAgentDetailSchema, {
+      request: parsed,
+    })
+  },
+
+  getWorkflowAgentGraphProjection(request) {
+    const parsed = getWorkflowAgentGraphProjectionRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.getWorkflowAgentGraphProjection,
+      workflowAgentGraphProjectionSchema,
+      {
+        request: parsed,
+      },
+    )
+  },
+
+  createWorkflowDefinition(request) {
+    const parsed = createWorkflowDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.createWorkflowDefinition, workflowDefinitionResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  updateWorkflowDefinition(request) {
+    const parsed = updateWorkflowDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.updateWorkflowDefinition, workflowDefinitionResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  listWorkflowDefinitions(request) {
+    const parsed = listWorkflowDefinitionsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listWorkflowDefinitions, listWorkflowDefinitionsResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  getWorkflowDefinition(request) {
+    const parsed = getWorkflowDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getWorkflowDefinition, workflowDefinitionResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  startWorkflowRun(request) {
+    const parsed = startWorkflowRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.startWorkflowRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  getWorkflowRun(request) {
+    const parsed = getWorkflowRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getWorkflowRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  explainWorkflowRunBlocker(request) {
+    const parsed = explainWorkflowRunBlockerRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.explainWorkflowRunBlocker, workflowRunBlockerResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  exportWorkflowRunBundle(request) {
+    const parsed = exportWorkflowRunBundleRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.exportWorkflowRunBundle, workflowRunBundleResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  resumeWorkflowNextIncompletePhase(request) {
+    const parsed = resumeWorkflowNextIncompletePhaseRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.resumeWorkflowNextIncompletePhase, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  listWorkflowRuns(request) {
+    const parsed = listWorkflowRunsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listWorkflowRuns, listWorkflowRunsResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  cancelWorkflowRun(request) {
+    const parsed = cancelWorkflowRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.cancelWorkflowRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  retryWorkflowNodeRun(request) {
+    const parsed = retryWorkflowNodeRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.retryWorkflowNodeRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  skipWorkflowBranch(request) {
+    const parsed = skipWorkflowBranchRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.skipWorkflowBranch, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  resumeWorkflowCheckpoint(request) {
+    const parsed = resumeWorkflowCheckpointRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.resumeWorkflowCheckpoint, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  readWorkflowDeliveryState(request) {
+    const parsed = readWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.readWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  writeWorkflowDeliveryState(request) {
+    const parsed = writeWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.writeWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  exportWorkflowDeliveryState(request) {
+    const parsed = exportWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.exportWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  wipeWorkflowDeliveryState(request) {
+    const parsed = wipeWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.wipeWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  getAgentAuthoringCatalog(request) {
+    const parsed = getAgentAuthoringCatalogRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getAgentAuthoringCatalog, agentAuthoringCatalogSchema, {
+      request: parsed,
+    })
+  },
+
+  getAgentToolPackCatalog(request) {
+    const parsed = getAgentToolPackCatalogRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getAgentToolPackCatalog, agentToolPackCatalogSchema, {
+      request: parsed,
+    })
+  },
+
+  searchAgentAuthoringSkills(request) {
+    const parsed = searchAgentAuthoringSkillsRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.searchAgentAuthoringSkills,
+      searchAgentAuthoringSkillsResponseSchema,
+      {
+        request: parsed,
+      },
+    )
+  },
+
+  resolveAgentAuthoringSkill(request) {
+    const parsed = resolveAgentAuthoringSkillRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.resolveAgentAuthoringSkill, agentAuthoringAttachableSkillSchema, {
+      request: parsed,
+    })
   },
 
   listAgentSessions(request) {
@@ -1971,11 +3226,29 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  getSessionMemoryReviewQueue(request) {
+    const parsed = getSessionMemoryReviewQueueRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.getSessionMemoryReviewQueue,
+      getSessionMemoryReviewQueueResponseSchema,
+      { request: parsed },
+    )
+  },
+
   updateSessionMemory(request) {
     const parsed = updateSessionMemoryRequestSchema.parse(request)
     return invokeTyped(COMMANDS.updateSessionMemory, sessionMemoryRecordSchema, {
       request: parsed,
     })
+  },
+
+  correctSessionMemory(request) {
+    const parsed = correctSessionMemoryRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.correctSessionMemory,
+      correctSessionMemoryResponseSchema,
+      { request: parsed },
+    )
   },
 
   async deleteSessionMemory(request) {
@@ -2156,18 +3429,6 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
-  checkProviderProfile(profileId, options) {
-    const request = checkProviderProfileRequestSchema.parse({
-      profileId,
-      includeNetwork: options?.includeNetwork ?? false,
-      modelId: options?.modelId ?? null,
-    })
-    return invokeTyped(COMMANDS.checkProviderProfile, providerProfileDiagnosticsSchema, {
-      request,
-    })
-  },
-
-
   startOpenAiLogin(options = {}) {
     const request = startOpenAiLoginRequestSchema.parse({
       originator: options.originator ?? null,
@@ -2313,6 +3574,20 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   completeOAuthCallback(request) {
     const parsed = completeOAuthCallbackRequestSchema.parse(request)
     return invokeTyped(COMMANDS.completeOAuthCallback, providerAuthSessionSchema, {
+      request: parsed,
+    })
+  },
+
+  startXaiDeviceCodeLogin(request) {
+    const parsed = startXaiDeviceCodeLoginRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.startXaiDeviceCodeLogin, xaiDeviceCodeLoginSchema, {
+      request: parsed,
+    })
+  },
+
+  pollXaiDeviceCodeLogin(request) {
+    const parsed = pollXaiDeviceCodeLoginRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.pollXaiDeviceCodeLogin, xaiDeviceCodeLoginSchema, {
       request: parsed,
     })
   },
@@ -2487,6 +3762,28 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  adrenalineModeSettings() {
+    return invokeTyped(COMMANDS.adrenalineModeSettings, adrenalineModeSettingsSchema)
+  },
+
+  adrenalineModeUpdateSettings(request) {
+    const parsedRequest = upsertAdrenalineModeSettingsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.adrenalineModeUpdateSettings, adrenalineModeSettingsSchema, {
+      request: parsedRequest,
+    })
+  },
+
+  closedLidModeSettings() {
+    return invokeTyped(COMMANDS.closedLidModeSettings, closedLidModeSettingsSchema)
+  },
+
+  closedLidModeUpdateSettings(request) {
+    const parsedRequest = upsertClosedLidModeSettingsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.closedLidModeUpdateSettings, closedLidModeSettingsSchema, {
+      request: parsedRequest,
+    })
+  },
+
   soulSettings() {
     return invokeTyped(COMMANDS.soulSettings, soulSettingsSchema)
   },
@@ -2494,6 +3791,17 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   soulUpdateSettings(request) {
     const parsedRequest = upsertSoulSettingsRequestSchema.parse(request)
     return invokeTyped(COMMANDS.soulUpdateSettings, soulSettingsSchema, {
+      request: parsedRequest,
+    })
+  },
+
+  agentToolingSettings() {
+    return invokeTyped(COMMANDS.agentToolingSettings, agentToolingSettingsSchema)
+  },
+
+  agentToolingUpdateSettings(request) {
+    const parsedRequest = upsertAgentToolingSettingsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.agentToolingUpdateSettings, agentToolingSettingsSchema, {
       request: parsedRequest,
     })
   },

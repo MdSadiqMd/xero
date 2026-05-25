@@ -38,6 +38,8 @@ export function useProviderCredentialsMutations({
   | 'deleteProviderCredential'
   | 'startOAuthLogin'
   | 'completeOAuthCallback'
+  | 'startXaiDeviceCodeLogin'
+  | 'pollXaiDeviceCodeLogin'
 > {
   const {
     providerCredentialsRef,
@@ -295,11 +297,38 @@ export function useProviderCredentialsMutations({
     [adapter, refreshProviderCredentials],
   )
 
+  const startXaiDeviceCodeLogin = useCallback<
+    XeroDesktopMutationActions['startXaiDeviceCodeLogin']
+  >(
+    async (request) => {
+      return adapter.startXaiDeviceCodeLogin({ providerId: request.providerId })
+    },
+    [adapter],
+  )
+
+  const pollXaiDeviceCodeLogin = useCallback<
+    XeroDesktopMutationActions['pollXaiDeviceCodeLogin']
+  >(
+    async (request) => {
+      const login = await adapter.pollXaiDeviceCodeLogin({
+        providerId: request.providerId,
+        flowId: request.flowId,
+      })
+      if (login.phase === 'authenticated') {
+        await refreshProviderCredentials({ force: true })
+      }
+      return login
+    },
+    [adapter, refreshProviderCredentials],
+  )
+
   return {
     refreshProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,
     startOAuthLogin,
     completeOAuthCallback,
+    startXaiDeviceCodeLogin,
+    pollXaiDeviceCodeLogin,
   }
 }

@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
   channels: [] as Array<{ onmessage?: (message: unknown) => void }>,
 }))
 
+function flushRuntimeStreamDelivery(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 vi.mock('@tauri-apps/api/core', () => ({
   Channel: class {
     onmessage?: (message: unknown) => void
@@ -194,6 +198,107 @@ describe('XeroDesktopAdapter dictation', () => {
   })
 })
 
+describe('XeroDesktopAdapter code history', () => {
+  beforeEach(() => {
+    mocks.invoke.mockReset()
+    mocks.isTauri.mockReturnValue(true)
+    mocks.listen.mockReset()
+    mocks.channels.length = 0
+  })
+
+  it('invokes selective undo and return session to here through the new frontend contract names', async () => {
+    const { XeroDesktopAdapter } = await import('./xero-desktop')
+
+    mocks.invoke.mockResolvedValueOnce({
+      operation: makeCodeHistoryOperation({
+        operationId: 'code-undo-1',
+        mode: 'selective_undo',
+      }),
+    })
+
+    await expect(
+      XeroDesktopAdapter.applySelectiveUndo({
+        projectId: 'project-1',
+        operationId: 'code-undo-1',
+        target: {
+          targetKind: 'change_group',
+          targetId: 'code-change-1',
+          changeGroupId: 'code-change-1',
+          hunkIds: [],
+        },
+        expectedWorkspaceEpoch: 7,
+      }),
+    ).resolves.toMatchObject({
+      operation: {
+        mode: 'selective_undo',
+        status: 'completed',
+      },
+    })
+
+    expect(mocks.invoke).toHaveBeenLastCalledWith('apply_selective_undo', {
+      request: {
+        projectId: 'project-1',
+        operationId: 'code-undo-1',
+        target: {
+          targetKind: 'change_group',
+          targetId: 'code-change-1',
+          changeGroupId: 'code-change-1',
+          hunkIds: [],
+        },
+        expectedWorkspaceEpoch: 7,
+      },
+    })
+
+    mocks.invoke.mockResolvedValueOnce({
+      operation: makeCodeHistoryOperation({
+        operationId: 'return-session-1',
+        mode: 'session_rollback',
+        target: {
+          targetKind: 'run_boundary',
+          targetId: 'run-1:boundary-1',
+        },
+      }),
+    })
+
+    await expect(
+      XeroDesktopAdapter.returnSessionToHere({
+        projectId: 'project-1',
+        operationId: 'return-session-1',
+        target: {
+          targetKind: 'run_boundary',
+          targetId: 'run-1:boundary-1',
+          agentSessionId: 'agent-session-1',
+          boundaryId: 'boundary-1',
+          runId: 'run-1',
+          changeGroupId: 'code-change-1',
+        },
+        expectedWorkspaceEpoch: 8,
+      }),
+    ).resolves.toMatchObject({
+      operation: {
+        mode: 'session_rollback',
+      },
+    })
+
+    expect(mocks.invoke).toHaveBeenLastCalledWith('apply_session_rollback', {
+      request: {
+        projectId: 'project-1',
+        operationId: 'return-session-1',
+        target: {
+          targetKind: 'run_boundary',
+          targetId: 'run-1:boundary-1',
+          agentSessionId: 'agent-session-1',
+          boundaryId: 'boundary-1',
+          runId: 'run-1',
+          changeGroupId: 'code-change-1',
+        },
+        expectedWorkspaceEpoch: 8,
+      },
+    })
+    expect('applyCodeRollback' in XeroDesktopAdapter).toBe(false)
+  })
+})
+
 describe('XeroDesktopAdapter event listeners', () => {
   beforeEach(() => {
     mocks.invoke.mockReset()
@@ -219,6 +324,27 @@ describe('XeroDesktopAdapter event listeners', () => {
     expect(rawUnlisten).toHaveBeenCalledTimes(1)
   })
 })
+
+function makeCodeHistoryOperation(overrides: Record<string, unknown> = {}) {
+  return {
+    projectId: 'project-1',
+    operationId: 'code-undo-1',
+    mode: 'selective_undo',
+    status: 'completed',
+    target: {
+      targetKind: 'change_group',
+      targetId: 'code-change-1',
+      hunkIds: [],
+    },
+    affectedPaths: ['src/app.ts'],
+    conflicts: [],
+    resultCommitId: 'code-commit-undo-1',
+    resultChangeGroupId: 'code-change-undo-1',
+    createdAt: '2026-05-06T12:00:00Z',
+    updatedAt: '2026-05-06T12:00:01Z',
+    ...overrides,
+  }
+}
 
 function makeRuntimeStreamItem(sequence: number, text: string) {
   return {
@@ -248,6 +374,36 @@ function makeRuntimeStreamItem(sequence: number, text: string) {
     message: null,
     retryable: null,
     createdAt: '2026-04-30T22:41:55Z',
+  }
+}
+
+function makeRuntimeStreamPatch(sequence: number, text: string) {
+  return {
+    schema: 'xero.runtime_stream_patch.v1',
+    item: makeRuntimeStreamItem(sequence, text),
+    snapshot: {
+      schema: 'xero.runtime_stream_view_snapshot.v1',
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runtimeKind: 'openai_codex',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      flowId: null,
+      subscribedItemKinds: ['transcript'],
+      status: 'live',
+      items: [makeRuntimeStreamItem(1, text)],
+      transcriptItems: [makeRuntimeStreamItem(1, text)],
+      toolCalls: [],
+      skillItems: [],
+      activityItems: [],
+      actionRequired: [],
+      plan: null,
+      completion: null,
+      failure: null,
+      lastIssue: null,
+      lastItemAt: '2026-04-30T22:41:55Z',
+      lastSequence: sequence,
+    },
   }
 }
 
@@ -287,8 +443,10 @@ describe('XeroDesktopAdapter runtime stream', () => {
       handler,
       onError,
     )
+    await flushRuntimeStreamDelivery()
 
     mocks.channels[0].onmessage?.(makeRuntimeStreamItem(2, 'late stale replay item'))
+    await flushRuntimeStreamDelivery()
 
     expect(handler).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledWith(
@@ -298,6 +456,48 @@ describe('XeroDesktopAdapter runtime stream', () => {
         item: expect.objectContaining({
           sequence: 3,
           text: 'newest replay item',
+        }),
+      }),
+    )
+    expect(onError).not.toHaveBeenCalled()
+
+    subscription.unsubscribe()
+  })
+
+  it('delivers projected runtime stream patches from the channel', async () => {
+    const { XeroDesktopAdapter } = await import('./xero-desktop')
+    const handler = vi.fn()
+    const onError = vi.fn()
+
+    mocks.invoke.mockImplementationOnce(async (_command, args) => {
+      args.request.channel.onmessage(makeRuntimeStreamPatch(4, 'projected transcript'))
+
+      return {
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+        runtimeKind: 'openai_codex',
+        runId: 'run-1',
+        sessionId: 'session-1',
+        flowId: null,
+        subscribedItemKinds: ['transcript'],
+      }
+    })
+
+    const subscription = await XeroDesktopAdapter.subscribeRuntimeStream(
+      'project-1',
+      'agent-session-main',
+      ['transcript'],
+      handler,
+      onError,
+    )
+    await flushRuntimeStreamDelivery()
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schema: 'xero.runtime_stream_patch.v1',
+        snapshot: expect.objectContaining({
+          projectId: 'project-1',
+          lastSequence: 4,
         }),
       }),
     )

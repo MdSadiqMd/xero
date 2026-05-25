@@ -43,6 +43,7 @@ function makeCatalog(
   models: { modelId: string; displayName: string; thinking?: boolean }[],
 ): ProviderModelCatalogDto {
   return {
+    contractVersion: 1,
     profileId: `${providerId}-default`,
     providerId,
     configuredModelId: models[0]?.modelId ?? '',
@@ -59,6 +60,7 @@ function makeCatalog(
         defaultEffort: m.thinking ? 'medium' : null,
       },
     })),
+    contractDiagnostics: [],
   }
 }
 
@@ -77,6 +79,7 @@ function makeSelectedRunControls(
     approvalMode: 'suggest',
     approvalModeLabel: 'Suggest',
     planModeRequired: false,
+    autoCompactEnabled: true,
     source: 'active',
     revision: 1,
     effectiveAt: '2026-04-15T20:00:00.000Z',
@@ -118,6 +121,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         approvalMode: 'suggest',
         approvalModeLabel: 'Suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00.000Z',
       },
@@ -167,6 +171,38 @@ describe('resolveSelectedModel', () => {
     expect(view.modelId).toBe('openai/gpt-4.1-mini')
     expect(view.hasCredential).toBe(true)
     expect(view.credentialKind).toBe('api_key')
+  })
+
+  it('uses the selected control profile to resolve cross-provider model changes on an existing run', () => {
+    const credentials = makeSnapshot([
+      makeCredential({ providerId: 'xai', kind: 'oauth_session', readinessProof: 'oauth_session' }),
+      makeCredential({ providerId: 'openai_codex', kind: 'oauth_session', readinessProof: 'oauth_session' }),
+    ])
+    const options = buildComposerModelOptions(credentials, {
+      'xai-default': makeCatalog('xai', [
+        { modelId: 'grok-4.3-latest', displayName: 'grok-4.3-latest', thinking: true },
+      ]),
+      'openai_codex-default': makeCatalog('openai_codex', [
+        { modelId: 'gpt-5.4', displayName: 'GPT-5.4', thinking: true },
+      ]),
+    })
+
+    const view = resolveSelectedModel(
+      credentials,
+      makeSelectedRunControls({
+        providerProfileId: 'openai_codex-default',
+        modelId: 'gpt-5.4',
+      }),
+      {
+        runtimeRun: makeRuntimeRun({ providerId: 'xai' }),
+        composerModelOptions: options,
+      },
+    )
+
+    expect(view.source).toBe('runtime_run')
+    expect(view.providerId).toBe('openai_codex')
+    expect(view.modelId).toBe('gpt-5.4')
+    expect(view.hasCredential).toBe(true)
   })
 
   it('uses runtime-run truth even when the provider has no credential', () => {
@@ -272,6 +308,62 @@ describe('buildComposerModelOptions', () => {
     const options = buildComposerModelOptions(credentials, catalogs)
     expect(options).toHaveLength(1)
     expect(options[0].providerId).toBe('openrouter')
+  })
+
+  it('only exposes supported xAI 4.3 text models to the composer', () => {
+    const credentials = makeSnapshot([
+      makeCredential({ providerId: 'xai', kind: 'oauth_session', readinessProof: 'oauth_session' }),
+    ])
+    const catalogs = {
+      'xai-default': makeCatalog('xai', [
+        {
+          modelId: 'grok-4.20-0309-non-reasoning',
+          displayName: 'grok-4.20-0309-non-reasoning',
+        },
+        {
+          modelId: 'grok-4.20-0309-reasoning',
+          displayName: 'grok-4.20-0309-reasoning',
+        },
+        {
+          modelId: 'grok-4.20-multi-agent-0309',
+          displayName: 'grok-4.20-multi-agent-0309',
+        },
+        { modelId: 'grok-imagine-image-quality', displayName: 'grok-imagine-image-quality' },
+        { modelId: 'grok-imagine-video', displayName: 'grok-imagine-video' },
+        { modelId: 'grok-latest', displayName: 'grok-latest', thinking: true },
+        { modelId: 'grok-4.3-latest', displayName: 'grok-4.3-latest', thinking: true },
+      ]),
+    }
+
+    const options = buildComposerModelOptions(credentials, catalogs)
+
+    expect(options.map((option) => option.displayName)).toEqual([
+      'Grok 4.3 Latest',
+    ])
+    expect(options[0]?.thinkingEffortOptions).toEqual(['medium', 'high'])
+  })
+
+  it('includes the Cursor SDK harness model when the Cursor credential and catalog exist', () => {
+    const credentials = makeSnapshot([
+      makeCredential({ providerId: 'external_cursor_sdk', defaultModelId: 'composer-latest' }),
+    ])
+    const catalogs = {
+      'external_cursor_sdk-default': makeCatalog('external_cursor_sdk', [
+        { modelId: 'composer-latest', displayName: 'Composer Latest' },
+      ]),
+    }
+
+    const options = buildComposerModelOptions(credentials, catalogs)
+
+    expect(options).toHaveLength(1)
+    expect(options[0]).toMatchObject({
+      selectionKey: 'external_cursor_sdk:composer-latest',
+      profileId: 'external_cursor_sdk-default',
+      providerId: 'external_cursor_sdk',
+      providerLabel: 'Cursor',
+      modelId: 'composer-latest',
+      displayName: 'Composer Latest',
+    })
   })
 })
 

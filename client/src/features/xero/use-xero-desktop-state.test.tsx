@@ -17,6 +17,7 @@ import {
   type ProviderModelCatalogDto,
   type ProviderPreflightRequiredFeaturesDto,
   type ProviderPreflightSnapshotDto,
+  type ProjectLoadBundleDto,
   type RepositoryDiffResponseDto,
   type RepositoryStatusChangedPayloadDto,
   type RepositoryStatusResponseDto,
@@ -32,6 +33,8 @@ import {
   type SubscribeRuntimeStreamResponseDto,
   type RuntimeUpdatedPayloadDto,
   type SkillRegistryDto,
+  type WriteProjectFileResponseDto,
+  type XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
 import { type ProviderProfilesDto } from '@/src/test/legacy-provider-profiles'
 import { XeroDesktopError, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
@@ -60,6 +63,23 @@ function createDeferred<T>() {
   return { promise, resolve, reject }
 }
 
+function writeFileResponse(
+  projectId: string,
+  path: string,
+  content = '',
+): WriteProjectFileResponseDto {
+  return {
+    projectId,
+    path,
+    byteLength: content.length,
+    modifiedAt: '2026-01-01T00:00:01Z',
+    contentHash: `saved-${path}-${content.length}`,
+    mimeType: 'text/plain; charset=utf-8',
+    rendererKind: 'code',
+    preview: null,
+  }
+}
+
 function makeProjectSummary(id: string, name: string) {
   return {
     id,
@@ -78,10 +98,12 @@ function makeAgentSession(projectId: string) {
   return {
     projectId,
     agentSessionId: 'agent-session-main',
+    sessionKind: 'standard' as const,
     title: 'Main session',
     summary: 'Primary project session',
     status: 'active' as const,
     selected: true,
+    remoteVisible: false,
     createdAt: '2026-04-15T17:55:00Z',
     updatedAt: '2026-04-15T17:55:00Z',
     archivedAt: null,
@@ -165,6 +187,7 @@ function makeDiff(id: string, scope: 'staged' | 'unstaged' | 'worktree', patch =
     },
     scope,
     patch,
+    files: [],
     truncated: false,
     baseRevision: null,
   }
@@ -203,6 +226,27 @@ function makeProviderAuthSession(overrides: Partial<ProviderAuthSessionDto> = {}
     callbackBound: true,
     authorizationUrl: 'https://auth.openai.com/oauth/authorize',
     redirectUri: 'http://127.0.0.1:1455/auth/callback',
+    lastErrorCode: null,
+    lastError: null,
+    updatedAt: '2026-04-13T19:33:32Z',
+    ...overrides,
+  }
+}
+
+function makeXaiDeviceCodeLogin(
+  overrides: Partial<XaiDeviceCodeLoginDto> = {},
+): XaiDeviceCodeLoginDto {
+  return {
+    providerId: 'xai',
+    flowId: 'xai-device-flow-1',
+    userCode: 'GROK-1234',
+    verificationUri: 'https://auth.x.ai/device',
+    verificationUriComplete: 'https://auth.x.ai/device?user_code=GROK-1234',
+    intervalSeconds: 5,
+    expiresAt: 1_779_984_000,
+    phase: 'awaiting_manual_input',
+    sessionId: null,
+    accountId: null,
     lastErrorCode: null,
     lastError: null,
     updatedAt: '2026-04-13T19:33:32Z',
@@ -341,6 +385,7 @@ function makeProviderModelCatalog(
     (providerId === 'openrouter' ? 'openai/gpt-4.1-mini' : 'openai_codex')
 
   return {
+    contractVersion: 1 as const,
     profileId,
     providerId,
     configuredModelId,
@@ -382,6 +427,7 @@ function makeProviderModelCatalog(
               },
             },
           ]),
+    contractDiagnostics: [],
   }
 }
 
@@ -547,6 +593,7 @@ function makeMcpRegistry(overrides: Partial<McpRegistryDto> = {}): McpRegistryDt
 
 function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegistryDto {
   return {
+    contractVersion: 1,
     projectId: 'project-1',
     reloadedAt: '2026-04-24T05:00:00Z',
     entries: [
@@ -600,6 +647,7 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
       updatedAt: '2026-04-24T05:00:00Z',
     },
     diagnostics: [],
+    contractDiagnostics: [],
     plugins: [],
     pluginCommands: [],
     ...overrides,
@@ -691,6 +739,7 @@ function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00Z',
       },
@@ -1000,6 +1049,36 @@ function createMockAdapter(options?: {
     throw new Error('archiveAgentDefinition not stubbed in test adapter')
   })
   const getAgentDefinitionVersion = vi.fn(async () => null)
+  const getAgentDefinitionVersionDiff = vi.fn(async () => {
+    throw new Error('getAgentDefinitionVersionDiff not stubbed in test adapter')
+  })
+  const saveAgentDefinition = vi.fn(async () => {
+    throw new Error('saveAgentDefinition not stubbed in test adapter')
+  })
+  const updateAgentDefinition = vi.fn(async () => {
+    throw new Error('updateAgentDefinition not stubbed in test adapter')
+  })
+  const previewAgentDefinition = vi.fn(async () => {
+    throw new Error('previewAgentDefinition not stubbed in test adapter')
+  })
+  const listWorkflowAgents = vi.fn(async () => ({ agents: [] }))
+  const getWorkflowAgentDetail = vi.fn(async () => {
+    throw new Error('getWorkflowAgentDetail not stubbed in test adapter')
+  })
+  const getAgentAuthoringCatalog = vi.fn(async () => ({
+    contractVersion: 1 as const,
+    tools: [],
+    toolCategories: [],
+    dbTables: [],
+    upstreamArtifacts: [],
+    attachableSkills: [],
+    policyControls: [],
+    templates: [],
+    creationFlows: [],
+    profileAvailability: [],
+    constraintExplanations: [],
+    diagnostics: [],
+  }))
   const updateAgentSession = vi.fn(async (request: {
     projectId: string
     agentSessionId: string
@@ -1398,37 +1477,6 @@ function createMockAdapter(options?: {
       })
     },
   )
-  const checkProviderProfile = vi.fn(async (profileId: string) => {
-    const currentProfile = currentProviderProfiles.value.profiles.find((profile) => profile.profileId === profileId)
-    if (!currentProfile) {
-      throw new XeroDesktopError({
-        code: 'provider_profile_not_found',
-        errorClass: 'user_fixable',
-        message: `Xero could not find provider profile \`${profileId}\`.`,
-      })
-    }
-
-    const modelCatalog =
-      currentProviderModelCatalogs.value[profileId] ??
-      makeProviderModelCatalog(profileId, {
-        providerId: currentProfile.providerId,
-        configuredModelId: currentProfile.modelId,
-      })
-    currentProviderModelCatalogs.value = {
-      ...currentProviderModelCatalogs.value,
-      [profileId]: modelCatalog,
-    }
-
-    return {
-      checkedAt: '2026-04-26T12:00:00Z',
-      profileId,
-      providerId: currentProfile.providerId,
-      validationChecks: [],
-      reachabilityChecks: [],
-      capabilityChecks: [],
-      modelCatalog,
-    }
-  })
   const getProviderProfiles = vi.fn(async () => currentProviderProfiles.value)
   const upsertRuntimeSettings = vi.fn(async (request: {
     providerId: RuntimeSettingsDto['providerId']
@@ -1661,6 +1709,7 @@ function createMockAdapter(options?: {
               thinkingEffort: request.controls.thinkingEffort ?? null,
               approvalMode: request.controls.approvalMode,
               planModeRequired: request.controls.planModeRequired,
+              autoCompactEnabled: true,
               revision: activeControls.revision + 1,
               queuedAt,
             queuedPrompt: request.prompt ?? null,
@@ -1865,6 +1914,41 @@ function createMockAdapter(options?: {
       type: 'folder' as const,
       children: [],
     },
+    view: {
+      rootPath: '/',
+      nodesByPath: {
+        '/': {
+          id: '/',
+          name: 'root',
+          path: '/',
+          type: 'folder' as const,
+          childrenLoaded: true,
+          truncated: false,
+          omittedEntryCount: 0,
+        },
+      },
+      childPathsByPath: {
+        '/': [],
+      },
+      loadedPaths: ['/'],
+      stats: {
+        byteSize: 1,
+        childListCount: 1,
+        nodeCount: 1,
+        unloadedFolderCount: 0,
+      },
+      truncated: false,
+      omittedEntryCount: 0,
+    },
+    truncated: false,
+    omittedEntryCount: 0,
+  }))
+  const listProjectFileIndex = vi.fn(async (request: { projectId: string }) => ({
+    projectId: request.projectId,
+    files: [],
+    totalFiles: 0,
+    truncated: false,
+    payloadBudget: null,
   }))
   const readProjectFile = vi.fn(async (projectId: string, path: string) => ({
     kind: 'text' as const,
@@ -1877,7 +1961,9 @@ function createMockAdapter(options?: {
     rendererKind: 'code' as const,
     text: '',
   }))
-  const writeProjectFile = vi.fn(async (projectId: string, path: string) => ({ projectId, path }))
+  const writeProjectFile = vi.fn(async (projectId: string, path: string, content = '') =>
+    writeFileResponse(projectId, path, content),
+  )
   const createProjectEntry = vi.fn(async (request) => ({
     projectId: request.projectId,
     path: request.parentPath === '/' ? `/${request.name}` : `${request.parentPath}/${request.name}`,
@@ -1985,9 +2071,48 @@ function createMockAdapter(options?: {
     getProjectUsageSummary,
     getRepositoryStatus,
     getRepositoryDiff,
+    applySelectiveUndo: vi.fn(async () => ({
+      operation: {
+        projectId: 'project-1',
+        operationId: 'code-undo-test',
+        mode: 'selective_undo' as const,
+        status: 'completed' as const,
+        target: {
+          targetKind: 'change_group' as const,
+          targetId: 'code-change-1',
+          hunkIds: [],
+        },
+        affectedPaths: ['client/src/file.ts'],
+        conflicts: [],
+        resultCommitId: 'code-commit-undo-test',
+        resultChangeGroupId: 'code-change-undo-test',
+        createdAt: '2026-05-06T12:00:00Z',
+        updatedAt: '2026-05-06T12:00:01Z',
+      },
+    })),
+    returnSessionToHere: vi.fn(async () => ({
+      operation: {
+        projectId: 'project-1',
+        operationId: 'return-session-test',
+        mode: 'session_rollback' as const,
+        status: 'completed' as const,
+        target: {
+          targetKind: 'run_boundary' as const,
+          targetId: 'run-1:boundary-1',
+          hunkIds: [],
+        },
+        affectedPaths: ['client/src/file.ts'],
+        conflicts: [],
+        resultCommitId: 'code-commit-return-session-test',
+        resultChangeGroupId: 'code-change-return-session-test',
+        createdAt: '2026-05-06T12:00:00Z',
+        updatedAt: '2026-05-06T12:00:01Z',
+      },
+    })),
     gitStagePaths: async () => undefined,
     gitUnstagePaths: async () => undefined,
     gitDiscardChanges: async () => undefined,
+    gitRevertPatch: async () => undefined,
     gitCommit: async () => ({ sha: 'abc1234', summary: 'mock commit', signature: { name: 'Mock', email: 'mock@example.com' } }),
     gitGenerateCommitMessage: async () => ({
       message: 'feat: mock generated commit',
@@ -1998,6 +2123,7 @@ function createMockAdapter(options?: {
     gitFetch: async () => ({ remote: 'origin', refspecs: [] }),
     gitPull: async () => ({ remote: 'origin', branch: 'main', updated: false, summary: 'already up to date', newHeadSha: null }),
     gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),
+    listProjectFileIndex,
     listProjectFiles,
     readProjectFile,
     writeProjectFile,
@@ -2012,10 +2138,53 @@ function createMockAdapter(options?: {
     workspaceQuery,
     workspaceExplain,
     workspaceReset,
+    listProjectContextRecords: async ({ projectId }: { projectId: string }) => ({
+      schema: 'xero.project_context_record_list_command.v1' as const,
+      projectId,
+      records: [],
+      uiDeferred: true as const,
+    }),
+    deleteProjectContextRecord: async ({
+      projectId,
+      recordId,
+    }: {
+      projectId: string
+      recordId: string
+    }) => ({
+      schema: 'xero.project_context_record_delete_command.v1' as const,
+      projectId,
+      recordId,
+      retrievalRemoved: true as const,
+      uiDeferred: true as const,
+    }),
+    supersedeProjectContextRecord: async ({
+      projectId,
+      supersededRecordId,
+      supersedingRecordId,
+    }: {
+      projectId: string
+      supersededRecordId: string
+      supersedingRecordId: string
+    }) => ({
+      schema: 'xero.project_context_record_supersede_command.v1' as const,
+      projectId,
+      supersededRecordId,
+      supersedingRecordId,
+      retrievalChanged: true as const,
+      uiDeferred: true as const,
+    }),
     createAgentSession,
     listAgentDefinitions,
     archiveAgentDefinition,
     getAgentDefinitionVersion,
+    getAgentDefinitionVersionDiff,
+    saveAgentDefinition,
+    updateAgentDefinition,
+    previewAgentDefinition,
+    setAgentDefaultModel: vi.fn(async () => ({ defaultModel: null })),
+    listWorkflowAgents,
+    getWorkflowAgentDetail,
+    getAgentAuthoringCatalog,
     listAgentSessions,
     getAgentSession,
     updateAgentSession,
@@ -2045,7 +2214,6 @@ function createMockAdapter(options?: {
     removePlugin,
     getProviderModelCatalog,
     preflightProviderProfile,
-    checkProviderProfile,
     runDoctorReport: vi.fn(async (request) =>
       createXeroDoctorReport({
         reportId: 'doctor-test',
@@ -2080,6 +2248,10 @@ function createMockAdapter(options?: {
     deleteProviderCredential: vi.fn(async () => ({ credentials: [] })),
     startOAuthLogin: vi.fn(async () => makeProviderAuthSession()),
     completeOAuthCallback: vi.fn(async () => makeProviderAuthSession()),
+    startXaiDeviceCodeLogin: vi.fn(async () => makeXaiDeviceCodeLogin()),
+    pollXaiDeviceCodeLogin: vi.fn(async (request) =>
+      makeXaiDeviceCodeLogin({ flowId: request.flowId }),
+    ),
     resolveOperatorAction,
     resumeOperatorRun,
     listNotificationRoutes,
@@ -2198,7 +2370,6 @@ function createMockAdapter(options?: {
     removePlugin,
     getProviderModelCatalog,
     preflightProviderProfile,
-    checkProviderProfile,
     getProviderProfiles,
     listProjectFiles,
     readProjectFile,
@@ -2904,6 +3075,80 @@ describe('useXeroDesktopState', () => {
     expect(setup.syncNotificationAdapters).not.toHaveBeenCalled()
   })
 
+  it('loads the last selected project from app UI state on startup', async () => {
+    const setup = createMockAdapter({
+      listProjects: {
+        projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')],
+      },
+    })
+    const readAppUiState = vi.fn(async (request: { key: string }) => ({
+      schema: 'xero.app_ui_state.v1' as const,
+      key: request.key,
+      value: 'project-2',
+      storageScope: 'os_app_data' as const,
+      uiDeferred: true,
+    }))
+    setup.adapter.readAppUiState = readAppUiState
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
+    expect(readAppUiState).toHaveBeenCalledWith({ key: 'project.lastSelectedProjectId.v1' })
+    expect(setup.getProjectSnapshot).toHaveBeenCalledWith('project-2')
+  })
+
+  it('falls back to the first project when the saved last selected project is stale', async () => {
+    const setup = createMockAdapter({
+      listProjects: {
+        projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')],
+      },
+    })
+    setup.adapter.readAppUiState = vi.fn(async (request: { key: string }) => ({
+      schema: 'xero.app_ui_state.v1' as const,
+      key: request.key,
+      value: 'project-missing',
+      storageScope: 'os_app_data' as const,
+      uiDeferred: true,
+    }))
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    expect(screen.getByTestId('active-project')).toHaveTextContent('Xero')
+    expect(setup.getProjectSnapshot).toHaveBeenCalledWith('project-1')
+  })
+
+  it('persists the selected project in app UI state', async () => {
+    const setup = createMockAdapter({
+      listProjects: {
+        projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')],
+      },
+    })
+    const writeAppUiState = vi.fn(async (request: { key: string; value?: unknown | null }) => ({
+      schema: 'xero.app_ui_state.v1' as const,
+      key: request.key,
+      value: request.value ?? null,
+      storageScope: 'os_app_data' as const,
+      uiDeferred: true,
+    }))
+    setup.adapter.writeAppUiState = writeAppUiState
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    await waitFor(() =>
+      expect(writeAppUiState).toHaveBeenCalledWith({
+        key: 'project.lastSelectedProjectId.v1',
+        value: 'project-2',
+      }),
+    )
+  })
+
   it('keeps agent projections stable across unrelated local rerenders', async () => {
     const setup = createMockAdapter()
 
@@ -3390,6 +3635,35 @@ describe('useXeroDesktopState', () => {
     expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
   })
 
+  it('shows the clicked project shell before its snapshot resolves', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')] },
+    })
+    const projectTwoSnapshot = createDeferred<ProjectSnapshotResponseDto>()
+
+    setup.getProjectSnapshot.mockImplementation(async (projectId: string) => {
+      if (projectId === 'project-2') {
+        return projectTwoSnapshot.promise
+      }
+
+      return makeSnapshot(projectId, 'Xero')
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
+
+    await act(async () => {
+      projectTwoSnapshot.resolve(makeSnapshot('project-2', 'orchestra'))
+      await projectTwoSnapshot.promise
+    })
+  })
+
   it('switches project selection after the snapshot without waiting for secondary hydration', async () => {
     const setup = createMockAdapter({
       listProjects: { projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')] },
@@ -3454,6 +3728,136 @@ describe('useXeroDesktopState', () => {
     })
 
     await waitFor(() => expect(screen.getByTestId('pending-project-selection-id')).toHaveTextContent('none'))
+  })
+
+  it('keeps project rail selection on the snapshot-first path when bundle loading exists', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')] },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+
+    const bundleDeferred = createDeferred<ProjectLoadBundleDto>()
+    const getProjectLoadBundle = vi.fn(async () => bundleDeferred.promise)
+    setup.adapter.getProjectLoadBundle = getProjectLoadBundle
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
+    await waitFor(() => expect(screen.getByTestId('project-loading')).toHaveTextContent('false'))
+    expect(getProjectLoadBundle).not.toHaveBeenCalled()
+  })
+
+  it('hydrates the selected session runtime run when a startup bundle omits it', async () => {
+    const fallbackSession = {
+      ...makeAgentSession('project-1'),
+      selected: false,
+      lastRunId: 'run-project-1',
+      lastRuntimeKind: 'openai_codex',
+      lastProviderId: 'openai_codex',
+    }
+    const snapshot = {
+      ...makeSnapshot('project-1', 'Xero'),
+      agentSessions: [fallbackSession],
+    }
+    const setup = createMockAdapter({
+      snapshots: {
+        'project-1': snapshot,
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1'),
+      },
+    })
+    const getProjectLoadBundle = vi.fn(async (): Promise<ProjectLoadBundleDto> => ({
+      projectId: 'project-1',
+      projectSnapshot: snapshot,
+      repositoryStatus: makeStatus('project-1', 'main'),
+      runtimeSession: makeRuntimeSession('project-1'),
+      runtimeRun: null,
+      autonomousRun: null,
+      notificationDispatches: [],
+      notificationRoutes: [],
+      diagnostics: [],
+    }))
+    setup.adapter.getProjectLoadBundle = getProjectLoadBundle
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+    const originalRequestIdleCallback = idleWindow.requestIdleCallback
+    const originalCancelIdleCallback = idleWindow.cancelIdleCallback
+    Object.defineProperty(idleWindow, 'requestIdleCallback', {
+      configurable: true,
+      value: vi.fn(() => 1),
+    })
+    Object.defineProperty(idleWindow, 'cancelIdleCallback', {
+      configurable: true,
+      value: vi.fn(),
+    })
+
+    try {
+      render(<Harness adapter={setup.adapter} />)
+
+      await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+      expect(getProjectLoadBundle).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        includeNotificationRoutes: true,
+      })
+      expect(setup.getRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main')
+      await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1'))
+      await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1))
+    } finally {
+      Object.defineProperty(idleWindow, 'requestIdleCallback', {
+        configurable: true,
+        value: originalRequestIdleCallback,
+      })
+      Object.defineProperty(idleWindow, 'cancelIdleCallback', {
+        configurable: true,
+        value: originalCancelIdleCallback,
+      })
+    }
+  })
+
+  it('shows a lightweight project preview before hydrating a cached project selection', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Xero'), makeProjectSummary('project-2', 'orchestra')] },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    await waitFor(() => expect(screen.getByTestId('selected-agent-session-id')).toHaveTextContent('agent-session-main'))
+
+    const projectTwoSnapshot = createDeferred<ProjectSnapshotResponseDto>()
+    setup.getProjectSnapshot.mockImplementation(async (projectId: string) => {
+      if (projectId === 'project-2') {
+        return projectTwoSnapshot.promise
+      }
+
+      return makeSnapshot(projectId, 'Xero')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    await waitFor(() => expect(screen.getByTestId('selected-agent-session-id')).toHaveTextContent('agent-session-main'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 1' }))
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    await waitFor(() => expect(screen.getByTestId('selected-agent-session-id')).toHaveTextContent('agent-session-main'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+
+    expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2')
+    expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
+    expect(screen.getByTestId('workflow-active-phase')).toHaveTextContent('none')
+    expect(screen.getByTestId('status-count')).toHaveTextContent('0')
+
+    projectTwoSnapshot.resolve(makeSnapshot('project-2', 'orchestra'))
+
+    await waitFor(() => expect(screen.getByTestId('selected-agent-session-id')).toHaveTextContent('agent-session-main'))
   })
 
   it('switches agent sessions optimistically without reloading the full project', async () => {
@@ -3684,6 +4088,70 @@ describe('useXeroDesktopState', () => {
     expect(setup.createAgentSession).not.toHaveBeenCalled()
   })
 
+  it('deletes a blank new session instead of archiving when archive is requested', async () => {
+    const blankSession = {
+      ...makeAgentSession('project-1'),
+      title: 'New Chat',
+      summary: '',
+      lastRunId: null,
+      lastRuntimeKind: null,
+      lastProviderId: null,
+    }
+    const replacementSession = {
+      ...makeAgentSession('project-1'),
+      agentSessionId: 'agent-session-replacement',
+      title: 'New Chat',
+      summary: '',
+      selected: true,
+      createdAt: '2026-04-15T18:02:00Z',
+      updatedAt: '2026-04-15T18:02:00Z',
+    }
+    const setup = createMockAdapter({
+      snapshots: {
+        'project-1': {
+          ...makeSnapshot('project-1', 'Xero'),
+          agentSessions: [blankSession],
+        },
+      },
+    })
+    let deletedBlankSession = false
+    const deleteAgentSession = vi.fn(async () => {
+      deletedBlankSession = true
+      return undefined
+    })
+    const archiveAgentSession = vi.fn(setup.adapter.archiveAgentSession)
+    const listAgentSessions = vi.fn(async () => ({
+      sessions: deletedBlankSession ? [replacementSession] : [blankSession],
+    }))
+    setup.adapter.deleteAgentSession = deleteAgentSession as XeroDesktopAdapter['deleteAgentSession']
+    setup.adapter.archiveAgentSession = archiveAgentSession as XeroDesktopAdapter['archiveAgentSession']
+    setup.adapter.listAgentSessions = listAgentSessions as XeroDesktopAdapter['listAgentSessions']
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('selected-agent-session-id')).toHaveTextContent('agent-session-main'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive selected session' }))
+
+    await waitFor(() =>
+      expect(deleteAgentSession).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+      }),
+    )
+    expect(archiveAgentSession).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(listAgentSessions).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        includeArchived: false,
+      }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-agent-session-id')).toHaveTextContent('agent-session-replacement'),
+    )
+    expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-replacement')
+  })
+
   it('refreshes the backend-created replacement session after deleting the last session without project loading', async () => {
     const archivedSession = {
       ...makeAgentSession('project-1'),
@@ -3788,6 +4256,57 @@ describe('useXeroDesktopState', () => {
     expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,agent-session-2')
     expect(screen.getByTestId('workspace-pane-runtime-agent-ids')).toHaveTextContent('ask,engineer')
     expect(screen.getByTestId('workspace-splitter-ratios')).toHaveTextContent('2,1,1')
+  })
+
+  it('persists agent workspace panes through project UI state when available', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Xero')] },
+    })
+    const readProjectUiState = vi.fn(async () => ({
+      schema: 'xero.project_ui_state.v1' as const,
+      projectId: 'project-1',
+      key: 'agent-workspace.layout.v1',
+      value: null,
+      storageScope: 'os_app_data' as const,
+      uiDeferred: true,
+    }))
+    const writeProjectUiState = vi.fn(
+      async (request: { projectId: string; key: string; value?: unknown | null }) => ({
+        schema: 'xero.project_ui_state.v1' as const,
+        projectId: request.projectId,
+        key: request.key,
+        value: request.value ?? null,
+        storageScope: 'os_app_data' as const,
+        uiDeferred: true,
+      }),
+    )
+    setup.adapter.readProjectUiState = readProjectUiState
+    setup.adapter.writeProjectUiState = writeProjectUiState
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(readProjectUiState).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        key: 'agent-workspace.layout.v1',
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Spawn pane' }))
+
+    await waitFor(() => expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('2'))
+    await waitFor(() =>
+      expect(
+        writeProjectUiState.mock.calls.some(([request]) => {
+          if (request.projectId !== 'project-1' || request.key !== 'agent-workspace.layout.v1') {
+            return false
+          }
+          return JSON.stringify(request.value).includes('agent-session-2')
+        }),
+      ).toBe(true),
+    )
+    expect(window.localStorage.getItem('agentWorkspaceLayout')).toBeNull()
   })
 
   it('renders a spawned pane before the fresh session create call resolves', async () => {
@@ -4308,6 +4827,16 @@ describe('useXeroDesktopState', () => {
 
     expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
     expect(screen.getByTestId('stream-item-count')).toHaveTextContent('0')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 1' }))
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(3))
+    expect(screen.getByTestId('stream-item-count')).toHaveTextContent('0')
+    expect((setup.subscribeRuntimeStream.mock.calls[2] as unknown[])[5]).toEqual({
+      afterSequence: null,
+      replayLimit: null,
+    })
   })
 
   it('surfaces subscribe failures and malformed stream payloads without clearing the selected project', async () => {

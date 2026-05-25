@@ -1,18 +1,14 @@
 import Link from "next/link"
 import { Github } from "lucide-react"
-import { DiscordIcon, XBrandIcon } from "@/components/landing/brand-icons"
+import { siteConfig } from "@/lib/site"
 
 const links = [
-  { label: "Docs", href: "/docs" },
-  { label: "Changelog", href: "/changelog" },
   { label: "Privacy", href: "/privacy" },
   { label: "Terms", href: "/terms" },
 ]
 
 const social = [
-  { icon: Github, label: "GitHub", href: "#" },
-  { icon: XBrandIcon, label: "X", href: "#" },
-  { icon: DiscordIcon, label: "Discord", href: "#" },
+  { icon: Github, label: "GitHub", href: siteConfig.githubUrl },
 ]
 
 export function SiteFooter() {
@@ -53,6 +49,8 @@ export function SiteFooter() {
               <Link
                 key={label}
                 href={href}
+                target="_blank"
+                rel="noopener noreferrer"
                 aria-label={label}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-secondary/40 hover:text-foreground"
               >

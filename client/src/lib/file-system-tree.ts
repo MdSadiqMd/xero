@@ -1,4 +1,4 @@
-import type { ListProjectFilesResponseDto, ProjectFileNodeDto } from '@/src/lib/xero-model/project'
+import type { ListProjectFilesResponseDto, ProjectFileTreeNodeDto } from '@/src/lib/xero-model/project'
 import { estimateUtf16Bytes } from '@/lib/byte-budget-cache'
 
 export interface FileSystemNode {
@@ -18,7 +18,7 @@ export interface ProjectFileTreeBudgetInfo {
 }
 
 export interface ProjectFileTreeStore {
-  nodesByPath: Record<string, Omit<FileSystemNode, 'children'>>
+  nodesByPath: Record<string, ProjectFileTreeNodeDto>
   childPathsByPath: Record<string, string[]>
 }
 
@@ -28,14 +28,6 @@ export interface ProjectFileTreeStoreStats {
   nodeCount: number
   unloadedFolderCount: number
 }
-
-export interface TrimProjectFileTreeStoreResult {
-  prunedFolderCount: number
-  stats: ProjectFileTreeStoreStats
-  store: ProjectFileTreeStore
-}
-
-export const DEFAULT_PROJECT_FILE_TREE_STORE_MAX_BYTES = 4 * 1024 * 1024
 
 export function createEmptyFileSystem(): FileSystemNode {
   return {
@@ -73,22 +65,8 @@ export function mapProjectFileTree(response: ListProjectFilesResponseDto): FileS
 
 export function getProjectFileTreeBudgetInfo(response: ListProjectFilesResponseDto): ProjectFileTreeBudgetInfo {
   return {
-    omittedEntryCount: response.omittedEntryCount ?? 0,
-    truncated: response.truncated ?? false,
-  }
-}
-
-export function mapProjectFileNode(node: ProjectFileNodeDto): FileSystemNode {
-  const children = node.children?.map(mapProjectFileNode)
-  return {
-    id: node.path,
-    name: node.name,
-    type: node.type,
-    path: node.path,
-    children,
-    childrenLoaded: node.type === 'file' ? true : node.childrenLoaded ?? Boolean(children),
-    truncated: node.truncated ?? false,
-    omittedEntryCount: node.omittedEntryCount ?? 0,
+    omittedEntryCount: response.view.omittedEntryCount,
+    truncated: response.view.truncated,
   }
 }
 
@@ -96,16 +74,49 @@ export function applyProjectFileListing(
   current: ProjectFileTreeStore,
   response: ListProjectFilesResponseDto,
 ): ProjectFileTreeStore {
-  const listingRoot = mapProjectFileNode(response.root)
+  const listingRootPath = response.view.rootPath
   const next: ProjectFileTreeStore = {
     nodesByPath: { ...current.nodesByPath },
     childPathsByPath: { ...current.childPathsByPath },
   }
 
-  pruneExistingChildren(next, listingRoot.path)
-  ingestNode(next, listingRoot)
+  const nextRootChildren = new Set(response.view.childPathsByPath[listingRootPath] ?? [])
+  for (const childPath of next.childPathsByPath[listingRootPath] ?? []) {
+    if (!nextRootChildren.has(childPath)) {
+      removeNode(next, childPath)
+    }
+  }
 
-  return next
+  for (const node of Object.values(response.view.nodesByPath)) {
+    const existing = current.nodesByPath[node.path]
+    if (existing?.type === 'folder' && node.type === 'file') {
+      removeNode(next, node.path)
+    }
+
+    if (shouldPreserveHydratedFolder(existing, node)) {
+      next.nodesByPath[node.path] = {
+        ...node,
+        childrenLoaded: existing.childrenLoaded,
+        truncated: existing.truncated,
+        omittedEntryCount: existing.omittedEntryCount,
+      }
+      continue
+    }
+
+    next.nodesByPath[node.path] = node
+    if (node.type === 'file') {
+      delete next.childPathsByPath[node.path]
+    }
+  }
+  for (const [path, childPaths] of Object.entries(response.view.childPathsByPath)) {
+    const node = response.view.nodesByPath[path]
+    if (shouldPreserveHydratedFolder(current.nodesByPath[path], node)) {
+      continue
+    }
+    next.childPathsByPath[path] = [...childPaths]
+  }
+
+  return projectFileTreeStoresEqual(current, next) ? current : next
 }
 
 export function materializeProjectFileTree(store: ProjectFileTreeStore): FileSystemNode {
@@ -148,93 +159,6 @@ export function getProjectFileTreeStoreStats(store: ProjectFileTreeStore): Proje
   }
 }
 
-export function trimProjectFileTreeStoreToBudget(
-  store: ProjectFileTreeStore,
-  options: {
-    maxBytes?: number
-    protectedPaths?: Iterable<string | null | undefined>
-  } = {},
-): TrimProjectFileTreeStoreResult {
-  const maxBytes = options.maxBytes ?? DEFAULT_PROJECT_FILE_TREE_STORE_MAX_BYTES
-  let stats = getProjectFileTreeStoreStats(store)
-  if (stats.byteSize <= maxBytes) {
-    return { prunedFolderCount: 0, stats, store }
-  }
-
-  const protectedPaths = collectProtectedFileTreePaths(store, options.protectedPaths ?? [])
-  const candidates = Object.keys(store.childPathsByPath)
-    .filter((path) => path !== '/' && !protectedPaths.has(path) && (store.childPathsByPath[path]?.length ?? 0) > 0)
-    .sort((left, right) => countDescendants(store, right) - countDescendants(store, left))
-
-  let next: ProjectFileTreeStore | null = null
-  let prunedFolderCount = 0
-  for (const path of candidates) {
-    if (stats.byteSize <= maxBytes) {
-      break
-    }
-
-    const working: ProjectFileTreeStore = next ?? {
-      nodesByPath: { ...store.nodesByPath },
-      childPathsByPath: { ...store.childPathsByPath },
-    }
-    const node = working.nodesByPath[path]
-    if (!node || node.type !== 'folder') {
-      next = working
-      continue
-    }
-
-    pruneExistingChildren(working, path)
-    working.nodesByPath[path] = {
-      ...node,
-      childrenLoaded: false,
-    }
-    next = working
-    prunedFolderCount += 1
-    stats = getProjectFileTreeStoreStats(working)
-  }
-
-  return {
-    prunedFolderCount,
-    stats,
-    store: next ?? store,
-  }
-}
-
-function collectProtectedFileTreePaths(
-  store: ProjectFileTreeStore,
-  paths: Iterable<string | null | undefined>,
-): Set<string> {
-  const protectedPaths = new Set<string>(['/'])
-  for (const rawPath of paths) {
-    if (!rawPath) continue
-    const nodePath = rawPath.trim() || '/'
-    if (!store.nodesByPath[nodePath]) continue
-    let current = nodePath
-    while (current.length > 0) {
-      protectedPaths.add(current)
-      if (current === '/') break
-      const separatorIndex = current.lastIndexOf('/')
-      current = separatorIndex <= 0 ? '/' : current.slice(0, separatorIndex)
-    }
-  }
-  return protectedPaths
-}
-
-function countDescendants(store: ProjectFileTreeStore, path: string): number {
-  let count = 0
-  for (const childPath of store.childPathsByPath[path] ?? []) {
-    count += 1 + countDescendants(store, childPath)
-  }
-  return count
-}
-
-function pruneExistingChildren(store: ProjectFileTreeStore, path: string): void {
-  for (const childPath of store.childPathsByPath[path] ?? []) {
-    removeNode(store, childPath)
-  }
-  store.childPathsByPath[path] = []
-}
-
 function removeNode(store: ProjectFileTreeStore, path: string): void {
   for (const childPath of store.childPathsByPath[path] ?? []) {
     removeNode(store, childPath)
@@ -243,18 +167,75 @@ function removeNode(store: ProjectFileTreeStore, path: string): void {
   delete store.childPathsByPath[path]
 }
 
-function ingestNode(store: ProjectFileTreeStore, node: FileSystemNode): void {
-  const { children, ...nodeWithoutChildren } = node
-  store.nodesByPath[node.path] = nodeWithoutChildren
-  if (node.type === 'folder') {
-    const childPaths = children?.map((child) => child.path) ?? []
-    store.childPathsByPath[node.path] = childPaths
-    for (const child of children ?? []) {
-      ingestNode(store, child)
-    }
-  } else {
-    delete store.childPathsByPath[node.path]
+function shouldPreserveHydratedFolder(
+  existing: ProjectFileTreeNodeDto | undefined,
+  incoming: ProjectFileTreeNodeDto | undefined,
+): existing is ProjectFileTreeNodeDto {
+  return Boolean(
+    existing?.type === 'folder' &&
+      existing.childrenLoaded &&
+      incoming?.type === 'folder' &&
+      !incoming.childrenLoaded,
+  )
+}
+
+function projectFileTreeStoresEqual(left: ProjectFileTreeStore, right: ProjectFileTreeStore): boolean {
+  if (!projectFileTreeNodesEqual(left.nodesByPath, right.nodesByPath)) {
+    return false
   }
+  return childPathListsEqual(left.childPathsByPath, right.childPathsByPath)
+}
+
+function projectFileTreeNodesEqual(
+  left: ProjectFileTreeStore['nodesByPath'],
+  right: ProjectFileTreeStore['nodesByPath'],
+): boolean {
+  const leftEntries = Object.entries(left)
+  if (leftEntries.length !== Object.keys(right).length) {
+    return false
+  }
+
+  for (const [path, leftNode] of leftEntries) {
+    const rightNode = right[path]
+    if (
+      !rightNode ||
+      leftNode.id !== rightNode.id ||
+      leftNode.name !== rightNode.name ||
+      leftNode.path !== rightNode.path ||
+      leftNode.type !== rightNode.type ||
+      leftNode.childrenLoaded !== rightNode.childrenLoaded ||
+      leftNode.truncated !== rightNode.truncated ||
+      leftNode.omittedEntryCount !== rightNode.omittedEntryCount
+    ) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function childPathListsEqual(
+  left: ProjectFileTreeStore['childPathsByPath'],
+  right: ProjectFileTreeStore['childPathsByPath'],
+): boolean {
+  const leftEntries = Object.entries(left)
+  if (leftEntries.length !== Object.keys(right).length) {
+    return false
+  }
+
+  for (const [path, leftPaths] of leftEntries) {
+    const rightPaths = right[path]
+    if (!rightPaths || leftPaths.length !== rightPaths.length) {
+      return false
+    }
+    for (let index = 0; index < leftPaths.length; index += 1) {
+      if (leftPaths[index] !== rightPaths[index]) {
+        return false
+      }
+    }
+  }
+
+  return true
 }
 
 function materializeNode(store: ProjectFileTreeStore, path: string): FileSystemNode | null {

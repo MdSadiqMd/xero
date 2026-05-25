@@ -155,6 +155,12 @@ pub struct ProviderSelection {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunControls {
     pub runtime_agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_definition_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_definition_version: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<String>,
     pub approval_mode: String,
     pub plan_mode_required: bool,
 }
@@ -287,6 +293,7 @@ pub enum RuntimeEventKind {
     RunPaused,
     RunCompleted,
     RunFailed,
+    SubagentLifecycle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -307,6 +314,18 @@ pub struct RuntimeMessage {
 pub struct RuntimeMessageProviderMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_message_id: Option<String>,
+    #[serde(
+        default,
+        alias = "reasoning_content",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_content: Option<String>,
+    #[serde(
+        default,
+        alias = "reasoning_details",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_details: Option<JsonValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assistant_tool_calls: Vec<RuntimeProviderToolCallMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -320,6 +339,23 @@ impl RuntimeMessageProviderMetadata {
     ) -> Self {
         Self {
             provider_message_id: Some(provider_message_id.into()),
+            reasoning_content: None,
+            reasoning_details: None,
+            assistant_tool_calls: tool_calls,
+            tool_result: None,
+        }
+    }
+
+    pub fn assistant_turn(
+        provider_message_id: impl Into<String>,
+        reasoning_content: Option<String>,
+        reasoning_details: Option<JsonValue>,
+        tool_calls: Vec<RuntimeProviderToolCallMetadata>,
+    ) -> Self {
+        Self {
+            provider_message_id: Some(provider_message_id.into()),
+            reasoning_content,
+            reasoning_details,
             assistant_tool_calls: tool_calls,
             tool_result: None,
         }
@@ -333,6 +369,8 @@ impl RuntimeMessageProviderMetadata {
     ) -> Self {
         Self {
             provider_message_id: Some(provider_message_id.into()),
+            reasoning_content: None,
+            reasoning_details: None,
             assistant_tool_calls: Vec::new(),
             tool_result: Some(RuntimeProviderToolResultMetadata {
                 tool_call_id: tool_call_id.into(),
@@ -392,6 +430,10 @@ pub struct ContextManifest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunSnapshot {
     pub trace_id: String,
+    pub runtime_agent_id: String,
+    pub agent_definition_id: String,
+    pub agent_definition_version: i64,
+    pub system_prompt: String,
     pub project_id: String,
     pub agent_session_id: String,
     pub run_id: String,
@@ -416,6 +458,10 @@ pub struct RuntimeTrace {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRunRecord {
     pub trace_id: Option<String>,
+    pub runtime_agent_id: String,
+    pub agent_definition_id: String,
+    pub agent_definition_version: i64,
+    pub system_prompt: String,
     pub project_id: String,
     pub agent_session_id: String,
     pub run_id: String,
@@ -472,6 +518,14 @@ struct InMemoryAgentCoreState {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredRun {
     trace_id: String,
+    #[serde(default = "default_runtime_agent_id")]
+    runtime_agent_id: String,
+    #[serde(default = "default_agent_definition_id")]
+    agent_definition_id: String,
+    #[serde(default = "default_agent_definition_version")]
+    agent_definition_version: i64,
+    #[serde(default = "default_system_prompt")]
+    system_prompt: String,
     project_id: String,
     agent_session_id: String,
     run_id: String,
@@ -482,6 +536,22 @@ struct StoredRun {
     messages: Vec<RuntimeMessage>,
     events: Vec<RuntimeEvent>,
     context_manifests: Vec<ContextManifest>,
+}
+
+fn default_runtime_agent_id() -> String {
+    "engineer".into()
+}
+
+fn default_agent_definition_id() -> String {
+    "engineer".into()
+}
+
+fn default_agent_definition_version() -> i64 {
+    1
+}
+
+fn default_system_prompt() -> String {
+    "Xero CLI production runtime.".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -512,6 +582,9 @@ impl AgentCoreStore for InMemoryAgentCoreStore {
         validate_required(&run.prompt, "prompt")?;
         validate_required(&run.provider_id, "providerId")?;
         validate_required(&run.model_id, "modelId")?;
+        validate_required(&run.runtime_agent_id, "runtimeAgentId")?;
+        validate_required(&run.agent_definition_id, "agentDefinitionId")?;
+        validate_required(&run.system_prompt, "systemPrompt")?;
 
         let mut state = self.lock_state()?;
         let key = (run.project_id.clone(), run.run_id.clone());
@@ -530,6 +603,10 @@ impl AgentCoreStore for InMemoryAgentCoreStore {
                 trace_id: run
                     .trace_id
                     .unwrap_or_else(|| runtime_trace_id_for_run(&run.project_id, &run.run_id)),
+                runtime_agent_id: run.runtime_agent_id,
+                agent_definition_id: run.agent_definition_id,
+                agent_definition_version: run.agent_definition_version,
+                system_prompt: run.system_prompt,
                 project_id: run.project_id,
                 agent_session_id: run.agent_session_id,
                 run_id: run.run_id,
@@ -720,6 +797,10 @@ impl StoredRun {
     fn snapshot(&self) -> RunSnapshot {
         RunSnapshot {
             trace_id: self.trace_id.clone(),
+            runtime_agent_id: self.runtime_agent_id.clone(),
+            agent_definition_id: self.agent_definition_id.clone(),
+            agent_definition_version: self.agent_definition_version,
+            system_prompt: self.system_prompt.clone(),
             project_id: self.project_id.clone(),
             agent_session_id: self.agent_session_id.clone(),
             run_id: self.run_id.clone(),
@@ -961,6 +1042,9 @@ impl AgentCoreStore for FileAgentCoreStore {
         validate_required(&run.prompt, "prompt")?;
         validate_required(&run.provider_id, "providerId")?;
         validate_required(&run.model_id, "modelId")?;
+        validate_required(&run.runtime_agent_id, "runtimeAgentId")?;
+        validate_required(&run.agent_definition_id, "agentDefinitionId")?;
+        validate_required(&run.system_prompt, "systemPrompt")?;
 
         let mut state = self.lock_state()?;
         let key = (run.project_id.clone(), run.run_id.clone());
@@ -979,6 +1063,10 @@ impl AgentCoreStore for FileAgentCoreStore {
                 trace_id: run
                     .trace_id
                     .unwrap_or_else(|| runtime_trace_id_for_run(&run.project_id, &run.run_id)),
+                runtime_agent_id: run.runtime_agent_id,
+                agent_definition_id: run.agent_definition_id,
+                agent_definition_version: run.agent_definition_version,
+                system_prompt: run.system_prompt,
                 project_id: run.project_id,
                 agent_session_id: run.agent_session_id,
                 run_id: run.run_id,
@@ -1382,8 +1470,33 @@ where
         );
         validate_production_runtime_contract(&runtime_contract)?;
         let provider_preflight = fake_provider_preflight_snapshot();
+        let runtime_agent_id = request
+            .controls
+            .as_ref()
+            .map(|controls| controls.runtime_agent_id.trim())
+            .filter(|id| !id.is_empty())
+            .unwrap_or("engineer")
+            .to_owned();
+        let agent_definition_id = request
+            .controls
+            .as_ref()
+            .and_then(|controls| controls.agent_definition_id.as_deref())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(runtime_agent_id.as_str())
+            .to_owned();
+        let agent_definition_version = request
+            .controls
+            .as_ref()
+            .and_then(|controls| controls.agent_definition_version)
+            .filter(|version| *version > 0)
+            .unwrap_or(1);
         let snapshot = self.store.insert_run(NewRunRecord {
             trace_id: None,
+            runtime_agent_id,
+            agent_definition_id,
+            agent_definition_version,
+            system_prompt: "Reusable Xero fake-provider system prompt.".into(),
             project_id: request.project_id,
             agent_session_id: request.agent_session_id,
             run_id: request.run_id,
@@ -1714,6 +1827,9 @@ mod tests {
                 },
                 controls: Some(RunControls {
                     runtime_agent_id: "engineer".into(),
+                    agent_definition_id: Some("engineer".into()),
+                    agent_definition_version: Some(1),
+                    thinking_effort: None,
                     approval_mode: "yolo".into(),
                     plan_mode_required: false,
                 }),

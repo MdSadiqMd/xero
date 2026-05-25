@@ -1,8 +1,8 @@
 //! Emulator sidebar backend — iOS Simulator and Android Emulator bring-up.
 //!
-//! Phase 2 scaffolded the frame pipeline (FrameBus + `emulator://` URI
-//! scheme) and a synthetic frame driver. Phase 3 wires in the real Android
-//! pipeline (emulator process + scrcpy). Phase 4 adds the iOS pipeline.
+//! Phase 2 scaffolded the frame pipeline (FrameBus + webview delivery) and a
+//! synthetic frame driver. Phase 3 wires in the real Android pipeline
+//! (emulator process + scrcpy). Phase 4 adds the iOS pipeline.
 
 pub mod android;
 pub mod automation;
@@ -47,8 +47,10 @@ use automation::metro_inspector::{
     ElementInfo, MetroInspector, MetroStatus, METRO_PORT_RANGE,
 };
 
-/// Process-wide emulator state. Holds the FrameBus (shared with the URI
-/// scheme handler) and the single active device session, if any.
+const EMULATOR_FRAME_TRANSPORT_URL: &str = "ipc://emulator_frame";
+
+/// Process-wide emulator state. Holds the FrameBus (shared with the viewport
+/// frame IPC command) and the single active device session, if any.
 pub struct EmulatorState {
     frame_bus: Arc<FrameBus>,
     active: Mutex<Option<ActiveDevice>>,
@@ -159,6 +161,15 @@ pub struct EmulatorStartResponse {
     pub height: u32,
     pub device_pixel_ratio: f32,
     pub frame_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmulatorFrameResponse {
+    pub seq: u64,
+    pub width: u32,
+    pub height: u32,
+    pub jpeg_base64: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -472,7 +483,7 @@ fn start_android<R: Runtime>(
         width,
         height,
         device_pixel_ratio: 2.0,
-        frame_url: "emulator://localhost/frame".to_string(),
+        frame_url: EMULATOR_FRAME_TRANSPORT_URL.to_string(),
     })
 }
 
@@ -503,7 +514,7 @@ fn start_ios<R: Runtime>(
         width,
         height,
         device_pixel_ratio: 3.0,
-        frame_url: "emulator://localhost/frame".to_string(),
+        frame_url: EMULATOR_FRAME_TRANSPORT_URL.to_string(),
     })
 }
 
@@ -553,7 +564,7 @@ fn start_synthetic<R: Runtime>(
         width: synthetic::synthetic_width(),
         height: synthetic::synthetic_height(),
         device_pixel_ratio: 2.0,
-        frame_url: "emulator://localhost/frame".to_string(),
+        frame_url: EMULATOR_FRAME_TRANSPORT_URL.to_string(),
     })
 }
 
@@ -828,6 +839,23 @@ pub fn emulator_screenshot(state: State<'_, EmulatorState>) -> CommandResult<Scr
 }
 
 #[tauri::command]
+pub fn emulator_frame(state: State<'_, EmulatorState>) -> CommandResult<EmulatorFrameResponse> {
+    let frame = state.frame_bus().latest().ok_or_else(|| {
+        CommandError::user_fixable(
+            "emulator_no_frame",
+            "No frame has been captured yet. Wait for the stream to start.",
+        )
+    })?;
+
+    Ok(EmulatorFrameResponse {
+        seq: frame.seq,
+        width: frame.width,
+        height: frame.height,
+        jpeg_base64: base64::engine::general_purpose::STANDARD.encode(frame.bytes.as_ref()),
+    })
+}
+
+#[tauri::command]
 pub fn emulator_ui_dump(state: State<'_, EmulatorState>) -> CommandResult<UiTree> {
     let active = state.active.lock().expect("emulator active mutex poisoned");
     match active.as_ref() {
@@ -973,7 +1001,7 @@ pub fn emulator_type(state: State<'_, EmulatorState>, request: TypeRequest) -> C
                 return Err(CommandError::user_fixable(
                     "emulator_selector_no_match",
                     "Selector for `into` matched no elements.",
-                ))
+                ));
             }
             1 => {
                 let (cx, cy) = hits[0].bounds.center();
@@ -983,7 +1011,7 @@ pub fn emulator_type(state: State<'_, EmulatorState>, request: TypeRequest) -> C
                 return Err(CommandError::user_fixable(
                     "emulator_selector_ambiguous",
                     format!("Selector for `into` matched {n} elements."),
-                ))
+                ));
             }
         }
     }
@@ -1175,7 +1203,7 @@ pub fn emulator_set_location(
 #[tauri::command]
 pub fn emulator_push_notification(
     state: State<'_, EmulatorState>,
-    request: PushNotificationRequest,
+    _request: PushNotificationRequest,
 ) -> CommandResult<()> {
     let active = state.active.lock().expect("emulator active mutex poisoned");
     match active.as_ref() {
@@ -1184,15 +1212,14 @@ pub fn emulator_push_notification(
             "Android AVDs have no APNS equivalent; push notifications are iOS-only.",
         )),
         #[cfg(target_os = "macos")]
-        Some(ActiveDevice::Ios { session, .. }) => {
-            ios::xcrun::push_notification(session.device_id(), &request.bundle_id, &request.payload)
-                .map_err(|e| {
-                    CommandError::system_fault(
-                        "ios_push_failed",
-                        format!("simctl push failed: {e}"),
-                    )
-                })
-        }
+        Some(ActiveDevice::Ios { session, .. }) => ios::xcrun::push_notification(
+            session.device_id(),
+            &_request.bundle_id,
+            &_request.payload,
+        )
+        .map_err(|e| {
+            CommandError::system_fault("ios_push_failed", format!("simctl push failed: {e}"))
+        }),
         #[cfg(feature = "emulator-synthetic")]
         Some(ActiveDevice::Synthetic { .. }) => Ok(()),
         None => Err(no_active_device()),

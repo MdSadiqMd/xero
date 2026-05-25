@@ -7,29 +7,34 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   Bot,
-  ChevronDown,
   GitCompareArrows,
-  Github,
   Globe,
   Maximize2,
   Minus,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Settings,
+  Monitor,
+  Play,
+  Square,
+  TerminalSquare,
   Workflow as WorkflowIcon,
-  Wrench,
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { createSafeTauriUnlisten } from "@/src/lib/tauri-events"
+import { useProjectSelectionPreview } from "@/src/features/xero/project-selection-preview"
 import { AppleLogoIcon, SolanaLogoIcon } from "./brand-icons"
-import { AppLogo } from "./app-logo"
+import { AppLogo } from "@xero/ui/components/app-logo"
 import type { View } from "./data"
+import { ProjectContextMenu } from "./project-context-menu"
 import { StatusFooter, type StatusFooterProps } from "./status-footer"
 
 // ---------------------------------------------------------------------------
@@ -39,11 +44,12 @@ import { StatusFooter, type StatusFooterProps } from "./status-footer"
 export type PlatformVariant = "macos" | "windows" | "linux"
 
 export type SurfacePreloadTarget =
+  | "agent-dock"
   | "browser"
   | "ios"
   | "settings"
   | "solana"
-  | "tools"
+  | "terminal"
   | "usage"
   | "vcs"
   | "workflows"
@@ -94,17 +100,8 @@ interface XeroShellProps {
   onViewPreload?: (view: View) => void
   onSurfacePreload?: (target: SurfacePreloadTarget) => void
   children: React.ReactNode
+  projectId?: string | null
   projectName?: string
-  onOpenSettings?: () => void
-  /** Open the settings dialog focused on the Account section (used when a session exists). */
-  onOpenAccount?: () => void
-  /** Kick off the GitHub OAuth flow directly (used when no session exists). */
-  onAccountLogin?: () => void
-  /** Truthy when a GitHub login is in flight — surfaces a subtle loading state on the avatar button. */
-  accountAuthenticating?: boolean
-  /** When provided, the account button shows the GitHub avatar + signed-in state. */
-  accountAvatarUrl?: string | null
-  accountLogin?: string | null
   onToggleBrowser?: () => void
   browserOpen?: boolean
   onToggleIos?: () => void
@@ -119,14 +116,29 @@ interface XeroShellProps {
   agentDockOpen?: boolean
   /** Disabled state for the agent dock toggle (e.g., when on the agent view). */
   agentDockDisabled?: boolean
+  onToggleComputerUse?: () => void
+  computerUseOpen?: boolean
+  computerUseRunning?: boolean
+  onToggleTerminal?: () => void
+  terminalOpen?: boolean
+  /** Project run state — drives the Play/Stop button visuals. */
+  projectRunning?: boolean
+  /** Targets the active project can run from the Play button. */
+  projectStartTargets?: { id: string; name: string }[]
+  /** Open the configure-start-targets dialog. */
+  onEditProjectStartTargets?: () => void
+  /** Run a specific target by id. */
+  onRunTarget?: (targetId: string) => void
+  /** Run every configured target as separate terminal tabs. */
+  onRunAllTargets?: () => void
+  /** Stop the active project run. */
+  onStopProject?: () => void
   /** Number of changed files in the working tree — surfaced as a badge on the diff button. */
   vcsChangeCount?: number
   /** Lines added across the working tree (for the +/- badge). */
   vcsAdditions?: number
   /** Lines deleted across the working tree (for the +/- badge). */
   vcsDeletions?: number
-  sidebarCollapsed?: boolean
-  onToggleSidebar?: () => void
   /** Dev override — null means auto-detect */
   platformOverride?: PlatformVariant | null
   /** Hide app-level controls (nav, sidebar toggle, settings). Window chrome stays. */
@@ -197,10 +209,11 @@ function useEmulatorSdkSignal(desktopRuntime: boolean): EmulatorSdkSignal {
     void listen("emulator:sdk_status_changed", () => {
       void probe()
     }).then((fn) => {
+      const unlisten = createSafeTauriUnlisten(fn)
       if (cancelled) {
-        fn()
+        unlisten()
       } else {
-        unlisteners.push(fn)
+        unlisteners.push(unlisten)
       }
     })
 
@@ -231,12 +244,8 @@ export function XeroShell({
   onViewPreload,
   onSurfacePreload,
   children,
-  onOpenSettings,
-  onOpenAccount,
-  onAccountLogin,
-  accountAuthenticating = false,
-  accountAvatarUrl = null,
-  accountLogin = null,
+  projectId = null,
+  projectName,
   onToggleBrowser,
   browserOpen = false,
   onToggleIos,
@@ -250,11 +259,20 @@ export function XeroShell({
   onToggleAgentDock,
   agentDockOpen = false,
   agentDockDisabled = false,
+  onToggleComputerUse,
+  computerUseOpen = false,
+  computerUseRunning = false,
+  onToggleTerminal,
+  terminalOpen = false,
+  projectRunning = false,
+  projectStartTargets = [],
+  onEditProjectStartTargets,
+  onRunTarget,
+  onRunAllTargets,
+  onStopProject,
   vcsChangeCount = 0,
   vcsAdditions = 0,
   vcsDeletions = 0,
-  sidebarCollapsed = false,
-  onToggleSidebar,
   platformOverride,
   chromeOnly = false,
   hideFooter = false,
@@ -264,6 +282,7 @@ export function XeroShell({
   const detectedPlatform = useDesktopPlatform(desktopRuntime)
   const platform = platformOverride ?? detectedPlatform
   const emulatorSdk = useEmulatorSdkSignal(desktopRuntime)
+  const projectSelectionPreview = useProjectSelectionPreview()
 
   const handleWindowAction = async (action: WindowAction) => {
     if (!desktopRuntime) return
@@ -310,19 +329,159 @@ export function XeroShell({
     })
   }
 
-  const runMenuItemAction = (action?: () => void) => {
-    if (!action) return
-    action()
-  }
-
   // ------------------------------------------------------------------
   // Shared pieces
   // ------------------------------------------------------------------
 
+  const previewProjectName =
+    projectSelectionPreview.projectId && projectSelectionPreview.projectId !== projectId
+      ? projectSelectionPreview.projectName
+      : null
+  const trimmedProjectName = (previewProjectName ?? projectName)?.trim()
+  const showProjectActions = Boolean(projectId && trimmedProjectName)
+  const hasStartTargets = projectStartTargets.length > 0
+  const playButtonClass = cn(
+    "titlebar-no-drag pointer-events-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] transition-colors",
+    projectRunning
+      ? "bg-warning/15 text-warning hover:bg-warning/25"
+      : hasStartTargets
+        ? "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+        : "text-muted-foreground/60 hover:bg-secondary/60 hover:text-foreground",
+  )
+  const playTooltip = projectRunning
+    ? "Stop project"
+    : projectStartTargets.length === 0
+      ? "Configure start commands"
+      : projectStartTargets.length === 1
+        ? `Run ${projectStartTargets[0].name}`
+        : "Run project"
+  const playIcon = projectRunning ? (
+    <Square className="h-3 w-3 fill-current" />
+  ) : (
+    <Play className="h-3 w-3 fill-current" />
+  )
+  const directClick = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (projectRunning) {
+      onStopProject?.()
+      return
+    }
+    if (projectStartTargets.length === 0) {
+      onEditProjectStartTargets?.()
+      return
+    }
+    if (projectStartTargets.length === 1) {
+      onRunTarget?.(projectStartTargets[0].id)
+    }
+  }
+
+  const PlayPauseBtn = showProjectActions ? (
+    !projectRunning && projectStartTargets.length >= 2 ? (
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                aria-label="Run project"
+                className={playButtonClass}
+                data-titlebar-no-drag="true"
+                onMouseDown={stopTitlebarMouseEventPropagation}
+                type="button"
+              >
+                {playIcon}
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            {playTooltip}
+          </TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="start" sideOffset={6} className="min-w-[200px]">
+          <DropdownMenuLabel className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+            Run target
+          </DropdownMenuLabel>
+          {projectStartTargets.map((target) => (
+            <DropdownMenuItem
+              key={target.id}
+              onSelect={() => onRunTarget?.(target.id)}
+            >
+              <span className="font-mono text-[12.5px]">{target.name}</span>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onRunAllTargets?.()}>
+            Run all
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onEditProjectStartTargets?.()}>
+            Configure start commands…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            aria-label={projectRunning ? "Stop project" : "Run project"}
+            aria-pressed={projectRunning}
+            className={playButtonClass}
+            data-titlebar-no-drag="true"
+            onClick={directClick}
+            onMouseDown={stopTitlebarMouseEventPropagation}
+            type="button"
+          >
+            {playIcon}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>
+          {playTooltip}
+        </TooltipContent>
+      </Tooltip>
+    )
+  ) : null
+
+  const ProjectName = trimmedProjectName ? (
+    showProjectActions ? (
+      <ProjectContextMenu
+        projectRunning={projectRunning}
+        startTargets={projectStartTargets}
+        onEditStartTargets={() => onEditProjectStartTargets?.()}
+        onRunTarget={(id) => onRunTarget?.(id)}
+        onRunAllTargets={() => onRunAllTargets?.()}
+        onStop={() => onStopProject?.()}
+        onOpenTerminal={() => {
+          if (!terminalOpen) onToggleTerminal?.()
+        }}
+      >
+        <span
+          className="titlebar-no-drag pointer-events-auto min-w-0 truncate text-[13px] font-medium tracking-[-0.01em] text-foreground/75"
+          data-titlebar-no-drag="true"
+        >
+          {trimmedProjectName}
+        </span>
+      </ProjectContextMenu>
+    ) : (
+      <span className="min-w-0 truncate text-[13px] font-medium tracking-[-0.01em] text-foreground/75">
+        {trimmedProjectName}
+      </span>
+    )
+  ) : null
+
   const Logo = (
-    <div className="flex items-center gap-2">
-      <AppLogo className="h-3 w-3" />
-      <span className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/90">Xero</span>
+    <div className="flex min-w-0 items-center gap-2">
+      <AppLogo className="h-3 w-3 shrink-0" />
+      <span className="shrink-0 text-[13px] font-semibold tracking-[-0.01em] text-foreground/90">Xero</span>
+      {trimmedProjectName ? (
+        <>
+          <span
+            aria-hidden="true"
+            className="shrink-0 text-[13px] font-light text-muted-foreground/40"
+          >
+            /
+          </span>
+          {ProjectName}
+          {PlayPauseBtn}
+        </>
+      ) : null}
     </div>
   )
 
@@ -353,71 +512,9 @@ export function XeroShell({
     </nav>
   )
 
-  const accountSignedIn = Boolean(accountAvatarUrl)
-  const accountAriaLabel = accountSignedIn
-    ? `Account — signed in as ${accountLogin ?? "GitHub user"}`
-    : accountAuthenticating
-      ? "Signing in with GitHub…"
-      : "Sign in with GitHub"
-  const handleAccountClick = () => {
-    if (accountSignedIn) {
-      onOpenAccount?.()
-    } else if (onAccountLogin) {
-      onAccountLogin()
-    } else {
-      onOpenAccount?.()
-    }
-  }
-  const AccountBtn = (
-    <button
-      aria-label={accountAriaLabel}
-      className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
-        accountSignedIn
-          ? "text-foreground hover:bg-secondary/50"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-        accountAuthenticating && "opacity-70",
-      )}
-      disabled={accountAuthenticating}
-      onClick={handleAccountClick}
-      title={
-        accountSignedIn
-          ? `@${accountLogin ?? ""}`
-          : accountAuthenticating
-            ? "Waiting for GitHub…"
-            : "Sign in with GitHub"
-      }
-      type="button"
-    >
-      {accountSignedIn && accountAvatarUrl ? (
-        <img
-          src={accountAvatarUrl}
-          alt=""
-          referrerPolicy="no-referrer"
-          className="h-4 w-4 rounded-full"
-        />
-      ) : (
-        <Github className="h-4 w-4" />
-      )}
-    </button>
-  )
-
-  const SettingsBtn = (
-    <button
-      aria-label="Settings"
-      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-      onFocus={() => queueSurfacePreload("settings")}
-      onClick={onOpenSettings}
-      onPointerEnter={() => queueSurfacePreload("settings")}
-      type="button"
-    >
-      <Settings className="h-4 w-4" />
-    </button>
-  )
-
   // iOS Simulator requires Xcode. We keep the titlebar slot stable on
   // macOS:
-  // - Xcode detected → normal toggle menu item.
+  // - Xcode detected → normal toggle button.
   // - Xcode missing → an amber-tinted CTA that opens the Xcode App Store
   //   listing. We deliberately don't let the user open the iOS sidebar
   //   in this state because every panel inside it would ship the same
@@ -435,95 +532,118 @@ export function XeroShell({
   // present — optimistically render the iOS toggle. Once the probe
   // resolves we flip to the CTA if Xcode is missing. The "supported"
   // flag stays true on all macOS hosts per the backend contract.
+  const iosSupportedOnHost = detectedPlatform === "macos"
   const xcodeKnownMissing =
-    platform === "macos" && desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
-  const toolPanelOpen = iosOpen || browserOpen || solanaOpen
+    iosSupportedOnHost && desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
 
-  const toolItemClassName =
-    "min-w-44 cursor-pointer px-2.5 py-2 text-[13px]"
-  const activeToolItemClassName = "bg-primary/10 text-primary focus:bg-primary/15 focus:text-primary"
-  const ToolActiveDot = (
-    <span
-      aria-hidden="true"
-      className="ml-auto h-1.5 w-1.5 rounded-full bg-primary"
-    />
-  )
-  const ToolsMenu = (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          aria-label="Tools"
-          aria-pressed={toolPanelOpen}
-          className={cn(
-            "flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors data-[state=open]:bg-secondary/70 data-[state=open]:text-foreground",
-            toolPanelOpen
-              ? "bg-primary/15 text-primary"
-              : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-          )}
-          onFocus={() => queueSurfacePreload("tools")}
-          onPointerEnter={() => queueSurfacePreload("tools")}
-          title="Tools"
-          type="button"
-        >
-          <Wrench className="h-4 w-4" />
-          <ChevronDown className="h-3 w-3 opacity-70" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={8}>
-        {platform === "macos" ? (
-          xcodeKnownMissing ? (
-            <DropdownMenuItem
-              aria-label="Install Xcode"
-              className={cn(
-                toolItemClassName,
-                "text-warning/90 focus:bg-warning/15 focus:text-warning",
-              )}
-              onFocus={() => queueSurfacePreload("ios")}
-              onPointerEnter={() => queueSurfacePreload("ios")}
-              onSelect={() => runMenuItemAction(handleInstallXcode)}
-              title="iOS Simulator needs Xcode. Click to install."
-            >
-              <AppleLogoIcon className="h-4 w-4" />
-              <span>Install Xcode</span>
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem
-              aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
-              className={cn(toolItemClassName, iosOpen && activeToolItemClassName)}
-              onFocus={() => queueSurfacePreload("ios")}
-              onPointerEnter={() => queueSurfacePreload("ios")}
-              onSelect={() => runMenuItemAction(onToggleIos)}
-            >
-              <AppleLogoIcon className="h-4 w-4" />
-              <span>iOS Simulator</span>
-              {iosOpen ? ToolActiveDot : null}
-            </DropdownMenuItem>
-          )
-        ) : null}
-        <DropdownMenuItem
+  const titlebarToolButtonClassName = (open: boolean, tone?: "warning") =>
+    cn(
+      "size-7 rounded-md text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      open && "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary",
+      tone === "warning" && "text-warning/90 hover:bg-warning/15 hover:text-warning",
+    )
+
+  const IosToolBtn = iosSupportedOnHost ? (
+    xcodeKnownMissing ? (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label="Install Xcode"
+            className={titlebarToolButtonClassName(false, "warning")}
+            onClick={handleInstallXcode}
+            size="icon-sm"
+            title="iOS Simulator needs Xcode. Click to install."
+            type="button"
+            variant="ghost"
+          >
+            <AppleLogoIcon className="size-5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={8}>Install Xcode</TooltipContent>
+      </Tooltip>
+    ) : (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
+            aria-pressed={iosOpen}
+            className={titlebarToolButtonClassName(iosOpen)}
+            onClick={onToggleIos}
+            size="icon-sm"
+            title="iOS Simulator"
+            type="button"
+            variant="ghost"
+          >
+            <AppleLogoIcon className="size-5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={8}>iOS Simulator</TooltipContent>
+      </Tooltip>
+    )
+  ) : null
+
+  const BrowserToolBtn = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
           aria-label={browserOpen ? "Close browser" : "Open browser"}
-          className={cn(toolItemClassName, browserOpen && activeToolItemClassName)}
+          aria-pressed={browserOpen}
+          className={titlebarToolButtonClassName(browserOpen)}
+          onClick={onToggleBrowser}
           onFocus={() => queueSurfacePreload("browser")}
           onPointerEnter={() => queueSurfacePreload("browser")}
-          onSelect={() => runMenuItemAction(onToggleBrowser)}
+          size="icon-sm"
+          title="Browser"
+          type="button"
+          variant="ghost"
         >
           <Globe className="h-4 w-4" />
-          <span>Browser</span>
-          {browserOpen ? ToolActiveDot : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8}>Browser</TooltipContent>
+    </Tooltip>
+  )
+
+  const SolanaToolBtn = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
           aria-label={solanaOpen ? "Close Solana workbench" : "Open Solana workbench"}
-          className={cn(toolItemClassName, solanaOpen && activeToolItemClassName)}
-          onFocus={() => queueSurfacePreload("solana")}
-          onPointerEnter={() => queueSurfacePreload("solana")}
-          onSelect={() => runMenuItemAction(onToggleSolana)}
+          aria-pressed={solanaOpen}
+          className={titlebarToolButtonClassName(solanaOpen)}
+          onClick={onToggleSolana}
+          size="icon-sm"
+          title="Solana Workbench"
+          type="button"
+          variant="ghost"
         >
-          <SolanaLogoIcon className="h-4 w-4" mono />
-          <span>Solana Workbench</span>
-          {solanaOpen ? ToolActiveDot : null}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <SolanaLogoIcon className="size-4" mono />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8}>Solana Workbench</TooltipContent>
+    </Tooltip>
+  )
+
+  const TerminalToolBtn = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
+          aria-pressed={terminalOpen}
+          className={titlebarToolButtonClassName(terminalOpen)}
+          onClick={onToggleTerminal}
+          onFocus={() => queueSurfacePreload("terminal")}
+          onPointerEnter={() => queueSurfacePreload("terminal")}
+          size="icon-sm"
+          title="Terminal"
+          type="button"
+          variant="ghost"
+        >
+          <TerminalSquare className="h-4 w-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8}>Terminal</TooltipContent>
+    </Tooltip>
   )
 
   const hasVcsLineChanges = vcsAdditions > 0 || vcsDeletions > 0
@@ -600,26 +720,41 @@ export function XeroShell({
       )}
       disabled={agentDockDisabled}
       onClick={onToggleAgentDock}
+      onFocus={() => queueSurfacePreload("agent-dock")}
+      onPointerEnter={() => queueSurfacePreload("agent-dock")}
       title={agentDockDisabled ? "Already in Agent view" : "Agent"}
       type="button"
     >
-      <Bot className="h-4 w-4" />
+      <Bot className="h-[17px] w-[17px]" />
     </button>
   )
 
-  const SidebarToggleBtn = (
-    <button
-      aria-label={sidebarCollapsed ? "Expand project sidebar" : "Collapse project sidebar"}
-      aria-pressed={!sidebarCollapsed}
-      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-      onClick={onToggleSidebar}
-      type="button"
-    >
-      {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-    </button>
-  )
-
-  const Divider = <div className="h-4 w-px shrink-0 bg-border" />
+  const ComputerUseBtn = onToggleComputerUse ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={computerUseOpen ? "Close Computer Use" : "Open Computer Use"}
+          aria-pressed={computerUseOpen}
+          className={cn(
+            titlebarToolButtonClassName(computerUseOpen),
+            computerUseRunning &&
+              !computerUseOpen &&
+              "text-primary ring-1 ring-primary/30 hover:bg-primary/10 hover:text-primary",
+          )}
+          onClick={onToggleComputerUse}
+          onFocus={() => queueSurfacePreload("agent-dock")}
+          onPointerEnter={() => queueSurfacePreload("agent-dock")}
+          size="icon-sm"
+          title="Computer Use"
+          type="button"
+          variant="ghost"
+        >
+          <Monitor className="h-4 w-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8}>Computer Use</TooltipContent>
+    </Tooltip>
+  ) : null
 
   const DragSpacer = (
     <div
@@ -724,45 +859,45 @@ export function XeroShell({
   let titlebar: React.ReactNode
 
   if (platform === "macos") {
-    // macOS: [traffic-lights] [sidebar-toggle] [|] [nav] ··· (centered logo) ··· [vcs] [account] [tools] [settings]
+    // macOS: [traffic-lights] [nav] ... (centered logo) ... [vcs] [workflows] [agent] [ios] [browser] [solana]
     titlebar = (
       <header className="relative flex h-11 items-center border-b border-border bg-sidebar shrink-0 pl-3 pr-3">
         {TrafficLights}
         {!chromeOnly ? (
           <div
-            className="titlebar-no-drag mr-3 flex items-center gap-3 shrink-0"
+            className="titlebar-no-drag mr-3 flex items-center shrink-0"
             data-titlebar-no-drag="true"
             onDoubleClick={stopTitlebarMouseEventPropagation}
             onMouseDown={stopTitlebarMouseEventPropagation}
           >
-            {SidebarToggleBtn}
-            {Divider}
+            {NavButtons}
           </div>
         ) : null}
-        {!chromeOnly ? NavButtons : null}
         {DragSpacer}
-        <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center">
+        <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center">
           {Logo}
         </div>
-        {!chromeOnly ? (
+        {!chromeOnly || ComputerUseBtn ? (
           <div
             className="titlebar-no-drag flex items-center gap-2 shrink-0"
             data-titlebar-no-drag="true"
             onDoubleClick={stopTitlebarMouseEventPropagation}
             onMouseDown={stopTitlebarMouseEventPropagation}
           >
-            {WorkflowsBtn}
-            {VcsBtn}
-            {AgentDockBtn}
-            {AccountBtn}
-            {ToolsMenu}
-            {SettingsBtn}
+            {!chromeOnly ? VcsBtn : null}
+            {!chromeOnly ? WorkflowsBtn : null}
+            {ComputerUseBtn}
+            {!chromeOnly ? AgentDockBtn : null}
+            {!chromeOnly ? IosToolBtn : null}
+            {!chromeOnly ? BrowserToolBtn : null}
+            {!chromeOnly ? SolanaToolBtn : null}
+            {!chromeOnly ? TerminalToolBtn : null}
           </div>
         ) : null}
       </header>
     )
   } else {
-    // Windows / Linux: [logo] [|] [sidebar-toggle] [|] [nav] ← drag zone → [account] [tools] [settings] [|] [min][max][close]
+    // Windows / Linux: [logo] [|] [nav] <- drag zone -> [vcs] [workflows] [agent] [browser] [solana] [|] [min][max][close]
     titlebar = (
       <header className="flex h-11 items-center border-b border-border bg-sidebar shrink-0 pl-3">
         <div
@@ -775,8 +910,6 @@ export function XeroShell({
           {!chromeOnly ? (
             <>
               <div className="mx-4 h-4 w-px bg-border" />
-              {SidebarToggleBtn}
-              <div className="mx-4 h-4 w-px bg-border" />
               {NavButtons}
             </>
           ) : null}
@@ -788,14 +921,15 @@ export function XeroShell({
           onDoubleClick={stopTitlebarMouseEventPropagation}
           onMouseDown={stopTitlebarMouseEventPropagation}
         >
-          {!chromeOnly ? (
+          {!chromeOnly || ComputerUseBtn ? (
             <>
-              {WorkflowsBtn}
-              {VcsBtn}
-              {AgentDockBtn}
-              {AccountBtn}
-              {ToolsMenu}
-              {SettingsBtn}
+              {!chromeOnly ? VcsBtn : null}
+              {!chromeOnly ? WorkflowsBtn : null}
+              {ComputerUseBtn}
+              {!chromeOnly ? AgentDockBtn : null}
+              {!chromeOnly ? BrowserToolBtn : null}
+              {!chromeOnly ? SolanaToolBtn : null}
+              {!chromeOnly ? TerminalToolBtn : null}
               <div className="mx-2 h-4 w-px bg-border" />
             </>
           ) : null}

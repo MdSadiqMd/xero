@@ -4,13 +4,13 @@
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
-    auth::{ensure_openai_profile_target, start_provider_auth_flow},
+    auth::{ensure_openai_profile_target, ensure_xai_profile_target, start_provider_auth_flow},
     commands::{
         validate_non_empty, CommandError, CommandResult, ProviderAuthSessionDto,
         StartOAuthLoginRequestDto,
     },
-    provider_credentials::OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    runtime::{openai_codex_provider, OPENAI_CODEX_PROVIDER_ID},
+    provider_credentials::{OPENAI_CODEX_DEFAULT_PROFILE_ID, XAI_DEFAULT_PROFILE_ID},
+    runtime::{openai_codex_provider, xai_provider, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID},
     state::DesktopState,
 };
 
@@ -26,31 +26,49 @@ pub fn start_oauth_login<R: Runtime>(
 ) -> CommandResult<ProviderAuthSessionDto> {
     validate_non_empty(&request.provider_id, "providerId")?;
 
-    if request.provider_id != OPENAI_CODEX_PROVIDER_ID {
-        return Err(CommandError::user_fixable(
-            "oauth_login_provider_unsupported",
-            format!(
-                "Xero does not support browser-based OAuth for provider `{}`. Only `{}` is wired today.",
-                request.provider_id, OPENAI_CODEX_PROVIDER_ID
-            ),
-        ));
-    }
+    let (provider, profile_id, action) = match request.provider_id.as_str() {
+        OPENAI_CODEX_PROVIDER_ID => (
+            openai_codex_provider(),
+            OPENAI_CODEX_DEFAULT_PROFILE_ID,
+            "start OpenAI login",
+        ),
+        XAI_PROVIDER_ID => (xai_provider(), XAI_DEFAULT_PROFILE_ID, "start xAI login"),
+        _ => {
+            return Err(CommandError::user_fixable(
+                "oauth_login_provider_unsupported",
+                format!(
+                    "Xero does not support browser-based OAuth for provider `{}`. Only `{}` and `{}` are wired today.",
+                    request.provider_id, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID
+                ),
+            ));
+        }
+    };
 
-    let provider = openai_codex_provider();
-    ensure_openai_profile_target(
-        &app,
-        state.inner(),
-        OPENAI_CODEX_DEFAULT_PROFILE_ID,
-        crate::commands::RuntimeAuthPhase::Starting,
-        "start OpenAI login",
-    )
-    .map_err(command_error_from_auth)?;
+    match request.provider_id.as_str() {
+        OPENAI_CODEX_PROVIDER_ID => ensure_openai_profile_target(
+            &app,
+            state.inner(),
+            profile_id,
+            crate::commands::RuntimeAuthPhase::Starting,
+            action,
+        )
+        .map_err(command_error_from_auth)?,
+        XAI_PROVIDER_ID => ensure_xai_profile_target(
+            &app,
+            state.inner(),
+            profile_id,
+            crate::commands::RuntimeAuthPhase::Starting,
+            action,
+        )
+        .map_err(command_error_from_auth)?,
+        _ => unreachable!("unsupported OAuth provider was rejected above"),
+    }
 
     let started = start_provider_auth_flow(
         state.inner(),
         provider.provider,
         PROVIDER_CREDENTIAL_OAUTH_SCOPE_ID,
-        OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        profile_id,
         request.originator.as_deref(),
     )
     .map_err(command_error_from_auth)?;

@@ -9,11 +9,18 @@ import {
   phaseStatusSchema,
   safePercent,
   type PayloadBudgetDiagnosticDto,
-} from './shared'
+} from '@xero/ui/model/shared'
 import { providerModelThinkingEffortSchema } from './provider-models'
 
 export const projectOriginSchema = z.enum(['brownfield', 'greenfield', 'unknown'])
 export type ProjectOriginDto = z.infer<typeof projectOriginSchema>
+
+export const startTargetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  command: z.string().min(1),
+})
+export type StartTargetDto = z.infer<typeof startTargetSchema>
 
 export const projectSummarySchema = z.object({
   id: z.string().min(1),
@@ -26,6 +33,7 @@ export const projectSummarySchema = z.object({
   activePhase: z.number().int().nonnegative(),
   branch: nullableTextSchema,
   runtime: nullableTextSchema,
+  startTargets: z.array(startTargetSchema).optional(),
 })
 
 export const phaseSummarySchema = z.object({
@@ -89,10 +97,51 @@ export const projectFileNodeSchema: z.ZodType<ProjectFileNodeDto> = z.lazy(() =>
     .strict(),
 )
 
+export const projectFileTreeNodeSchema = z
+  .object({
+    id: projectTreePathSchema,
+    name: z.string().trim().min(1),
+    path: projectTreePathSchema,
+    type: projectEntryKindSchema,
+    childrenLoaded: z.boolean(),
+    truncated: z.boolean(),
+    omittedEntryCount: z.number().int().nonnegative(),
+  })
+  .strict()
+
+export const projectFileTreeStatsSchema = z
+  .object({
+    byteSize: z.number().int().nonnegative(),
+    childListCount: z.number().int().nonnegative(),
+    nodeCount: z.number().int().nonnegative(),
+    unloadedFolderCount: z.number().int().nonnegative(),
+  })
+  .strict()
+
+export const projectFileTreeViewSchema = z
+  .object({
+    rootPath: projectTreePathSchema,
+    nodesByPath: z.record(projectTreePathSchema, projectFileTreeNodeSchema),
+    childPathsByPath: z.record(projectTreePathSchema, z.array(projectTreePathSchema)),
+    loadedPaths: z.array(projectTreePathSchema),
+    stats: projectFileTreeStatsSchema,
+    truncated: z.boolean(),
+    omittedEntryCount: z.number().int().nonnegative(),
+  })
+  .strict()
+
 export const listProjectFilesRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
     path: projectTreePathSchema.default('/'),
+  })
+  .strict()
+
+export const listProjectFileIndexRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    includeHidden: z.boolean().default(false),
+    limit: z.number().int().positive().optional(),
   })
   .strict()
 
@@ -115,6 +164,16 @@ export const writeProjectFileRequestSchema = z
     projectId: z.string().trim().min(1),
     path: projectTreePathSchema,
     content: z.string(),
+    expectedContentHash: z.string().trim().min(1).optional(),
+    expectedModifiedAt: z.string().trim().min(1).optional(),
+    overwrite: z.boolean().default(false),
+  })
+  .strict()
+
+export const statProjectFilesRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    paths: z.array(projectTreePathSchema).default([]),
   })
   .strict()
 
@@ -196,6 +255,36 @@ export const repositoryDiffResponseSchema = z.object({
   repository: repositorySummarySchema,
   scope: repositoryDiffScopeSchema,
   patch: z.string(),
+  files: z.array(
+    z.object({
+      oldPath: nullableTextSchema,
+      newPath: nullableTextSchema,
+      displayPath: z.string().min(1),
+      status: changeKindSchema,
+      hunks: z.array(
+        z.object({
+          header: z.string(),
+          oldStart: z.number().int().nonnegative(),
+          oldLines: z.number().int().nonnegative(),
+          newStart: z.number().int().nonnegative(),
+          newLines: z.number().int().nonnegative(),
+          rows: z.array(
+            z.object({
+              kind: z.enum(['context', 'add', 'remove', 'no_newline']),
+              prefix: z.string(),
+              text: z.string(),
+              oldLineNumber: z.number().int().nonnegative().nullable().optional(),
+              newLineNumber: z.number().int().nonnegative().nullable().optional(),
+            }),
+          ),
+          truncated: z.boolean().optional(),
+        }),
+      ),
+      patch: z.string(),
+      truncated: z.boolean(),
+      cacheKey: z.string().min(1),
+    }),
+  ),
   truncated: z.boolean(),
   baseRevision: nullableTextSchema,
   payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
@@ -205,6 +294,13 @@ export const gitPathsRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
     paths: z.array(z.string().trim().min(1)).default([]),
+  })
+  .strict()
+
+export const gitRevertPatchRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    patch: z.string().min(1).refine((value) => value.trim().length > 0, 'Patch must not be empty.'),
   })
   .strict()
 
@@ -281,8 +377,28 @@ export const listProjectFilesResponseSchema = z
     projectId: z.string().trim().min(1),
     path: projectTreePathSchema,
     root: projectFileNodeSchema,
+    view: projectFileTreeViewSchema,
     truncated: z.boolean().optional(),
     omittedEntryCount: z.number().int().nonnegative().optional(),
+    payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
+  })
+  .strict()
+
+export const projectFileIndexEntrySchema = z
+  .object({
+    path: projectTreePathSchema,
+    name: z.string().trim().min(1),
+    parentPath: projectTreePathSchema,
+    hidden: z.boolean().default(false),
+  })
+  .strict()
+
+export const listProjectFileIndexResponseSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    files: z.array(projectFileIndexEntrySchema),
+    totalFiles: z.number().int().nonnegative(),
+    truncated: z.boolean(),
     payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
   })
   .strict()
@@ -297,6 +413,38 @@ const projectFileContentBaseSchema = z
   })
   .strict()
 
+export const projectFileCsvPreviewSchema = z
+  .object({
+    kind: z.literal('csv'),
+    headers: z.array(z.string()),
+    rows: z.array(z.array(z.string())),
+    totalRows: z.number().int().nonnegative(),
+    totalColumns: z.number().int().nonnegative(),
+    truncatedRows: z.boolean(),
+    truncatedColumns: z.boolean(),
+  })
+  .strict()
+
+export const projectMarkdownAssetRefSchema = z
+  .object({
+    source: z.string().trim().min(1),
+    path: projectTreePathSchema,
+    previewUrl: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
+export const projectFileMarkdownPreviewSchema = z
+  .object({
+    kind: z.literal('markdown'),
+    assetRefs: z.array(projectMarkdownAssetRefSchema),
+  })
+  .strict()
+
+export const projectFilePreviewSchema = z.discriminatedUnion('kind', [
+  projectFileCsvPreviewSchema,
+  projectFileMarkdownPreviewSchema,
+])
+
 export const readProjectFileResponseSchema = z.discriminatedUnion('kind', [
   projectFileContentBaseSchema
     .extend({
@@ -304,6 +452,7 @@ export const readProjectFileResponseSchema = z.discriminatedUnion('kind', [
       mimeType: z.string().trim().min(1),
       rendererKind: projectTextRendererKindSchema,
       text: z.string(),
+      preview: projectFilePreviewSchema.nullable().optional(),
     })
     .strict(),
   projectFileContentBaseSchema
@@ -328,6 +477,238 @@ export const writeProjectFileResponseSchema = z
   .object({
     projectId: z.string().trim().min(1),
     path: projectTreePathSchema,
+    byteLength: z.number().int().nonnegative(),
+    modifiedAt: z.string().trim().min(1),
+    contentHash: z.string().trim().min(1),
+    mimeType: z.string().trim().min(1),
+    rendererKind: projectFileRendererKindSchema,
+    preview: projectFilePreviewSchema.nullable().optional(),
+  })
+  .strict()
+
+export const projectFileStatSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('file'),
+      path: projectTreePathSchema,
+      byteLength: z.number().int().nonnegative(),
+      modifiedAt: z.string().trim().min(1),
+      contentHash: z.string().trim().min(1),
+      mimeType: z.string().trim().min(1),
+      rendererKind: projectFileRendererKindSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('directory'),
+      path: projectTreePathSchema,
+      modifiedAt: z.string().trim().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('missing'),
+      path: projectTreePathSchema,
+    })
+    .strict(),
+])
+
+export const statProjectFilesResponseSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    files: z.array(projectFileStatSchema),
+  })
+  .strict()
+
+export const projectDiagnosticSeveritySchema = z.enum(['error', 'warning', 'info'])
+export const projectDiagnosticSchema = z
+  .object({
+    path: projectTreePathSchema.nullable().optional(),
+    line: z.number().int().positive().nullable().optional(),
+    column: z.number().int().positive().nullable().optional(),
+    severity: projectDiagnosticSeveritySchema,
+    code: z.string().trim().min(1).nullable().optional(),
+    message: z.string(),
+    source: z.string().trim().min(1),
+  })
+  .strict()
+
+export const editorLspInstallCommandSchema = z
+  .object({
+    label: z.string().trim().min(1),
+    argv: z.array(z.string().trim().min(1)),
+  })
+  .strict()
+
+export const editorLspInstallSuggestionSchema = z
+  .object({
+    reason: z.string(),
+    candidateCommands: z.array(editorLspInstallCommandSchema),
+  })
+  .strict()
+
+export const editorLspServerStatusSchema = z
+  .object({
+    serverId: z.string().trim().min(1),
+    language: z.string().trim().min(1),
+    command: z.string().trim().min(1),
+    args: z.array(z.string()),
+    available: z.boolean(),
+    supportsDiagnostics: z.boolean(),
+    supportsSymbols: z.boolean(),
+    supportsHover: z.boolean(),
+    supportsCompletion: z.boolean(),
+    supportsDefinition: z.boolean(),
+    supportsReferences: z.boolean(),
+    supportsRename: z.boolean(),
+    supportsCodeActions: z.boolean(),
+    installSuggestion: editorLspInstallSuggestionSchema.nullable().optional(),
+  })
+  .strict()
+
+export const runProjectTypecheckRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+  })
+  .strict()
+
+export const formatProjectDocumentRangeSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+  })
+  .strict()
+
+export const formatProjectDocumentRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    path: projectTreePathSchema,
+    content: z.string(),
+    range: formatProjectDocumentRangeSchema.optional(),
+  })
+  .strict()
+
+export const formatProjectDocumentStatusSchema = z.enum([
+  'formatted',
+  'unchanged',
+  'unavailable',
+  'failed',
+])
+
+export const formatProjectDocumentResponseSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    path: projectTreePathSchema,
+    status: formatProjectDocumentStatusSchema,
+    formatterId: z.string().trim().min(1).nullable().optional(),
+    command: z.array(z.string()),
+    content: z.string().nullable().optional(),
+    rangeApplied: formatProjectDocumentRangeSchema.nullable().optional(),
+    diagnostics: z.array(projectDiagnosticSchema),
+    startedAt: z.string().trim().min(1),
+    completedAt: z.string().trim().min(1),
+    durationMs: z.number().int().nonnegative(),
+    message: z.string().nullable().optional(),
+  })
+  .strict()
+
+export const runProjectLintRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    path: projectTreePathSchema.optional(),
+  })
+  .strict()
+
+export const projectLintStatusSchema = z.enum(['passed', 'failed', 'unavailable'])
+
+export const projectLintResponseSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    status: projectLintStatusSchema,
+    source: z.string().trim().min(1),
+    command: z.array(z.string()),
+    cwd: z.string().trim().min(1),
+    diagnostics: z.array(projectDiagnosticSchema),
+    startedAt: z.string().trim().min(1),
+    completedAt: z.string().trim().min(1),
+    durationMs: z.number().int().nonnegative(),
+    exitCode: z.number().int().nullable().optional(),
+    truncated: z.boolean(),
+    message: z.string().nullable().optional(),
+  })
+  .strict()
+
+export const projectTypecheckStatusSchema = z.enum(['passed', 'failed', 'unavailable'])
+export const projectTypecheckResponseSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    status: projectTypecheckStatusSchema,
+    source: z.string().trim().min(1),
+    command: z.array(z.string()),
+    cwd: z.string().trim().min(1),
+    diagnostics: z.array(projectDiagnosticSchema),
+    startedAt: z.string().trim().min(1),
+    completedAt: z.string().trim().min(1),
+    durationMs: z.number().int().nonnegative(),
+    exitCode: z.number().int().nullable().optional(),
+    truncated: z.boolean(),
+    message: z.string().nullable().optional(),
+    lspServers: z.array(editorLspServerStatusSchema),
+  })
+  .strict()
+
+export const projectUiStateKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .regex(/^[A-Za-z0-9_.:@-]+$/, 'Project UI state keys must be filename-safe identifiers.')
+
+export const readProjectUiStateRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    key: projectUiStateKeySchema,
+  })
+  .strict()
+
+export const writeProjectUiStateRequestSchema = readProjectUiStateRequestSchema
+  .extend({
+    value: z.unknown().nullable().optional(),
+  })
+  .strict()
+
+export const projectUiStateResponseSchema = z
+  .object({
+    schema: z.literal('xero.project_ui_state.v1'),
+    projectId: z.string().trim().min(1),
+    key: projectUiStateKeySchema,
+    value: z.unknown().nullable().optional(),
+    storageScope: z.literal('os_app_data'),
+    uiDeferred: z.boolean(),
+  })
+  .strict()
+
+export const appUiStateKeySchema = projectUiStateKeySchema
+
+export const readAppUiStateRequestSchema = z
+  .object({
+    key: appUiStateKeySchema,
+  })
+  .strict()
+
+export const writeAppUiStateRequestSchema = readAppUiStateRequestSchema
+  .extend({
+    value: z.unknown().nullable().optional(),
+  })
+  .strict()
+
+export const appUiStateResponseSchema = z
+  .object({
+    schema: z.literal('xero.app_ui_state.v1'),
+    key: appUiStateKeySchema,
+    value: z.unknown().nullable().optional(),
+    storageScope: z.literal('os_app_data'),
+    uiDeferred: z.boolean(),
   })
   .strict()
 
@@ -559,15 +940,48 @@ export type ProjectTextRendererKindDto = z.infer<typeof projectTextRendererKindS
 export type ProjectRenderableRendererKindDto = z.infer<typeof projectRenderableRendererKindSchema>
 export type ProjectFileRendererKindDto = z.infer<typeof projectFileRendererKindSchema>
 export type ListProjectFilesRequestDto = z.infer<typeof listProjectFilesRequestSchema>
+export type ListProjectFileIndexRequestDto = z.infer<typeof listProjectFileIndexRequestSchema>
 export type ProjectFileRequestDto = z.infer<typeof projectFileRequestSchema>
+export type ProjectFileTreeNodeDto = z.infer<typeof projectFileTreeNodeSchema>
+export type ProjectFileTreeStatsDto = z.infer<typeof projectFileTreeStatsSchema>
+export type ProjectFileTreeViewDto = z.infer<typeof projectFileTreeViewSchema>
 export type RevokeProjectAssetTokensRequestDto = z.infer<typeof revokeProjectAssetTokensRequestSchema>
 export type WriteProjectFileRequestDto = z.infer<typeof writeProjectFileRequestSchema>
+export type StatProjectFilesRequestDto = z.infer<typeof statProjectFilesRequestSchema>
 export type CreateProjectEntryRequestDto = z.infer<typeof createProjectEntryRequestSchema>
 export type RenameProjectEntryRequestDto = z.infer<typeof renameProjectEntryRequestSchema>
 export type MoveProjectEntryRequestDto = z.infer<typeof moveProjectEntryRequestSchema>
 export type ListProjectFilesResponseDto = z.infer<typeof listProjectFilesResponseSchema>
+export type ProjectFileIndexEntryDto = z.infer<typeof projectFileIndexEntrySchema>
+export type ListProjectFileIndexResponseDto = z.infer<typeof listProjectFileIndexResponseSchema>
+export type ProjectFileCsvPreviewDto = z.infer<typeof projectFileCsvPreviewSchema>
+export type ProjectFileMarkdownPreviewDto = z.infer<typeof projectFileMarkdownPreviewSchema>
+export type ProjectFilePreviewDto = z.infer<typeof projectFilePreviewSchema>
 export type ReadProjectFileResponseDto = z.infer<typeof readProjectFileResponseSchema>
 export type WriteProjectFileResponseDto = z.infer<typeof writeProjectFileResponseSchema>
+export type ProjectFileStatDto = z.infer<typeof projectFileStatSchema>
+export type StatProjectFilesResponseDto = z.infer<typeof statProjectFilesResponseSchema>
+export type ProjectDiagnosticSeverityDto = z.infer<typeof projectDiagnosticSeveritySchema>
+export type ProjectDiagnosticDto = z.infer<typeof projectDiagnosticSchema>
+export type EditorLspInstallCommandDto = z.infer<typeof editorLspInstallCommandSchema>
+export type EditorLspInstallSuggestionDto = z.infer<typeof editorLspInstallSuggestionSchema>
+export type EditorLspServerStatusDto = z.infer<typeof editorLspServerStatusSchema>
+export type RunProjectTypecheckRequestDto = z.infer<typeof runProjectTypecheckRequestSchema>
+export type ProjectTypecheckStatusDto = z.infer<typeof projectTypecheckStatusSchema>
+export type ProjectTypecheckResponseDto = z.infer<typeof projectTypecheckResponseSchema>
+export type FormatProjectDocumentRangeDto = z.infer<typeof formatProjectDocumentRangeSchema>
+export type FormatProjectDocumentRequestDto = z.infer<typeof formatProjectDocumentRequestSchema>
+export type FormatProjectDocumentStatusDto = z.infer<typeof formatProjectDocumentStatusSchema>
+export type FormatProjectDocumentResponseDto = z.infer<typeof formatProjectDocumentResponseSchema>
+export type RunProjectLintRequestDto = z.infer<typeof runProjectLintRequestSchema>
+export type ProjectLintStatusDto = z.infer<typeof projectLintStatusSchema>
+export type ProjectLintResponseDto = z.infer<typeof projectLintResponseSchema>
+export type ReadProjectUiStateRequestDto = z.infer<typeof readProjectUiStateRequestSchema>
+export type WriteProjectUiStateRequestDto = z.infer<typeof writeProjectUiStateRequestSchema>
+export type ProjectUiStateResponseDto = z.infer<typeof projectUiStateResponseSchema>
+export type ReadAppUiStateRequestDto = z.infer<typeof readAppUiStateRequestSchema>
+export type WriteAppUiStateRequestDto = z.infer<typeof writeAppUiStateRequestSchema>
+export type AppUiStateResponseDto = z.infer<typeof appUiStateResponseSchema>
 export type CreateProjectEntryResponseDto = z.infer<typeof createProjectEntryResponseSchema>
 export type RenameProjectEntryResponseDto = z.infer<typeof renameProjectEntryResponseSchema>
 export type MoveProjectEntryResponseDto = z.infer<typeof moveProjectEntryResponseSchema>
@@ -592,6 +1006,7 @@ export type WorkspaceExplainResponseDto = z.infer<typeof workspaceExplainRespons
 export type ReplaceInProjectRequestDto = z.infer<typeof replaceInProjectRequestSchema>
 export type ReplaceInProjectResponseDto = z.infer<typeof replaceInProjectResponseSchema>
 export type GitPathsRequestDto = z.infer<typeof gitPathsRequestSchema>
+export type GitRevertPatchRequestDto = z.infer<typeof gitRevertPatchRequestSchema>
 export type GitCommitRequestDto = z.infer<typeof gitCommitRequestSchema>
 export type GitRemoteRequestDto = z.infer<typeof gitRemoteRequestSchema>
 export type GitSignatureDto = z.infer<typeof gitSignatureSchema>
@@ -617,6 +1032,7 @@ export interface ProjectListItem {
   branchLabel: string
   runtimeLabel: string
   phaseProgressPercent: number
+  startTargets: StartTargetDto[]
 }
 
 export interface RepositoryView {
@@ -675,6 +1091,7 @@ export interface RepositoryDiffView {
   repositoryId: string
   scope: RepositoryDiffScope
   patch: string
+  files: RepositoryDiffResponseDto['files']
   isEmpty: boolean
   truncated: boolean
   baseRevisionLabel: string
@@ -699,6 +1116,7 @@ export function mapProjectSummary(dto: ProjectSummaryDto): ProjectListItem {
     runtimeLabel: runtime ?? 'Runtime unavailable',
     branchLabel: branch ?? 'No branch',
     phaseProgressPercent: safePercent(dto.completedPhases, dto.totalPhases),
+    startTargets: dto.startTargets ?? [],
   }
 }
 
@@ -802,6 +1220,7 @@ export function mapRepositoryDiff(diff: RepositoryDiffResponseDto): RepositoryDi
     repositoryId: diff.repository.id,
     scope: diff.scope,
     patch,
+    files: diff.files,
     isEmpty: patch.length === 0,
     truncated: diff.truncated,
     baseRevisionLabel,

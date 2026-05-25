@@ -16,6 +16,7 @@ import { createFrameCoalescer } from '@/lib/frame-governance'
 import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import type { FileSystemNode, ProjectFileTreeBudgetInfo } from '@/src/lib/file-system-tree'
 import { FileTree } from '../file-tree'
+import type { EditorGitFileStatus } from './git-aware-editing'
 
 const MIN_WIDTH = 220
 const DEFAULT_WIDTH = 260
@@ -33,6 +34,10 @@ interface ExplorerPaneProps {
   expandedFolders: Set<string>
   loadingFolders: Set<string>
   dirtyPaths: Set<string>
+  stalePaths?: Record<string, { kind: 'changed' | 'deleted'; detectedAt: string }>
+  diagnosticCountsByPath?: Record<string, number>
+  gitStatusByPath?: Record<string, EditorGitFileStatus>
+  agentActivityCountsByPath?: Record<string, number>
   creatingEntry: { parentPath: string; type: 'file' | 'folder' } | null
   onSearchQueryChange: (value: string) => void
   onSelectFile: (path: string) => Promise<void> | void
@@ -90,6 +95,10 @@ export function ExplorerPane({
   expandedFolders,
   loadingFolders,
   dirtyPaths,
+  stalePaths,
+  diagnosticCountsByPath,
+  gitStatusByPath,
+  agentActivityCountsByPath,
   creatingEntry,
   onSearchQueryChange,
   onSelectFile,
@@ -209,16 +218,16 @@ export function ExplorerPane({
         </div>
         <div className="flex items-center gap-0.5">
           <IconButton label="New file" onClick={() => onRequestNewFile('/')}>
-            <FilePlus className="h-3.5 w-3.5" />
+            <FilePlus className="size-3" />
           </IconButton>
           <IconButton label="New folder" onClick={() => onRequestNewFolder('/')}>
-            <FolderPlus className="h-3.5 w-3.5" />
+            <FolderPlus className="size-3" />
           </IconButton>
           <IconButton label="Open find and replace" onClick={onOpenFind}>
-            <Search className="h-3.5 w-3.5" />
+            <Search className="size-3" />
           </IconButton>
           <IconButton label="Reload project" onClick={onReload}>
-            <RotateCcw className={cn('h-3.5 w-3.5', isTreeLoading && 'animate-spin')} />
+            <RotateCcw className={cn('size-3', isTreeLoading && 'animate-spin')} />
           </IconButton>
         </div>
       </div>
@@ -271,6 +280,10 @@ export function ExplorerPane({
           expandedFolders={expandedFolders}
           loadingFolders={loadingFolders}
           dirtyPaths={dirtyPaths}
+          stalePaths={stalePaths}
+          diagnosticCountsByPath={diagnosticCountsByPath}
+          gitStatusByPath={gitStatusByPath}
+          agentActivityCountsByPath={agentActivityCountsByPath}
           searchQuery={searchQuery}
           creatingEntry={creatingEntry}
           onSelectFile={(path) => {
@@ -305,9 +318,9 @@ function IconButton({
   return (
     <Button
       aria-label={label}
-      className="size-6 rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="rounded text-muted-foreground hover:bg-muted hover:text-foreground"
       onClick={onClick}
-      size="icon"
+      size="icon-xs"
       title={label}
       type="button"
       variant="ghost"

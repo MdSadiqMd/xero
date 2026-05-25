@@ -15,6 +15,7 @@ import type {
   NotificationRouteKindDto,
   OperatorApprovalView,
   Phase,
+  AgentSessionKindDto,
   ProjectDetailView,
   ProjectListItem,
   ProjectUsageSummaryDto,
@@ -25,7 +26,6 @@ import type {
   ProviderCredentialDto,
   ProviderCredentialsSnapshotDto,
   ProviderAuthSessionView,
-  ProviderProfileDiagnosticsDto,
   ReadProjectFileResponseDto,
   RenameProjectEntryRequestDto,
   RenameProjectEntryResponseDto,
@@ -75,6 +75,7 @@ import type {
   UpsertProviderCredentialRequestDto,
   VerificationRecordView,
   WriteProjectFileResponseDto,
+  XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
 import type {
   ComposerModelOptionView,
@@ -328,6 +329,7 @@ export interface AgentPaneView {
   selectedModelSelectionKey?: string | null
   selectedThinkingEffort: ProviderModelThinkingEffortDto | null
   selectedApprovalMode: RuntimeRunApprovalModeDto
+  selectedAutoCompactEnabled: boolean
   selectedPrompt: AgentRunPromptView
   runtimeRunActiveControls: RuntimeRunActiveControlSnapshotView | null
   runtimeRunPendingControls: RuntimeRunPendingControlSnapshotView | null
@@ -492,6 +494,7 @@ export interface UseXeroDesktopStateResult {
   runtimeRunActionStatus: RuntimeRunActionStatus
   pendingRuntimeRunAction: RuntimeRunActionKind | null
   runtimeRunActionError: OperatorActionErrorView | null
+  activeProjectUnreadCompletedSessionCount: number
   selectProject: (projectId: string) => Promise<void>
   prefetchProject: (projectId: string) => void
   importProject: (path?: string) => Promise<boolean>
@@ -502,7 +505,12 @@ export interface UseXeroDesktopStateResult {
   retryActiveRepositoryDiff: () => Promise<void>
   listProjectFiles: (projectId: string, path?: string) => Promise<ListProjectFilesResponseDto>
   readProjectFile: (projectId: string, path: string) => Promise<ReadProjectFileResponseDto>
-  writeProjectFile: (projectId: string, path: string, content: string) => Promise<WriteProjectFileResponseDto>
+  writeProjectFile: (
+    projectId: string,
+    path: string,
+    content: string,
+    options?: Parameters<XeroDesktopAdapter['writeProjectFile']>[3],
+  ) => Promise<WriteProjectFileResponseDto>
   revokeProjectAssetTokens?: (projectId: string, paths?: string[]) => Promise<void>
   openProjectFileExternal?: (projectId: string, path: string) => Promise<void>
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
@@ -550,14 +558,16 @@ export interface UseXeroDesktopStateResult {
       manualInput?: string | null
     },
   ) => Promise<ProviderAuthSessionView | null>
+  startXaiDeviceCodeLogin: (
+    request: { providerId: 'xai' },
+  ) => Promise<XaiDeviceCodeLoginDto>
+  pollXaiDeviceCodeLogin: (
+    request: { providerId: 'xai'; flowId: string },
+  ) => Promise<XaiDeviceCodeLoginDto>
   refreshProviderModelCatalog: (
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
-  checkProviderProfile: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
   runDoctorReport: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
   refreshMcpRegistry: (options?: { force?: boolean }) => Promise<McpRegistryDto>
   upsertMcpServer: (request: UpsertMcpServerRequestDto) => Promise<McpRegistryDto>
@@ -583,6 +593,8 @@ export interface UseXeroDesktopStateResult {
   createAgentSession: (options?: {
     title?: string | null
     summary?: string | null
+    sessionKind?: AgentSessionKindDto
+    runtimeAgentId?: RuntimeAgentIdDto | null
   }) => Promise<ProjectDetailView | null>
   selectAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
   archiveAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
@@ -598,6 +610,7 @@ export interface UseXeroDesktopStateResult {
     options?: { atIndex?: number },
   ) => 'opened' | 'focused' | 'rejected-max' | 'noop'
   setSplitterRatios: (arrangementKey: string, ratios: number[]) => void
+  acknowledgeCompletedAgentSessions: (agentSessionIds: string[]) => void
   usageSummaries: Record<string, ProjectUsageSummaryDto>
   activeUsageSummary: ProjectUsageSummaryDto | null
   activeUsageSummaryLoadError: string | null

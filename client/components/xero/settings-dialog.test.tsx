@@ -22,6 +22,8 @@ import type { AgentPaneView, OperatorActionErrorView } from '@/src/features/xero
 import type {
   McpRegistryDto,
   XeroDoctorReportDto,
+  AdrenalineModeSettingsDto,
+  ClosedLidModeSettingsDto,
   DictationSettingsDto,
   DictationStatusDto,
   EnvironmentDiscoveryStatusDto,
@@ -174,6 +176,80 @@ function makeSoulAdapter(
         updatedAt: '2026-05-01T12:00:00Z',
       }),
     ),
+  }
+}
+
+function makeAdrenalineModeSettings(
+  overrides: Partial<AdrenalineModeSettingsDto> = {},
+): AdrenalineModeSettingsDto {
+  return {
+    enabled: false,
+    assertionKind: 'prevent_idle_system_sleep',
+    active: false,
+    activeStatus: 'inactive',
+    platformSupported: true,
+    updatedAt: null,
+    diagnosticMessage: null,
+    ...overrides,
+  }
+}
+
+function makeClosedLidModeSettings(
+  overrides: Partial<ClosedLidModeSettingsDto> = {},
+): ClosedLidModeSettingsDto {
+  return {
+    enabled: false,
+    active: false,
+    activeStatus: 'inactive',
+    platformSupported: true,
+    authorizationRequired: true,
+    currentDisablesleep: false,
+    previousDisablesleep: null,
+    updatedAt: null,
+    diagnosticMessage: null,
+    ...overrides,
+  }
+}
+
+function makePowerAdapter(
+  overrides: {
+    settings?: AdrenalineModeSettingsDto
+    closedLidSettings?: ClosedLidModeSettingsDto
+    update?: NonNullable<SettingsDialogProps['powerAdapter']>['adrenalineModeUpdateSettings']
+    closedLidUpdate?: NonNullable<
+      SettingsDialogProps['powerAdapter']
+    >['closedLidModeUpdateSettings']
+  } = {},
+): NonNullable<SettingsDialogProps['powerAdapter']> {
+  const settings = overrides.settings ?? makeAdrenalineModeSettings()
+  const closedLidSettings = overrides.closedLidSettings ?? makeClosedLidModeSettings()
+  return {
+    isDesktopRuntime: vi.fn(() => true),
+    adrenalineModeSettings: vi.fn(async () => settings),
+    adrenalineModeUpdateSettings:
+      overrides.update ??
+      vi.fn(async (request) =>
+        makeAdrenalineModeSettings({
+          enabled: request.enabled,
+          assertionKind: request.assertionKind,
+          active: request.enabled,
+          activeStatus: request.enabled ? 'active' : 'inactive',
+          updatedAt: '2026-05-18T12:00:00Z',
+        }),
+      ),
+    closedLidModeSettings: vi.fn(async () => closedLidSettings),
+    closedLidModeUpdateSettings:
+      overrides.closedLidUpdate ??
+      vi.fn(async (request) =>
+        makeClosedLidModeSettings({
+          enabled: request.enabled,
+          active: request.enabled,
+          activeStatus: request.enabled ? 'active' : 'inactive',
+          currentDisablesleep: request.enabled,
+          previousDisablesleep: request.enabled ? false : null,
+          updatedAt: '2026-05-18T12:01:00Z',
+        }),
+      ),
   }
 }
 
@@ -382,6 +458,7 @@ function makeMcpRegistry(overrides: Partial<McpRegistryDto> = {}): McpRegistryDt
 
 function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegistryDto {
   return {
+    contractVersion: 1,
     projectId: 'project-1',
     reloadedAt: '2026-04-24T05:00:00Z',
     sources: {
@@ -411,6 +488,7 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
       updatedAt: '2026-04-24T05:00:00Z',
     },
     diagnostics: [],
+    contractDiagnostics: [],
     plugins: [],
     pluginCommands: [],
     entries: [
@@ -669,6 +747,7 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> & Recor
     doctorReportError: null,
     onRunDoctorReport: vi.fn(async () => makeDoctorReport()),
     soulAdapter: makeSoulAdapter(),
+    powerAdapter: makePowerAdapter(),
     mcpRegistry: makeMcpRegistry(),
     mcpImportDiagnostics: [],
     mcpRegistryLoadStatus: 'ready',
@@ -760,6 +839,10 @@ describe('SettingsDialog', () => {
                 provider_id: 'openrouter',
                 api_key: request?.revealSensitive ? 'sk-test' : '[redacted]',
               },
+              displayValues: {
+                provider_id: 'openrouter',
+                api_key: request?.revealSensitive ? 'sk-test' : '[redacted]',
+              },
             },
           ],
           rowCount: 1,
@@ -790,6 +873,24 @@ describe('SettingsDialog', () => {
     openUrlMock.mockReset()
   })
 
+  it('does not expose the project records view in settings navigation', async () => {
+    render(<SettingsDialog {...makeSettingsDialogProps()} />)
+
+    expect(await screen.findByRole('button', { name: 'Project State' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Project Records' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Power' })).toBeVisible()
+  })
+
+  it('keeps settings section tab hover states immediate', async () => {
+    render(<SettingsDialog {...makeSettingsDialogProps()} />)
+
+    expect(await screen.findByRole('button', { name: 'Account' })).toBeVisible()
+
+    for (const name of ['Account', 'Providers', 'Plugins', 'Workspace Index']) {
+      expect(screen.getByRole('button', { name }).className).not.toMatch(/\btransition-(?!none\b)[^\s]+/)
+    }
+  })
+
   it('shows local storage data from the development section with sensitive values redacted by default', async () => {
     render(
       <SettingsDialog
@@ -799,7 +900,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    expect(await screen.findByText('Local storage')).toBeVisible()
+    expect(await screen.findByText('Local storage', {}, { timeout: 5000 })).toBeVisible()
     expect(await screen.findByText('provider_credentials')).toBeVisible()
     expect(await screen.findByText('[redacted]')).toBeVisible()
     expect(screen.queryByText('sk-test')).not.toBeInTheDocument()
@@ -1022,6 +1123,139 @@ describe('SettingsDialog', () => {
         },
       })
     })
+  })
+
+  it('loads Power settings and saves the Adrenaline Mode toggle', async () => {
+    const powerAdapter = makePowerAdapter()
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'power',
+          powerAdapter,
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Power' })).toBeVisible()
+    expect(await screen.findByText('Adrenaline Mode')).toBeVisible()
+    expect(await screen.findByText('Closed-Lid Mode')).toBeVisible()
+    const toggle = screen.getByRole('switch', { name: 'Adrenaline Mode' })
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(powerAdapter.adrenalineModeUpdateSettings).toHaveBeenCalledWith({
+        enabled: true,
+        assertionKind: 'prevent_idle_system_sleep',
+      }),
+    )
+    expect(await screen.findByText('Active')).toBeVisible()
+  })
+
+  it('confirms and saves the Closed-Lid Mode toggle', async () => {
+    const powerAdapter = makePowerAdapter()
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'power',
+          powerAdapter,
+        })}
+      />,
+    )
+
+    const toggle = await screen.findByRole('switch', { name: 'Closed-Lid Mode' })
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(toggle)
+    expect(await screen.findByRole('alertdialog')).toBeVisible()
+    expect(screen.getByText('Enable Closed-Lid Mode?')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+
+    await waitFor(() =>
+      expect(powerAdapter.closedLidModeUpdateSettings).toHaveBeenCalledWith({
+        enabled: true,
+        acknowledgeGlobalPowerChange: true,
+      }),
+    )
+    expect((await screen.findAllByText('Active')).length).toBeGreaterThan(0)
+  })
+
+  it('rolls back the Closed-Lid Mode toggle when saving fails', async () => {
+    const powerAdapter = makePowerAdapter({
+      closedLidUpdate: vi.fn(async () => {
+        throw new Error('macOS authorization was cancelled.')
+      }),
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'power',
+          powerAdapter,
+        })}
+      />,
+    )
+
+    const toggle = await screen.findByRole('switch', { name: 'Closed-Lid Mode' })
+    fireEvent.click(toggle)
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+
+    expect(await screen.findByText('macOS authorization was cancelled.')).toBeVisible()
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('rolls back the Adrenaline Mode toggle when saving fails', async () => {
+    const powerAdapter = makePowerAdapter({
+      update: vi.fn(async () => {
+        throw new Error('IOKit refused the assertion.')
+      }),
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'power',
+          powerAdapter,
+        })}
+      />,
+    )
+
+    const toggle = await screen.findByRole('switch', { name: 'Adrenaline Mode' })
+    fireEvent.click(toggle)
+
+    expect(await screen.findByText('IOKit refused the assertion.')).toBeVisible()
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('renders unsupported power modes as disabled on unsupported platforms', async () => {
+    const powerAdapter = makePowerAdapter({
+      settings: makeAdrenalineModeSettings({
+        activeStatus: 'unsupported',
+        platformSupported: false,
+      }),
+      closedLidSettings: makeClosedLidModeSettings({
+        activeStatus: 'unsupported',
+        platformSupported: false,
+        authorizationRequired: false,
+      }),
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'power',
+          powerAdapter,
+        })}
+      />,
+    )
+
+    expect((await screen.findAllByText('Not supported')).length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByRole('switch', { name: 'Adrenaline Mode' })).toBeDisabled()
+    expect(screen.getByRole('switch', { name: 'Closed-Lid Mode' })).toBeDisabled()
   })
 
   it('shows route target validation errors and omits project metadata when creating routes', async () => {
@@ -1420,7 +1654,7 @@ describe('SettingsDialog', () => {
     expect(screen.getAllByText('Open Panel').length).toBeGreaterThan(0)
     expect(screen.getByText('Project automation helpers.')).toBeVisible()
     expect(screen.getByText(/1 .* 1 command/)).toBeVisible()
-    expect(screen.getByText(/1 projected/)).toBeVisible()
+    expect(screen.getByText('/tmp/xero-plugins')).toBeVisible()
 
     fireEvent.click(screen.getByText('Plugin metadata'))
     expect(screen.getAllByText('/tmp/xero-plugins/acme-tools').length).toBeGreaterThan(0)

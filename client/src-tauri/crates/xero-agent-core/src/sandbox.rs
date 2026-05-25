@@ -296,7 +296,7 @@ impl Default for SandboxExecutionContext {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxExecutionDenied {
     pub error: ToolExecutionError,
-    pub metadata: SandboxExecutionMetadata,
+    pub metadata: Box<SandboxExecutionMetadata>,
 }
 
 pub type ToolSandboxResult = Result<SandboxExecutionMetadata, SandboxExecutionDenied>;
@@ -411,7 +411,7 @@ pub struct SandboxedProcessError {
     pub code: String,
     pub message: String,
     pub retryable: bool,
-    pub metadata: SandboxExecutionMetadata,
+    pub metadata: Box<SandboxExecutionMetadata>,
 }
 
 impl SandboxedProcessError {
@@ -432,14 +432,14 @@ impl SandboxedProcessError {
                 code: code.into(),
                 message,
                 retryable,
-                metadata,
+                metadata: Box::new(metadata),
             };
         }
         Self {
             code: code.into(),
             message: message.into(),
             retryable,
-            metadata,
+            metadata: Box::new(metadata),
         }
     }
 }
@@ -1420,12 +1420,6 @@ fn normalize_user_path(path: &str) -> Result<NormalizedUserPath, String> {
         components.push(component.to_string());
     }
 
-    if components.is_empty() {
-        return Err(format!(
-            "Sandbox denied path `{path}` because it does not name a workspace file."
-        ));
-    }
-
     Ok(NormalizedUserPath {
         rendered: if is_absolute {
             slash_path
@@ -1538,7 +1532,7 @@ fn deny(
     let reason = reason.into();
     Err(SandboxExecutionDenied {
         error: ToolExecutionError::sandbox_denied(code, reason.clone()),
-        metadata: metadata.denied(reason),
+        metadata: Box::new(metadata.denied(reason)),
     })
 }
 
@@ -1585,6 +1579,7 @@ mod tests {
             description: "Test descriptor.".into(),
             input_schema: json!({ "type": "object" }),
             capability_tags: Vec::new(),
+            application_metadata: Default::default(),
             effect_class,
             mutability,
             sandbox_requirement,
@@ -1656,6 +1651,24 @@ mod tests {
             denied.metadata.exit_classification,
             SandboxExitClassification::DeniedBySandbox
         );
+    }
+
+    #[test]
+    fn sandbox_allows_command_workspace_root_cwd_shorthand() {
+        let descriptor = descriptor(
+            "command",
+            ToolEffectClass::CommandExecution,
+            ToolMutability::Mutating,
+            ToolSandboxRequirement::WorkspaceWrite,
+        );
+
+        sandbox()
+            .evaluate(
+                &descriptor,
+                &call(json!({ "argv": ["true"], "cwd": "." })),
+                &ToolExecutionContext::default(),
+            )
+            .expect("workspace root cwd shorthand should be allowed");
     }
 
     #[test]

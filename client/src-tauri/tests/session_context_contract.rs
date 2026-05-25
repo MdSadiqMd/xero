@@ -140,6 +140,7 @@ fn runtime_stream_items_share_the_transcript_contract() {
             kind: RuntimeStreamItemKind::Tool,
             run_id: "runtime-run-1".into(),
             sequence: 2,
+            updated_sequence: None,
             session_id: Some("runtime-session-1".into()),
             flow_id: None,
             text: Some("Tool finished.".into()),
@@ -147,6 +148,10 @@ fn runtime_stream_items_share_the_transcript_contract() {
             tool_call_id: Some("tool-1".into()),
             tool_name: Some("read".into()),
             tool_state: Some(RuntimeToolCallState::Succeeded),
+            code_change_group_id: None,
+            code_commit_id: None,
+            code_workspace_epoch: None,
+            code_patch_availability: None,
             tool_summary: None,
             tool_result_preview: None,
             skill_id: None,
@@ -158,17 +163,37 @@ fn runtime_stream_items_share_the_transcript_contract() {
             action_id: None,
             boundary_id: None,
             action_type: None,
+            answer_shape: None,
+            options: None,
+            allow_multiple: None,
             title: Some("Tool".into()),
             detail: None,
+            plan_id: None,
+            plan_items: None,
+            plan_last_changed_id: None,
             code: None,
             message: None,
             retryable: None,
+            subagent_id: None,
+            subagent_role: None,
+            subagent_role_label: None,
+            subagent_run_id: None,
+            subagent_status: None,
+            subagent_used_tool_calls: None,
+            subagent_max_tool_calls: None,
+            subagent_used_tokens: None,
+            subagent_max_tokens: None,
+            subagent_used_cost_micros: None,
+            subagent_max_cost_micros: None,
+            subagent_result_summary: None,
+            subagent_prompt: None,
             created_at: "2026-04-26T10:00:02Z".into(),
         },
         RuntimeStreamItemDto {
             kind: RuntimeStreamItemKind::Transcript,
             run_id: "runtime-run-1".into(),
             sequence: 1,
+            updated_sequence: None,
             session_id: Some("runtime-session-1".into()),
             flow_id: None,
             text: Some("Assistant response".into()),
@@ -176,6 +201,10 @@ fn runtime_stream_items_share_the_transcript_contract() {
             tool_call_id: None,
             tool_name: None,
             tool_state: None,
+            code_change_group_id: None,
+            code_commit_id: None,
+            code_workspace_epoch: None,
+            code_patch_availability: None,
             tool_summary: None,
             tool_result_preview: None,
             skill_id: None,
@@ -187,11 +216,30 @@ fn runtime_stream_items_share_the_transcript_contract() {
             action_id: None,
             boundary_id: None,
             action_type: None,
+            answer_shape: None,
+            options: None,
+            allow_multiple: None,
             title: Some("Transcript".into()),
             detail: None,
+            plan_id: None,
+            plan_items: None,
+            plan_last_changed_id: None,
             code: None,
             message: None,
             retryable: None,
+            subagent_id: None,
+            subagent_role: None,
+            subagent_role_label: None,
+            subagent_run_id: None,
+            subagent_status: None,
+            subagent_used_tool_calls: None,
+            subagent_max_tool_calls: None,
+            subagent_used_tokens: None,
+            subagent_max_tokens: None,
+            subagent_used_cost_micros: None,
+            subagent_max_cost_micros: None,
+            subagent_result_summary: None,
+            subagent_prompt: None,
             created_at: "2026-04-26T10:00:01Z".into(),
         },
     ];
@@ -231,6 +279,7 @@ fn archived_empty_sessions_have_a_valid_session_transcript_shape() {
         summary: "No runs yet.".into(),
         status: AgentSessionStatus::Archived,
         selected: false,
+        remote_visible: false,
         created_at: T0.into(),
         updated_at: "2026-04-26T10:05:00Z".into(),
         archived_at: Some("2026-04-26T10:05:00Z".into()),
@@ -587,6 +636,12 @@ fn context_snapshot_contract_validates_budget_and_contributor_integrity() {
     assert!(validate_context_snapshot_contract(&invalid_visibility)
         .expect_err("model-visible excluded contributor rejected")
         .contains("model-visible"));
+
+    let mut invalid_empty_text = snapshot.clone();
+    invalid_empty_text.contributors[1].text = Some(String::new());
+    assert!(validate_context_snapshot_contract(&invalid_empty_text)
+        .expect_err("empty optional contributor text rejected")
+        .contains("optional text"));
 }
 
 #[test]
@@ -610,6 +665,10 @@ fn provider_context_budget_tokens_cover_known_model_families() {
     assert_eq!(
         provider_context_budget_tokens("github_models", "openai/gpt-4.1"),
         Some(128_000)
+    );
+    assert_eq!(
+        provider_context_budget_tokens("deepseek", "deepseek-v4-pro"),
+        Some(1_000_000)
     );
     assert_eq!(
         provider_context_budget_tokens("google", "gemini-2.5-pro"),
@@ -655,6 +714,7 @@ fn sample_snapshot() -> AgentRunSnapshotRecord {
                 run_id: RUN_ID.into(),
                 role: AgentMessageRole::System,
                 content: "System prompt".into(),
+                provider_metadata_json: None,
                 created_at: "2026-04-26T10:00:00Z".into(),
                 attachments: Vec::new(),
             },
@@ -664,6 +724,7 @@ fn sample_snapshot() -> AgentRunSnapshotRecord {
                 run_id: RUN_ID.into(),
                 role: AgentMessageRole::User,
                 content: "Please use api_key=sk-live-secret".into(),
+                provider_metadata_json: None,
                 created_at: "2026-04-26T10:00:01Z".into(),
                 attachments: Vec::new(),
             },
@@ -673,6 +734,7 @@ fn sample_snapshot() -> AgentRunSnapshotRecord {
                 run_id: RUN_ID.into(),
                 role: AgentMessageRole::Assistant,
                 content: "I will inspect the project first.".into(),
+                provider_metadata_json: None,
                 created_at: "2026-04-26T10:00:02Z".into(),
                 attachments: Vec::new(),
             },
@@ -724,6 +786,7 @@ fn sample_snapshot() -> AgentRunSnapshotRecord {
             top_level_run_id: RUN_ID.into(),
             subagent_id: None,
             subagent_role: None,
+            change_group_id: None,
             path: "/Users/sn0w/.config/xero/credentials.json".into(),
             operation: "write".into(),
             old_hash: Some(sha()),
@@ -763,6 +826,14 @@ fn memory(
     text: &str,
     created_at: &str,
 ) -> SessionMemoryRecordDto {
+    let retrievable = review_state == SessionMemoryReviewStateDto::Approved && enabled;
+    let promotion_status = match (&review_state, enabled) {
+        (SessionMemoryReviewStateDto::Candidate, _) => "candidate",
+        (SessionMemoryReviewStateDto::Approved, true) => "approved_enabled",
+        (SessionMemoryReviewStateDto::Approved, false) => "approved_disabled",
+        (SessionMemoryReviewStateDto::Rejected, _) => "rejected",
+    };
+
     SessionMemoryRecordDto {
         contract_version: XERO_SESSION_CONTEXT_CONTRACT_VERSION,
         memory_id: memory_id.into(),
@@ -783,6 +854,24 @@ fn memory(
         updated_at: created_at.into(),
         diagnostic: None,
         redaction: SessionContextRedactionDto::public(),
+        freshness_state: "source_unknown".into(),
+        freshness_checked_at: None,
+        stale_reason: None,
+        supersedes_id: None,
+        superseded_by_id: None,
+        invalidated_at: None,
+        fact_key: None,
+        retrievable,
+        retrievability_reason: if retrievable {
+            "retrievable"
+        } else {
+            "not_approved_or_disabled"
+        }
+        .into(),
+        promotion_status: promotion_status.into(),
+        provenance: json!({}),
+        retrieval_impact: json!({}),
+        conflict: json!({}),
     }
 }
 

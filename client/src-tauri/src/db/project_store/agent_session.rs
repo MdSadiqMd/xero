@@ -13,6 +13,7 @@ use super::{
 
 pub const DEFAULT_AGENT_SESSION_ID: &str = "agent-session-main";
 pub const DEFAULT_AGENT_SESSION_TITLE: &str = "New Chat";
+pub const COMPUTER_USE_AGENT_SESSION_TITLE: &str = "Computer Use";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSessionStatus {
@@ -20,14 +21,22 @@ pub enum AgentSessionStatus {
     Archived,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentSessionKind {
+    Standard,
+    ComputerUse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionRecord {
     pub project_id: String,
     pub agent_session_id: String,
+    pub session_kind: AgentSessionKind,
     pub title: String,
     pub summary: String,
     pub status: AgentSessionStatus,
     pub selected: bool,
+    pub remote_visible: bool,
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
@@ -43,6 +52,7 @@ pub struct AgentSessionCreateRecord {
     pub title: String,
     pub summary: String,
     pub selected: bool,
+    pub session_kind: AgentSessionKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,10 +68,12 @@ pub struct AgentSessionUpdateRecord {
 struct RawAgentSessionRow {
     project_id: String,
     agent_session_id: String,
+    session_kind: String,
     title: String,
     summary: String,
     status: String,
     selected: i64,
+    remote_visible: i64,
     created_at: String,
     updated_at: String,
     archived_at: Option<String>,
@@ -119,18 +131,21 @@ pub fn create_agent_session(
             INSERT INTO agent_sessions (
                 project_id,
                 agent_session_id,
+                session_kind,
                 title,
                 summary,
                 status,
                 selected,
+                remote_visible,
                 created_at,
                 updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7)
+            VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, 0, ?7, ?8)
             "#,
             params![
                 payload.project_id.as_str(),
                 agent_session_id.as_str(),
+                agent_session_kind_sql_value(payload.session_kind),
                 payload.title.trim(),
                 payload.summary.as_str(),
                 if payload.selected { 1 } else { 0 },
@@ -194,17 +209,27 @@ pub fn list_agent_sessions(
     let database_path = database_path_for_repo(repo_root);
     let connection = open_runtime_database(repo_root, &database_path)?;
     read_project_row(&connection, &database_path, repo_root, project_id)?;
+    read_agent_sessions_with_connection(&connection, &database_path, project_id, include_archived)
+}
 
+pub(crate) fn read_agent_sessions_with_connection(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    include_archived: bool,
+) -> Result<Vec<AgentSessionRecord>, CommandError> {
     let mut statement = connection
         .prepare(
             r#"
             SELECT
                 project_id,
                 agent_session_id,
+                session_kind,
                 title,
                 summary,
                 status,
                 selected,
+                remote_visible,
                 created_at,
                 updated_at,
                 archived_at,
@@ -234,16 +259,18 @@ pub fn list_agent_sessions(
                 Ok(RawAgentSessionRow {
                     project_id: row.get(0)?,
                     agent_session_id: row.get(1)?,
-                    title: row.get(2)?,
-                    summary: row.get(3)?,
-                    status: row.get(4)?,
-                    selected: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    archived_at: row.get(8)?,
-                    last_run_id: row.get(9)?,
-                    last_runtime_kind: row.get(10)?,
-                    last_provider_id: row.get(11)?,
+                    session_kind: row.get(2)?,
+                    title: row.get(3)?,
+                    summary: row.get(4)?,
+                    status: row.get(5)?,
+                    selected: row.get(6)?,
+                    remote_visible: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    archived_at: row.get(10)?,
+                    last_run_id: row.get(11)?,
+                    last_runtime_kind: row.get(12)?,
+                    last_provider_id: row.get(13)?,
                 })
             },
         )
@@ -269,11 +296,11 @@ pub fn list_agent_sessions(
                     ),
                 )
             })?,
-            &database_path,
+            database_path,
         )?;
         session.lineage = read_agent_session_lineage_for_child(
-            &connection,
-            &database_path,
+            connection,
+            database_path,
             &session.project_id,
             &session.agent_session_id,
         )?;
@@ -445,7 +472,7 @@ pub fn archive_agent_session(
                 format!(
                     "Xero cannot archive agent session `{agent_session_id}` for project `{project_id}` while run `{run_id}` is {status}. Stop the run first."
                 ),
-            ))
+            ));
         }
         Err(SqlError::QueryReturnedNoRows) => {}
         Err(error) => {
@@ -455,7 +482,7 @@ pub fn archive_agent_session(
                     "Xero could not inspect runtime runs for agent session `{agent_session_id}` in {}: {error}",
                     database_path.display()
                 ),
-            ))
+            ));
         }
     }
 
@@ -585,11 +612,13 @@ pub fn delete_agent_session(
     let existing =
         read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
             .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
-    if existing.status != AgentSessionStatus::Archived {
+    let can_delete_active_blank_session =
+        is_blank_new_agent_session(&connection, &database_path, &existing)?;
+    if existing.status != AgentSessionStatus::Archived && !can_delete_active_blank_session {
         return Err(CommandError::user_fixable(
             "agent_session_not_archived",
             format!(
-                "Xero cannot permanently delete agent session `{agent_session_id}` for project `{project_id}` because it is not archived. Archive it first."
+                "Xero cannot permanently delete agent session `{agent_session_id}` for project `{project_id}` because it is not archived or a blank new session. Archive it first."
             ),
         ));
     }
@@ -610,13 +639,20 @@ pub fn delete_agent_session(
         )
     })?;
 
+    prepare_code_history_for_agent_session_delete(
+        &transaction,
+        &database_path,
+        project_id,
+        agent_session_id,
+        now.as_str(),
+    )?;
+
     transaction
         .execute(
             r#"
             DELETE FROM agent_sessions
             WHERE project_id = ?1
               AND agent_session_id = ?2
-              AND status = 'archived'
             "#,
             params![project_id, agent_session_id],
         )
@@ -651,6 +687,247 @@ pub fn delete_agent_session(
     if !cascade_run_ids.is_empty() {
         clear_memory_runs_for_deletion(repo_root, project_id, &cascade_run_ids)?;
     }
+
+    Ok(())
+}
+
+fn is_blank_new_agent_session(
+    connection: &Connection,
+    database_path: &Path,
+    session: &AgentSessionRecord,
+) -> Result<bool, CommandError> {
+    if session.status != AgentSessionStatus::Active
+        || !session
+            .title
+            .trim()
+            .eq_ignore_ascii_case(DEFAULT_AGENT_SESSION_TITLE)
+        || !session.summary.trim().is_empty()
+        || session.last_run_id.is_some()
+        || session.last_runtime_kind.is_some()
+        || session.last_provider_id.is_some()
+        || session.lineage.is_some()
+    {
+        return Ok(false);
+    }
+
+    let dependent_count: i64 = connection
+        .query_row(
+            r#"
+            SELECT
+                (SELECT COUNT(*)
+                 FROM runtime_runs
+                 WHERE project_id = ?1
+                   AND agent_session_id = ?2)
+              + (SELECT COUNT(*)
+                 FROM agent_runs
+                 WHERE project_id = ?1
+                   AND agent_session_id = ?2)
+              + (SELECT COUNT(*)
+                 FROM agent_session_lineage
+                 WHERE project_id = ?1
+                   AND child_agent_session_id = ?2)
+            "#,
+            params![
+                session.project_id.as_str(),
+                session.agent_session_id.as_str()
+            ],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_query_failed",
+                format!(
+                    "Xero could not inspect blank agent-session state in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    Ok(dependent_count == 0)
+}
+
+fn prepare_code_history_for_agent_session_delete(
+    transaction: &Transaction<'_>,
+    database_path: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+    updated_at: &str,
+) -> Result<(), CommandError> {
+    transaction
+        .execute(
+            r#"
+            UPDATE code_commits
+            SET parent_commit_id = NULL
+            WHERE project_id = ?1
+              AND parent_commit_id IN (
+                SELECT commit_id
+                FROM code_commits
+                WHERE project_id = ?1
+                  AND agent_session_id = ?2
+              )
+            "#,
+            params![project_id, agent_session_id],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Xero could not detach code commit parent links for agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE code_workspace_heads
+            SET head_id = NULL,
+                tree_id = NULL,
+                updated_at = ?3
+            WHERE project_id = ?1
+              AND head_id IN (
+                SELECT commit_id
+                FROM code_commits
+                WHERE project_id = ?1
+                  AND agent_session_id = ?2
+              )
+            "#,
+            params![project_id, agent_session_id, updated_at],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Xero could not clear code workspace head for agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE code_path_epochs
+            SET commit_id = NULL,
+                updated_at = ?3
+            WHERE project_id = ?1
+              AND commit_id IN (
+                SELECT commit_id
+                FROM code_commits
+                WHERE project_id = ?1
+                  AND agent_session_id = ?2
+              )
+            "#,
+            params![project_id, agent_session_id, updated_at],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Xero could not clear code path epochs for agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE code_history_operations
+            SET result_commit_id = NULL,
+                updated_at = ?3
+            WHERE project_id = ?1
+              AND result_commit_id IN (
+                SELECT commit_id
+                FROM code_commits
+                WHERE project_id = ?1
+                  AND agent_session_id = ?2
+              )
+            "#,
+            params![project_id, agent_session_id, updated_at],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Xero could not clear code history commit references for agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE code_history_operations
+            SET target_change_group_id = CASE
+                    WHEN target_change_group_id IN (
+                        SELECT change_group_id
+                        FROM code_change_groups
+                        WHERE project_id = ?1
+                          AND agent_session_id = ?2
+                    )
+                    THEN NULL
+                    ELSE target_change_group_id
+                END,
+                result_change_group_id = CASE
+                    WHEN result_change_group_id IN (
+                        SELECT change_group_id
+                        FROM code_change_groups
+                        WHERE project_id = ?1
+                          AND agent_session_id = ?2
+                    )
+                    THEN NULL
+                    ELSE result_change_group_id
+                END,
+                updated_at = ?3
+            WHERE project_id = ?1
+              AND (
+                target_change_group_id IN (
+                    SELECT change_group_id
+                    FROM code_change_groups
+                    WHERE project_id = ?1
+                      AND agent_session_id = ?2
+                )
+                OR result_change_group_id IN (
+                    SELECT change_group_id
+                    FROM code_change_groups
+                    WHERE project_id = ?1
+                      AND agent_session_id = ?2
+                )
+              )
+            "#,
+            params![project_id, agent_session_id, updated_at],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Xero could not clear code history change-group references for agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    transaction
+        .execute(
+            r#"
+            DELETE FROM code_commits
+            WHERE project_id = ?1
+              AND agent_session_id = ?2
+            "#,
+            params![project_id, agent_session_id],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Xero could not delete code commits for agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
 
     Ok(())
 }
@@ -842,10 +1119,12 @@ pub(crate) fn read_agent_session_row(
         SELECT
             project_id,
             agent_session_id,
+            session_kind,
             title,
             summary,
             status,
             selected,
+            remote_visible,
             created_at,
             updated_at,
             archived_at,
@@ -861,16 +1140,18 @@ pub(crate) fn read_agent_session_row(
             Ok(RawAgentSessionRow {
                 project_id: row.get(0)?,
                 agent_session_id: row.get(1)?,
-                title: row.get(2)?,
-                summary: row.get(3)?,
-                status: row.get(4)?,
-                selected: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                archived_at: row.get(8)?,
-                last_run_id: row.get(9)?,
-                last_runtime_kind: row.get(10)?,
-                last_provider_id: row.get(11)?,
+                session_kind: row.get(2)?,
+                title: row.get(3)?,
+                summary: row.get(4)?,
+                status: row.get(5)?,
+                selected: row.get(6)?,
+                remote_visible: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                archived_at: row.get(10)?,
+                last_run_id: row.get(11)?,
+                last_runtime_kind: row.get(12)?,
+                last_provider_id: row.get(13)?,
             })
         },
     );
@@ -907,10 +1188,12 @@ pub(crate) fn read_selected_agent_session_row(
         SELECT
             project_id,
             agent_session_id,
+            session_kind,
             title,
             summary,
             status,
             selected,
+            remote_visible,
             created_at,
             updated_at,
             archived_at,
@@ -927,16 +1210,18 @@ pub(crate) fn read_selected_agent_session_row(
             Ok(RawAgentSessionRow {
                 project_id: row.get(0)?,
                 agent_session_id: row.get(1)?,
-                title: row.get(2)?,
-                summary: row.get(3)?,
-                status: row.get(4)?,
-                selected: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                archived_at: row.get(8)?,
-                last_run_id: row.get(9)?,
-                last_runtime_kind: row.get(10)?,
-                last_provider_id: row.get(11)?,
+                session_kind: row.get(2)?,
+                title: row.get(3)?,
+                summary: row.get(4)?,
+                status: row.get(5)?,
+                selected: row.get(6)?,
+                remote_visible: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                archived_at: row.get(10)?,
+                last_run_id: row.get(11)?,
+                last_runtime_kind: row.get(12)?,
+                last_provider_id: row.get(13)?,
             })
         },
     );
@@ -998,6 +1283,15 @@ fn decode_agent_session_row(
             ),
         )
     })?;
+    let session_kind = parse_agent_session_kind(&row.session_kind).map_err(|details| {
+        CommandError::system_fault(
+            "agent_session_decode_failed",
+            format!(
+                "Xero found malformed agent-session kind in {}: {details}",
+                database_path.display()
+            ),
+        )
+    })?;
     let selected = match row.selected {
         0 => false,
         1 => true,
@@ -1008,7 +1302,20 @@ fn decode_agent_session_row(
                     "Xero found malformed agent-session selected flag `{other}` in {}.",
                     database_path.display()
                 ),
-            ))
+            ));
+        }
+    };
+    let remote_visible = match row.remote_visible {
+        0 => false,
+        1 => true,
+        other => {
+            return Err(CommandError::system_fault(
+                "agent_session_decode_failed",
+                format!(
+                    "Xero found malformed agent-session remote_visible flag `{other}` in {}.",
+                    database_path.display()
+                ),
+            ));
         }
     };
 
@@ -1050,6 +1357,7 @@ fn decode_agent_session_row(
             database_path,
             "agent_session_decode_failed",
         )?,
+        session_kind,
         title: require_non_empty_owned(
             row.title,
             "title",
@@ -1059,6 +1367,7 @@ fn decode_agent_session_row(
         summary: row.summary,
         status,
         selected,
+        remote_visible,
         created_at: require_non_empty_owned(
             row.created_at,
             "created_at",
@@ -1100,6 +1409,23 @@ fn parse_agent_session_status(value: &str) -> Result<AgentSessionStatus, String>
         "archived" => Ok(AgentSessionStatus::Archived),
         other => Err(format!(
             "Field `status` must be a known agent-session status, found `{other}`."
+        )),
+    }
+}
+
+pub(crate) fn agent_session_kind_sql_value(kind: AgentSessionKind) -> &'static str {
+    match kind {
+        AgentSessionKind::Standard => "standard",
+        AgentSessionKind::ComputerUse => "computer_use",
+    }
+}
+
+fn parse_agent_session_kind(value: &str) -> Result<AgentSessionKind, String> {
+    match value {
+        "standard" => Ok(AgentSessionKind::Standard),
+        "computer_use" => Ok(AgentSessionKind::ComputerUse),
+        other => Err(format!(
+            "Field `session_kind` must be a known agent-session kind, found `{other}`."
         )),
     }
 }
@@ -1298,6 +1624,85 @@ mod tests {
     }
 
     #[test]
+    fn deleting_active_blank_new_session_creates_selected_replacement() {
+        let project = import_test_project();
+        force_archive_session(
+            &project.database_path,
+            &project.project_id,
+            DEFAULT_AGENT_SESSION_ID,
+            "2026-04-15T21:00:00Z",
+        );
+        let blank = create_agent_session(
+            &project.repo_root,
+            &AgentSessionCreateRecord {
+                project_id: project.project_id.clone(),
+                title: DEFAULT_AGENT_SESSION_TITLE.into(),
+                summary: String::new(),
+                selected: true,
+                session_kind: crate::db::project_store::AgentSessionKind::Standard,
+            },
+        )
+        .expect("create blank new session");
+
+        delete_agent_session(
+            &project.repo_root,
+            &project.project_id,
+            &blank.agent_session_id,
+        )
+        .expect("delete active blank default session");
+
+        let active = list_agent_sessions(&project.repo_root, &project.project_id, false)
+            .expect("list active sessions");
+        assert_eq!(active.len(), 1);
+        let replacement = &active[0];
+        assert_ne!(replacement.agent_session_id, blank.agent_session_id);
+        assert_eq!(replacement.title, DEFAULT_AGENT_SESSION_TITLE);
+        assert_eq!(replacement.status, AgentSessionStatus::Active);
+        assert!(replacement.selected);
+
+        let deleted = get_agent_session(
+            &project.repo_root,
+            &project.project_id,
+            &blank.agent_session_id,
+        )
+        .expect("read deleted session");
+        assert!(deleted.is_none());
+    }
+
+    #[test]
+    fn deleting_active_nonblank_session_still_requires_archive() {
+        let project = import_test_project();
+
+        update_agent_session(
+            &project.repo_root,
+            &AgentSessionUpdateRecord {
+                project_id: project.project_id.clone(),
+                agent_session_id: DEFAULT_AGENT_SESSION_ID.to_string(),
+                title: Some("Planned Work".into()),
+                summary: None,
+                selected: None,
+            },
+        )
+        .expect("rename default session");
+
+        let error = delete_agent_session(
+            &project.repo_root,
+            &project.project_id,
+            DEFAULT_AGENT_SESSION_ID,
+        )
+        .expect_err("active renamed session should not be deleted");
+
+        assert_eq!(error.code, "agent_session_not_archived");
+        assert!(get_agent_session(
+            &project.repo_root,
+            &project.project_id,
+            DEFAULT_AGENT_SESSION_ID,
+        )
+        .expect("read preserved session")
+        .is_some());
+    }
+
+    #[test]
     fn selecting_session_preserves_recency_order_and_timestamp() {
         let project = import_test_project();
         let middle = create_agent_session(
@@ -1307,6 +1712,7 @@ mod tests {
                 title: "Middle".into(),
                 summary: String::new(),
                 selected: false,
+                session_kind: crate::db::project_store::AgentSessionKind::Standard,
             },
         )
         .expect("create middle session");
@@ -1317,6 +1723,7 @@ mod tests {
                 title: "Top".into(),
                 summary: String::new(),
                 selected: false,
+                session_kind: crate::db::project_store::AgentSessionKind::Standard,
             },
         )
         .expect("create top session");

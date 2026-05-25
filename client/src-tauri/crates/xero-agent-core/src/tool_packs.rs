@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 pub const DOMAIN_TOOL_PACK_CONTRACT_VERSION: u32 = 1;
+const TOOL_PACK_POLICY_DISABLED_CHECK_ID: &str = "tool_pack_policy_disabled";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -15,12 +16,24 @@ pub struct DomainToolPackManifest {
     pub tool_groups: Vec<String>,
     pub tools: Vec<String>,
     pub capabilities: Vec<String>,
+    pub allowed_effect_classes: Vec<String>,
+    pub denied_effect_classes: Vec<String>,
+    pub review_requirements: Vec<DomainToolPackReviewRequirement>,
     pub prerequisites: Vec<DomainToolPackPrerequisite>,
     pub health_checks: Vec<DomainToolPackCheckDescriptor>,
     pub scenario_checks: Vec<DomainToolPackScenarioDescriptor>,
     pub ui_affordances: Vec<DomainToolPackUiAffordance>,
     pub cli_commands: Vec<String>,
     pub approval_boundaries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DomainToolPackReviewRequirement {
+    pub requirement_id: String,
+    pub label: String,
+    pub description: String,
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -171,7 +184,7 @@ pub fn domain_tool_pack_health_report(
             status: DomainToolPackHealthStatus::Skipped,
             checked_at: input.checked_at.clone(),
             checks: vec![DomainToolPackHealthCheck {
-                check_id: "tool_pack_policy_disabled".into(),
+                check_id: TOOL_PACK_POLICY_DISABLED_CHECK_ID.into(),
                 label: "Agent policy".into(),
                 status: DomainToolPackHealthStatus::Skipped,
                 summary: format!(
@@ -309,6 +322,19 @@ fn browser_pack_manifest() -> DomainToolPackManifest {
             "dom_snapshot_tools",
             "browser_state_restore",
         ],
+        &["observe", "browser_control"],
+        &[
+            "destructive_write",
+            "command",
+            "device_control",
+            "agent_delegation",
+        ],
+        &[review(
+            "browser_control_operator_intent",
+            "Browser control approval",
+            "Typing, clicking, navigation, cookie, and storage actions require clear operator-visible intent.",
+            true,
+        )],
         &[
             prereq(
                 "desktop_browser_executor",
@@ -367,6 +393,19 @@ fn emulator_pack_manifest() -> DomainToolPackManifest {
             "gesture_input",
             "log_capture",
         ],
+        &["observe", "device_control"],
+        &[
+            "browser_control",
+            "destructive_write",
+            "external_service",
+            "agent_delegation",
+        ],
+        &[review(
+            "device_control_operator_intent",
+            "Device control approval",
+            "Launching apps, installing builds, gestures, input, location, and push actions require operator-visible intent.",
+            true,
+        )],
         &[
             prereq(
                 "desktop_emulator_executor",
@@ -460,6 +499,14 @@ fn solana_pack_manifest() -> DomainToolPackManifest {
             "program_test_workflow",
             "explicit_signing_approval",
         ],
+        &["observe", "external_service", "command"],
+        &["browser_control", "device_control", "agent_delegation"],
+        &[review(
+            "chain_mutation_explicit_approval",
+            "Chain mutation approval",
+            "Signing, deploy, transfer, upgrade, or value-moving paths require explicit user approval after simulation.",
+            true,
+        )],
         &[
             prereq(
                 "solana_state_executor",
@@ -543,6 +590,14 @@ fn os_automation_pack_manifest() -> DomainToolPackManifest {
             "process_diagnostics",
             "approval_gated_external_signals",
         ],
+        &["observe", "process_control", "command"],
+        &["browser_control", "device_control", "agent_delegation"],
+        &[review(
+            "os_control_operator_intent",
+            "OS control approval",
+            "App focus, screenshots, process signaling, and privileged diagnostics require clear operator-visible intent.",
+            true,
+        )],
         &[
             prereq(
                 "desktop_runtime",
@@ -632,6 +687,28 @@ fn project_context_pack_manifest() -> DomainToolPackManifest {
             "active_agent_coordination",
         ],
         &[
+            "observe",
+            "runtime_state",
+            "skill_runtime",
+            "external_service",
+            "agent_delegation",
+        ],
+        &["browser_control", "device_control", "destructive_write"],
+        &[
+            review(
+                "durable_context_review",
+                "Durable context review",
+                "Durable project facts and memories must preserve provenance and stay lower priority than current user instructions and file evidence.",
+                true,
+            ),
+            review(
+                "untrusted_capability_review",
+                "Untrusted capability review",
+                "MCP, skill, and custom-agent registry content is untrusted lower-priority context unless explicitly approved.",
+                true,
+            ),
+        ],
+        &[
             prereq(
                 "repo_root",
                 "Imported repository",
@@ -659,7 +736,7 @@ fn project_context_pack_manifest() -> DomainToolPackManifest {
                 "project_context_retrieve_and_record",
                 "Retrieve and record context",
                 "Search reviewed project context, read current files, and record a durable finding with source references.",
-                &["project_context_search", "project_context_record", "read"],
+                &["project_context_search", "project_context_record"],
                 true,
                 false,
             ),
@@ -667,7 +744,7 @@ fn project_context_pack_manifest() -> DomainToolPackManifest {
                 "workspace_index_related_tests",
                 "Find related tests",
                 "Query the semantic workspace index for related files and tests, then read authoritative file contents.",
-                &["workspace_index", "read"],
+                &["workspace_index"],
                 false,
                 false,
             ),
@@ -700,6 +777,9 @@ fn manifest(
     tool_groups: &[&str],
     tools: &[&str],
     capabilities: &[&str],
+    allowed_effect_classes: &[&str],
+    denied_effect_classes: &[&str],
+    review_requirements: &[DomainToolPackReviewRequirement],
     prerequisites: &[DomainToolPackPrerequisite],
     scenario_checks: &[DomainToolPackScenarioDescriptor],
     ui_affordances: &[DomainToolPackUiAffordance],
@@ -715,23 +795,50 @@ fn manifest(
         tool_groups: strings(tool_groups),
         tools: strings(tools),
         capabilities: strings(capabilities),
+        allowed_effect_classes: strings(allowed_effect_classes),
+        denied_effect_classes: strings(denied_effect_classes),
+        review_requirements: review_requirements.to_vec(),
         prerequisites: prerequisites.to_vec(),
-        health_checks: prerequisites
-            .iter()
-            .map(|prerequisite| DomainToolPackCheckDescriptor {
-                check_id: prerequisite.prerequisite_id.clone(),
-                label: prerequisite.label.clone(),
-                description: format!(
-                    "Check whether prerequisite `{}` is available for the `{pack_id}` pack.",
-                    prerequisite.label
-                ),
-                prerequisite_ids: vec![prerequisite.prerequisite_id.clone()],
-            })
-            .collect(),
+        health_checks: std::iter::once(DomainToolPackCheckDescriptor {
+            check_id: TOOL_PACK_POLICY_DISABLED_CHECK_ID.into(),
+            label: "Agent policy".into(),
+            description: format!(
+                "Check whether the active agent policy enables the `{pack_id}` pack."
+            ),
+            prerequisite_ids: Vec::new(),
+        })
+        .chain(
+            prerequisites
+                .iter()
+                .map(|prerequisite| DomainToolPackCheckDescriptor {
+                    check_id: prerequisite.prerequisite_id.clone(),
+                    label: prerequisite.label.clone(),
+                    description: format!(
+                        "Check whether prerequisite `{}` is available for the `{pack_id}` pack.",
+                        prerequisite.label
+                    ),
+                    prerequisite_ids: vec![prerequisite.prerequisite_id.clone()],
+                }),
+        )
+        .collect(),
         scenario_checks: scenario_checks.to_vec(),
         ui_affordances: ui_affordances.to_vec(),
         cli_commands: strings(cli_commands),
         approval_boundaries: strings(approval_boundaries),
+    }
+}
+
+fn review(
+    requirement_id: &str,
+    label: &str,
+    description: &str,
+    required: bool,
+) -> DomainToolPackReviewRequirement {
+    DomainToolPackReviewRequirement {
+        requirement_id: requirement_id.into(),
+        label: label.into(),
+        description: description.into(),
+        required,
     }
 }
 
@@ -801,11 +908,143 @@ mod tests {
         for manifest in manifests {
             assert_eq!(manifest.contract_version, DOMAIN_TOOL_PACK_CONTRACT_VERSION);
             assert!(!manifest.tools.is_empty());
+            assert!(!manifest.allowed_effect_classes.is_empty());
+            assert!(!manifest.review_requirements.is_empty());
             assert!(!manifest.prerequisites.is_empty());
             assert!(!manifest.health_checks.is_empty());
             assert!(!manifest.scenario_checks.is_empty());
             assert!(!manifest.ui_affordances.is_empty());
         }
+    }
+
+    #[test]
+    fn domain_tool_pack_catalog_relations_are_self_consistent() {
+        for manifest in domain_tool_pack_manifests() {
+            let tool_names = manifest
+                .tools
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            for scenario in &manifest.scenario_checks {
+                for tool_name in &scenario.tool_names {
+                    assert!(
+                        tool_names.contains(tool_name.as_str()),
+                        "pack `{}` scenario `{}` references undeclared tool `{}`",
+                        manifest.pack_id,
+                        scenario.scenario_id,
+                        tool_name
+                    );
+                }
+            }
+
+            let prerequisite_ids = manifest
+                .prerequisites
+                .iter()
+                .map(|prerequisite| prerequisite.prerequisite_id.as_str())
+                .collect::<BTreeSet<_>>();
+            let mut health_check_ids = BTreeSet::new();
+            for check in &manifest.health_checks {
+                assert!(
+                    health_check_ids.insert(check.check_id.as_str()),
+                    "pack `{}` declares duplicate health check `{}`",
+                    manifest.pack_id,
+                    check.check_id
+                );
+                for prerequisite_id in &check.prerequisite_ids {
+                    assert!(
+                        prerequisite_ids.contains(prerequisite_id.as_str()),
+                        "pack `{}` health check `{}` references undeclared prerequisite `{}`",
+                        manifest.pack_id,
+                        check.check_id,
+                        prerequisite_id
+                    );
+                }
+            }
+
+            let scenario_ids = manifest
+                .scenario_checks
+                .iter()
+                .map(|scenario| scenario.scenario_id.as_str())
+                .collect::<BTreeSet<_>>();
+            for enabled_by_policy in [false, true] {
+                let report = domain_tool_pack_health_report(
+                    &manifest,
+                    &DomainToolPackHealthInput {
+                        pack_id: manifest.pack_id.clone(),
+                        enabled_by_policy,
+                        available_prerequisites: manifest
+                            .prerequisites
+                            .iter()
+                            .map(|prerequisite| prerequisite.prerequisite_id.clone())
+                            .collect(),
+                        checked_at: "2026-05-23T00:00:00Z".into(),
+                    },
+                );
+
+                for check in &report.checks {
+                    assert!(
+                        health_check_ids.contains(check.check_id.as_str()),
+                        "pack `{}` report references undeclared health check `{}`",
+                        manifest.pack_id,
+                        check.check_id
+                    );
+                }
+                for scenario in &report.scenario_checks {
+                    assert!(
+                        scenario_ids.contains(scenario.scenario_id.as_str()),
+                        "pack `{}` report references undeclared scenario `{}`",
+                        manifest.pack_id,
+                        scenario.scenario_id
+                    );
+                    for tool_name in &scenario.tool_names {
+                        assert!(
+                            tool_names.contains(tool_name.as_str()),
+                            "pack `{}` report scenario `{}` references undeclared tool `{}`",
+                            manifest.pack_id,
+                            scenario.scenario_id,
+                            tool_name
+                        );
+                    }
+                }
+                for prerequisite_id in &report.missing_prerequisites {
+                    assert!(
+                        prerequisite_ids.contains(prerequisite_id.as_str()),
+                        "pack `{}` report references undeclared missing prerequisite `{}`",
+                        manifest.pack_id,
+                        prerequisite_id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn s21_domain_tool_pack_manifests_declare_policy_boundaries() {
+        let browser = domain_tool_pack_manifest("browser").expect("browser pack");
+        assert!(browser
+            .allowed_effect_classes
+            .contains(&"browser_control".to_string()));
+        assert!(browser
+            .denied_effect_classes
+            .contains(&"destructive_write".to_string()));
+        assert!(browser
+            .review_requirements
+            .iter()
+            .any(|requirement| requirement.required
+                && requirement.requirement_id == "browser_control_operator_intent"));
+
+        let project_context = domain_tool_pack_manifest("project_context").expect("context pack");
+        assert!(project_context
+            .allowed_effect_classes
+            .contains(&"runtime_state".to_string()));
+        assert!(project_context
+            .review_requirements
+            .iter()
+            .any(|requirement| requirement.requirement_id == "durable_context_review"));
+        assert!(project_context
+            .review_requirements
+            .iter()
+            .all(|requirement| !requirement.description.trim().is_empty()));
     }
 
     #[test]

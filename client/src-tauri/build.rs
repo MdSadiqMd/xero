@@ -11,27 +11,51 @@ const SCRCPY_SHA256: &str = "a23c5659f36c260f105c022d27bcb3eafffa26070e7baa9eda6
 /// sibling `idb-companion.universal/` directory which holds both the binary
 /// at `bin/idb_companion` and its `@executable_path/../Frameworks` dylibs —
 /// the whole tree has to ship together or the binary fails to load.
+#[cfg(target_os = "macos")]
 const IDB_COMPANION_VERSION: &str = "1.1.8";
+#[cfg(target_os = "macos")]
 const IDB_COMPANION_SHA256: &str =
     "3b72cc6a9a5b1a22a188205a84090d3a294347a846180efd755cf1a3c848e3e7";
+#[cfg(target_os = "macos")]
 const IDB_COMPANION_DIR: &str = "idb-companion.universal";
 const BUILD_COOKIE_IMPORTER_ENV: &str = "XERO_BUILD_COOKIE_IMPORTER";
 const SKIP_COOKIE_IMPORTER_ENV: &str = "XERO_SKIP_COOKIE_IMPORTER";
+const SKIP_SIDECAR_FETCH_ENV: &str = "XERO_SKIP_SIDECAR_FETCH";
+#[cfg(target_os = "macos")]
+const SKIP_IDB_COMPANION_FETCH_ENV: &str = "XERO_SKIP_IDB_COMPANION_FETCH";
+const XAI_OAUTH_CLIENT_ID_ENV: &str = "XERO_XAI_OAUTH_CLIENT_ID";
+const LEGACY_XAI_OAUTH_CLIENT_ID_ENV: &str = "XAI_OAUTH_CLIENT_ID";
 
 fn main() {
     configure_custom_cfgs();
+    configure_xai_oauth_build_env();
+    fetch_scrcpy_server();
+    fetch_idb_companion();
     tauri_build::build();
     compile_dictation_shim();
     compile_ios_helper();
     build_cookie_importer();
-    fetch_scrcpy_server();
-    fetch_idb_companion();
     compile_idb_proto();
 }
 
 fn configure_custom_cfgs() {
     println!("cargo:rustc-check-cfg=cfg(xero_dictation_native_shim)");
     println!("cargo:rustc-check-cfg=cfg(xero_dictation_modern_sdk)");
+}
+
+fn configure_xai_oauth_build_env() {
+    println!("cargo:rerun-if-env-changed={XAI_OAUTH_CLIENT_ID_ENV}");
+    println!("cargo:rerun-if-env-changed={LEGACY_XAI_OAUTH_CLIENT_ID_ENV}");
+
+    let client_id = std::env::var(XAI_OAUTH_CLIENT_ID_ENV)
+        .ok()
+        .or_else(|| std::env::var(LEGACY_XAI_OAUTH_CLIENT_ID_ENV).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(client_id) = client_id {
+        println!("cargo:rustc-env={XAI_OAUTH_CLIENT_ID_ENV}={client_id}");
+    }
 }
 
 fn compile_dictation_shim() {
@@ -469,10 +493,10 @@ fn fetch_scrcpy_server() {
     let target = resources_dir.join(format!("scrcpy-server-v{SCRCPY_VERSION}.jar"));
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=XERO_SKIP_SIDECAR_FETCH");
+    println!("cargo:rerun-if-env-changed={SKIP_SIDECAR_FETCH_ENV}");
     println!("cargo:rerun-if-changed={}", target.display());
 
-    if std::env::var_os("XERO_SKIP_SIDECAR_FETCH").is_some() {
+    if std::env::var_os(SKIP_SIDECAR_FETCH_ENV).is_some() {
         return;
     }
 
@@ -530,10 +554,10 @@ fn fetch_scrcpy_server() {
 /// compiled out entirely by `#[cfg(target_os = "macos")]` guards, so the
 /// bundled resource would never be loaded.
 ///
-/// The fetch is skipped when `XERO_SKIP_SIDECAR_FETCH` is set (CI caches
-/// the extraction itself) or when the pinned version marker is already
-/// present. Failures downgrade to a `cargo:warning`; the runtime probe
-/// falls back to Homebrew / `PATH` so `tauri dev` without a prior fetch
+/// The fetch is skipped when either `XERO_SKIP_SIDECAR_FETCH` or
+/// `XERO_SKIP_IDB_COMPANION_FETCH` is set, or when the pinned version marker
+/// is already present. Failures downgrade to a `cargo:warning`; the runtime
+/// probe falls back to Homebrew / `PATH` so `tauri dev` without a prior fetch
 /// still works.
 #[cfg(target_os = "macos")]
 fn fetch_idb_companion() {
@@ -543,10 +567,13 @@ fn fetch_idb_companion() {
     let sentinel = extracted.join(".xero-version");
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=XERO_SKIP_SIDECAR_FETCH");
+    println!("cargo:rerun-if-env-changed={SKIP_SIDECAR_FETCH_ENV}");
+    println!("cargo:rerun-if-env-changed={SKIP_IDB_COMPANION_FETCH_ENV}");
     println!("cargo:rerun-if-changed={}", sentinel.display());
 
-    if std::env::var_os("XERO_SKIP_SIDECAR_FETCH").is_some() {
+    if std::env::var_os(SKIP_SIDECAR_FETCH_ENV).is_some()
+        || std::env::var_os(SKIP_IDB_COMPANION_FETCH_ENV).is_some()
+    {
         return;
     }
 

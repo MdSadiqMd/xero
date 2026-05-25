@@ -36,8 +36,19 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 
 import { XeroShell } from './shell'
 
+const MAC_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'
+const WINDOWS_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+
+function setUserAgent(value: string) {
+  Object.defineProperty(window.navigator, 'userAgent', {
+    value,
+    configurable: true,
+  })
+}
+
 describe('XeroShell', () => {
   beforeEach(() => {
+    setUserAgent(MAC_USER_AGENT)
     isTauriMock.mockReturnValue(false)
     tauriWindowMock.close.mockReset()
     tauriWindowMock.minimize.mockReset()
@@ -54,13 +65,10 @@ describe('XeroShell', () => {
     openUrlMock.mockResolvedValue(undefined)
   })
 
-  it.each(['macos', 'windows'] as const)('renders the sidebar toggle in the %s titlebar', (platform) => {
-    const onToggleSidebar = vi.fn()
-
+  it.each(['macos', 'windows'] as const)('does not render a sidebar toggle in the %s titlebar', (platform) => {
     render(
       <XeroShell
         activeView="phases"
-        onToggleSidebar={onToggleSidebar}
         onViewChange={() => undefined}
         platformOverride={platform}
       >
@@ -68,9 +76,7 @@ describe('XeroShell', () => {
       </XeroShell>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse project sidebar' }))
-
-    expect(onToggleSidebar).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: /Collapse project sidebar|Expand project sidebar/ })).toBeNull()
     expect(screen.getByRole('navigation')).toBeVisible()
   })
 
@@ -91,11 +97,9 @@ describe('XeroShell', () => {
     expect(logo.parentElement?.parentElement).toHaveClass('absolute', 'left-1/2')
   })
 
-  it.each(['macos', 'windows'] as const)('places the tools dropdown to the right of the avatar in %s', (platform) => {
+  it.each(['macos', 'windows'] as const)('renders direct titlebar tools without an avatar or dropdown in %s', (platform) => {
     render(
       <XeroShell
-        accountAvatarUrl="https://example.com/avatar.png"
-        accountLogin="sn0w"
         activeView="phases"
         onViewChange={() => undefined}
         platformOverride={platform}
@@ -104,15 +108,44 @@ describe('XeroShell', () => {
       </XeroShell>,
     )
 
-    const account = screen.getByRole('button', { name: /signed in as sn0w/i })
-    const tools = screen.getByRole('button', { name: 'Tools' })
-    const settings = screen.getByRole('button', { name: 'Settings' })
-
-    expect(account.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(tools.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Tools' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /signed in as/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open browser' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Open Solana workbench' })).toBeVisible()
+    if (platform === 'macos') {
+      expect(screen.getByRole('button', { name: 'Open iOS simulator' })).toBeVisible()
+    } else {
+      expect(screen.queryByRole('button', { name: /iOS simulator/i })).toBeNull()
+    }
+    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull()
   })
 
-  it.each(['macos', 'windows'] as const)('omits the Android emulator from the %s tools menu', (platform) => {
+  it.each(['macos', 'windows'] as const)('renders the global Computer Use titlebar button in %s', async (platform) => {
+    const onToggleComputerUse = vi.fn()
+    const onSurfacePreload = vi.fn()
+
+    render(
+      <XeroShell
+        activeView="phases"
+        onSurfacePreload={onSurfacePreload}
+        onToggleComputerUse={onToggleComputerUse}
+        onViewChange={() => undefined}
+        platformOverride={platform}
+      >
+        <div>Body</div>
+      </XeroShell>,
+    )
+
+    const button = screen.getByRole('button', { name: 'Open Computer Use' })
+    fireEvent.pointerEnter(button)
+    fireEvent.click(button)
+
+    await waitFor(() => expect(onSurfacePreload).toHaveBeenCalledWith('agent-dock'))
+    expect(onToggleComputerUse).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['macos', 'windows'] as const)('omits the Android emulator from the %s titlebar tools', (platform) => {
     render(
       <XeroShell
         activeView="phases"
@@ -123,14 +156,12 @@ describe('XeroShell', () => {
       </XeroShell>,
     )
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-
-    expect(screen.getByRole('menuitem', { name: 'Open browser' })).toBeVisible()
-    expect(screen.queryByRole('menuitem', { name: /Android emulator/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open browser' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /Android emulator/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Android Emulator')).not.toBeInTheDocument()
   })
 
-  it('flips the iOS menu item to an Install Xcode CTA when Xcode is missing', async () => {
+  it('flips the iOS titlebar button to an Install Xcode CTA when Xcode is missing', async () => {
     isTauriMock.mockReturnValue(true)
     invokeMock.mockResolvedValue({
       android: { present: true },
@@ -149,8 +180,7 @@ describe('XeroShell', () => {
       </XeroShell>,
     )
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-    const ctaItem = await screen.findByRole('menuitem', { name: 'Install Xcode' })
+    const ctaItem = await screen.findByRole('button', { name: 'Install Xcode' })
     fireEvent.click(ctaItem)
     await waitFor(() =>
       expect(openUrlMock).toHaveBeenCalledWith('https://apps.apple.com/app/xcode/id497799835'),
@@ -158,10 +188,10 @@ describe('XeroShell', () => {
     // Clicking the CTA never toggles the iOS sidebar — opening an
     // empty panel would just repeat the same "Install Xcode" message.
     expect(onToggleIos).not.toHaveBeenCalled()
-    expect(screen.queryByRole('menuitem', { name: /Open iOS simulator/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Open iOS simulator/ })).toBeNull()
   })
 
-  it('renders the iOS menu item only on macOS', async () => {
+  it('renders the iOS titlebar button only on macOS', async () => {
     const onToggleIos = vi.fn()
 
     const { rerender } = render(
@@ -175,9 +205,8 @@ describe('XeroShell', () => {
       </XeroShell>,
     )
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-    expect(screen.getByRole('menuitem', { name: 'Open iOS simulator' })).toBeVisible()
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Open iOS simulator' }))
+    expect(screen.getByRole('button', { name: 'Open iOS simulator' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Open iOS simulator' }))
     await waitFor(() => expect(onToggleIos).toHaveBeenCalledTimes(1))
 
     for (const platform of ['windows', 'linux'] as const) {
@@ -191,7 +220,58 @@ describe('XeroShell', () => {
           <div>Body</div>
         </XeroShell>,
       )
-      expect(screen.queryByRole('menuitem', { name: /iOS simulator/ })).toBeNull()
+      expect(screen.queryByRole('button', { name: /iOS simulator/ })).toBeNull()
+    }
+  })
+
+  it('does not render the iOS titlebar button when macOS preview runs on a non-macOS host', () => {
+    setUserAgent(WINDOWS_USER_AGENT)
+
+    render(
+      <XeroShell
+        activeView="phases"
+        onToggleIos={() => undefined}
+        onViewChange={() => undefined}
+        platformOverride="macos"
+      >
+        <div>Body</div>
+      </XeroShell>,
+    )
+
+    expect(screen.queryByRole('button', { name: /iOS simulator/ })).toBeNull()
+  })
+
+  it('preloads the terminal surface from the titlebar button before opening', async () => {
+    const onSurfacePreload = vi.fn()
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+    }
+    const previousRequestIdleCallback = idleWindow.requestIdleCallback
+    idleWindow.requestIdleCallback = (callback) => {
+      ;(callback as () => void)()
+      return 1
+    }
+
+    try {
+      render(
+        <XeroShell
+          activeView="phases"
+          onSurfacePreload={onSurfacePreload}
+          onViewChange={() => undefined}
+          platformOverride="macos"
+        >
+          <div>Body</div>
+        </XeroShell>,
+      )
+
+      const terminalButton = screen.getByRole('button', { name: 'Open terminal' })
+      fireEvent.pointerEnter(terminalButton)
+      fireEvent.focus(terminalButton)
+
+      await waitFor(() => expect(onSurfacePreload).toHaveBeenCalledWith('terminal'))
+      expect(onSurfacePreload).toHaveBeenCalledTimes(2)
+    } finally {
+      idleWindow.requestIdleCallback = previousRequestIdleCallback
     }
   })
 
@@ -200,7 +280,7 @@ describe('XeroShell', () => {
     invokeMock.mockReturnValue(new Promise(() => undefined))
 
     const { container } = render(
-      <XeroShell activeView="phases" onOpenSettings={() => undefined} onViewChange={() => undefined} platformOverride={platform}>
+      <XeroShell activeView="phases" onViewChange={() => undefined} platformOverride={platform}>
         <div>Body</div>
       </XeroShell>,
     )
@@ -208,7 +288,7 @@ describe('XeroShell', () => {
     const header = container.querySelector('header')
     expect(header).not.toHaveAttribute('data-tauri-drag-region')
 
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Settings' }), { button: 0, detail: 2 })
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Open browser' }), { button: 0, detail: 2 })
 
     expect(tauriWindowMock.toggleMaximize).not.toHaveBeenCalled()
     expect(tauriWindowMock.startDragging).not.toHaveBeenCalled()

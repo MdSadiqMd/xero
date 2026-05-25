@@ -18,6 +18,7 @@ const DEFAULT_TOOL_FAILURE_LIMIT: usize = 16;
 const DEFAULT_REPEATED_EQUIVALENT_CALL_LIMIT: usize = 3;
 const DEFAULT_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
 const DEFAULT_GROUP_WALL_CLOCK_MS: u64 = 120_000;
+pub const TOOL_EXTENSION_MANIFEST_CONTRACT_VERSION: u32 = 1;
 
 pub type ToolRegistryResult<T> = Result<T, ToolExecutionError>;
 
@@ -48,6 +49,54 @@ pub enum ToolMutability {
 impl ToolMutability {
     pub fn is_read_only(self) -> bool {
         self == Self::ReadOnly
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolApplicationKind {
+    Granular,
+    Declarative,
+    ReadOnlyBatch,
+    MutatingBatch,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolBatchDispatchSafety {
+    NotBatch,
+    ParallelReadOnly,
+    SequentialMutating,
+    ToolOwnedAtomic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolApplicationMetadata {
+    pub family: String,
+    pub kind: ToolApplicationKind,
+    pub dispatch_safety: ToolBatchDispatchSafety,
+    /// Batch-capable mutating tools should validate every target before writing,
+    /// expose preview/dry-run behavior when possible, guard stale inputs, and
+    /// report enough diff/summary detail for audit and recovery.
+    #[serde(default)]
+    pub safety_requirements: Vec<String>,
+}
+
+impl ToolApplicationMetadata {
+    pub fn granular(family: impl Into<String>) -> Self {
+        Self {
+            family: family.into(),
+            kind: ToolApplicationKind::Granular,
+            dispatch_safety: ToolBatchDispatchSafety::NotBatch,
+            safety_requirements: Vec::new(),
+        }
+    }
+}
+
+impl Default for ToolApplicationMetadata {
+    fn default() -> Self {
+        Self::granular("general")
     }
 }
 
@@ -139,6 +188,8 @@ pub struct ToolDescriptorV2 {
     pub input_schema: JsonValue,
     #[serde(default)]
     pub capability_tags: Vec<String>,
+    #[serde(default)]
+    pub application_metadata: ToolApplicationMetadata,
     pub effect_class: ToolEffectClass,
     pub mutability: ToolMutability,
     pub sandbox_requirement: ToolSandboxRequirement,
@@ -159,6 +210,7 @@ impl ToolDescriptorV2 {
             description: description.into(),
             input_schema,
             capability_tags: Vec::new(),
+            application_metadata: ToolApplicationMetadata::default(),
             effect_class: ToolEffectClass::Observe,
             mutability: ToolMutability::ReadOnly,
             sandbox_requirement: ToolSandboxRequirement::None,
@@ -215,8 +267,331 @@ impl ToolDescriptorV2 {
                 ));
             }
         }
+        self.validate_application_metadata()?;
         Ok(())
     }
+
+    fn validate_application_metadata(&self) -> ToolRegistryResult<()> {
+        let metadata = &self.application_metadata;
+        if metadata.family.trim().is_empty() {
+            return Err(ToolExecutionError::invalid_input(
+                "agent_tool_descriptor_invalid",
+                format!(
+                    "Tool descriptor `{}` must include an application metadata family.",
+                    self.name
+                ),
+            ));
+        }
+
+        match metadata.kind {
+            ToolApplicationKind::Granular => {
+                if metadata.dispatch_safety != ToolBatchDispatchSafety::NotBatch {
+                    return Err(ToolExecutionError::invalid_input(
+                        "agent_tool_descriptor_invalid",
+                        format!(
+                            "Granular tool descriptor `{}` must use not_batch dispatch safety.",
+                            self.name
+                        ),
+                    ));
+                }
+            }
+            ToolApplicationKind::ReadOnlyBatch => {
+                if !self.mutability.is_read_only() {
+                    return Err(ToolExecutionError::invalid_input(
+                        "agent_tool_descriptor_invalid",
+                        format!(
+                            "Read-only batch tool descriptor `{}` must be read-only.",
+                            self.name
+                        ),
+                    ));
+                }
+                if metadata.dispatch_safety != ToolBatchDispatchSafety::ParallelReadOnly {
+                    return Err(ToolExecutionError::invalid_input(
+                        "agent_tool_descriptor_invalid",
+                        format!(
+                            "Read-only batch tool descriptor `{}` must use parallel_read_only dispatch safety.",
+                            self.name
+                        ),
+                    ));
+                }
+                require_safety(metadata, &self.name, &["read_only"])?;
+                require_safety(metadata, &self.name, &["bounded_results"])?;
+            }
+            ToolApplicationKind::Declarative | ToolApplicationKind::MutatingBatch => {
+                if self.mutability == ToolMutability::Mutating {
+                    if !matches!(
+                        metadata.dispatch_safety,
+                        ToolBatchDispatchSafety::SequentialMutating
+                            | ToolBatchDispatchSafety::ToolOwnedAtomic
+                    ) {
+                        return Err(ToolExecutionError::invalid_input(
+                            "agent_tool_descriptor_invalid",
+                            format!(
+                                "Mutating batch tool descriptor `{}` must use sequential_mutating or tool_owned_atomic dispatch safety.",
+                                self.name
+                            ),
+                        ));
+                    }
+                    require_safety(
+                        metadata,
+                        &self.name,
+                        &["supports_preview", "supports_dry_run"],
+                    )?;
+                    require_safety(
+                        metadata,
+                        &self.name,
+                        &[
+                            "validates_all_targets_before_writing",
+                            "validates_targets_before_writing",
+                        ],
+                    )?;
+                    require_safety(metadata, &self.name, &["reports_diff", "reports_summary"])?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn require_safety(
+    metadata: &ToolApplicationMetadata,
+    tool_name: &str,
+    accepted: &[&str],
+) -> ToolRegistryResult<()> {
+    if accepted.iter().any(|requirement| {
+        metadata
+            .safety_requirements
+            .iter()
+            .any(|item| item == requirement)
+    }) {
+        return Ok(());
+    }
+    Err(ToolExecutionError::invalid_input(
+        "agent_tool_descriptor_invalid",
+        format!(
+            "Tool descriptor `{tool_name}` is missing required application safety metadata: one of {}.",
+            accepted.join(", ")
+        ),
+    ))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExtensionPermissionManifest {
+    pub permission_id: String,
+    pub label: String,
+    pub effect_class: ToolEffectClass,
+    pub risk_class: String,
+    pub audit_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExtensionTestFixture {
+    pub fixture_id: String,
+    pub input: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_summary_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExtensionFixtureStatus {
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExtensionFixtureRun {
+    pub fixture_id: String,
+    pub status: ToolExtensionFixtureStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExtensionFixtureReport {
+    pub extension_id: String,
+    pub tool_name: String,
+    pub passed: bool,
+    pub fixtures: Vec<ToolExtensionFixtureRun>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExtensionManifest {
+    pub contract_version: u32,
+    pub extension_id: String,
+    pub tool_name: String,
+    pub label: String,
+    pub description: String,
+    pub input_schema: JsonValue,
+    pub permission: ToolExtensionPermissionManifest,
+    pub mutability: ToolMutability,
+    pub sandbox_requirement: ToolSandboxRequirement,
+    pub approval_requirement: ToolApprovalRequirement,
+    #[serde(default)]
+    pub application_metadata: ToolApplicationMetadata,
+    #[serde(default)]
+    pub capability_tags: Vec<String>,
+    #[serde(default)]
+    pub test_fixtures: Vec<ToolExtensionTestFixture>,
+}
+
+impl ToolExtensionManifest {
+    pub fn validate(&self) -> ToolRegistryResult<()> {
+        if self.contract_version != TOOL_EXTENSION_MANIFEST_CONTRACT_VERSION {
+            return Err(ToolExecutionError::invalid_input(
+                "agent_tool_extension_contract_unsupported",
+                format!(
+                    "Tool extension `{}` uses contract version {}, but Xero supports {}.",
+                    self.extension_id,
+                    self.contract_version,
+                    TOOL_EXTENSION_MANIFEST_CONTRACT_VERSION
+                ),
+            ));
+        }
+        validate_extension_identifier("extensionId", &self.extension_id)?;
+        validate_extension_identifier("toolName", &self.tool_name)?;
+        validate_extension_text("label", &self.label)?;
+        validate_extension_text("description", &self.description)?;
+        if !self.input_schema.is_object() {
+            return Err(ToolExecutionError::invalid_input(
+                "agent_tool_extension_schema_invalid",
+                format!(
+                    "Tool extension `{}` must provide an object-shaped input schema.",
+                    self.extension_id
+                ),
+            ));
+        }
+        self.validate_permission()?;
+        let descriptor = self.descriptor();
+        descriptor.validate()?;
+        self.validate_fixtures()?;
+        Ok(())
+    }
+
+    pub fn descriptor(&self) -> ToolDescriptorV2 {
+        ToolDescriptorV2 {
+            name: self.tool_name.clone(),
+            description: self.description.clone(),
+            input_schema: self.input_schema.clone(),
+            capability_tags: self.capability_tags.clone(),
+            application_metadata: self.application_metadata.clone(),
+            effect_class: self.permission.effect_class.clone(),
+            mutability: self.mutability,
+            sandbox_requirement: self.sandbox_requirement,
+            approval_requirement: self.approval_requirement,
+            telemetry_attributes: BTreeMap::from([
+                ("xero.extension.id".into(), self.extension_id.clone()),
+                (
+                    "xero.extension.permission_id".into(),
+                    self.permission.permission_id.clone(),
+                ),
+                (
+                    "xero.extension.audit_label".into(),
+                    self.permission.audit_label.clone(),
+                ),
+                (
+                    "xero.extension.risk_class".into(),
+                    self.permission.risk_class.clone(),
+                ),
+                (
+                    "xero.extension.contract_version".into(),
+                    self.contract_version.to_string(),
+                ),
+            ]),
+            result_truncation: ToolResultTruncationContract::default(),
+        }
+    }
+
+    fn validate_permission(&self) -> ToolRegistryResult<()> {
+        validate_extension_identifier("permissionId", &self.permission.permission_id)?;
+        validate_extension_text("permission.label", &self.permission.label)?;
+        validate_extension_identifier("permission.riskClass", &self.permission.risk_class)?;
+        validate_extension_text("permission.auditLabel", &self.permission.audit_label)?;
+        Ok(())
+    }
+
+    fn validate_fixtures(&self) -> ToolRegistryResult<()> {
+        if self.test_fixtures.is_empty() {
+            return Err(ToolExecutionError::invalid_input(
+                "agent_tool_extension_fixture_missing",
+                format!(
+                    "Tool extension `{}` must declare at least one executable test fixture.",
+                    self.extension_id
+                ),
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for fixture in &self.test_fixtures {
+            validate_extension_identifier("fixtureId", &fixture.fixture_id)?;
+            if !seen.insert(fixture.fixture_id.as_str()) {
+                return Err(ToolExecutionError::invalid_input(
+                    "agent_tool_extension_fixture_duplicate",
+                    format!(
+                        "Tool extension `{}` declares duplicate fixture `{}`.",
+                        self.extension_id, fixture.fixture_id
+                    ),
+                ));
+            }
+            if !fixture.input.is_object() {
+                return Err(ToolExecutionError::invalid_input(
+                    "agent_tool_extension_fixture_invalid",
+                    format!(
+                        "Tool extension `{}` fixture `{}` must provide object-shaped input.",
+                        self.extension_id, fixture.fixture_id
+                    ),
+                ));
+            }
+            if fixture
+                .expected_summary_contains
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err(ToolExecutionError::invalid_input(
+                    "agent_tool_extension_fixture_invalid",
+                    format!(
+                        "Tool extension `{}` fixture `{}` has an empty expected summary fragment.",
+                        self.extension_id, fixture.fixture_id
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_extension_identifier(field: &str, value: &str) -> ToolRegistryResult<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() != value.len()
+        || !trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | ':' | '/')
+        })
+    {
+        return Err(ToolExecutionError::invalid_input(
+            "agent_tool_extension_identifier_invalid",
+            format!(
+                "Tool extension field `{field}` must be a non-empty stable identifier using ASCII letters, numbers, '.', '-', '_', ':', or '/'."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_extension_text(field: &str, value: &str) -> ToolRegistryResult<()> {
+    if value.trim().is_empty() {
+        return Err(ToolExecutionError::invalid_input(
+            "agent_tool_extension_text_invalid",
+            format!("Tool extension field `{field}` must be non-empty."),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -478,6 +853,7 @@ pub trait ToolHandler: Send + Sync {
             "sandboxRequirement": descriptor.sandbox_requirement,
             "approvalRequirement": descriptor.approval_requirement,
             "capabilityTags": descriptor.capability_tags,
+            "applicationMetadata": descriptor.application_metadata,
         })
     }
 
@@ -552,6 +928,88 @@ impl StaticToolHandler {
             descriptor,
             execute: Arc::new(execute),
         }
+    }
+
+    pub fn try_from_extension_manifest<F>(
+        manifest: ToolExtensionManifest,
+        execute: F,
+    ) -> ToolRegistryResult<Self>
+    where
+        F: Fn(&ToolExecutionContext, &ToolCallInput) -> ToolRegistryResult<ToolHandlerOutput>
+            + Send
+            + Sync
+            + 'static,
+    {
+        manifest.validate()?;
+        Ok(Self::new(manifest.descriptor(), execute))
+    }
+
+    pub fn verify_extension_test_fixtures(
+        &self,
+        manifest: &ToolExtensionManifest,
+        context: &ToolExecutionContext,
+    ) -> ToolRegistryResult<ToolExtensionFixtureReport> {
+        manifest.validate()?;
+        if self.descriptor.name != manifest.tool_name {
+            return Err(ToolExecutionError::invalid_input(
+                "agent_tool_extension_handler_mismatch",
+                format!(
+                    "Tool extension `{}` fixtures target `{}`, but the handler is registered as `{}`.",
+                    manifest.extension_id, manifest.tool_name, self.descriptor.name
+                ),
+            ));
+        }
+
+        let fixtures = manifest
+            .test_fixtures
+            .iter()
+            .map(|fixture| {
+                let call = ToolCallInput {
+                    tool_call_id: format!("fixture:{}", fixture.fixture_id),
+                    tool_name: manifest.tool_name.clone(),
+                    input: fixture.input.clone(),
+                };
+                match self.execute_with_control(context, &call, &ToolExecutionControl::default()) {
+                    Ok(output) => {
+                        let summary = output.summary;
+                        if let Some(expected) = fixture.expected_summary_contains.as_deref() {
+                            if !summary.contains(expected) {
+                                return ToolExtensionFixtureRun {
+                                    fixture_id: fixture.fixture_id.clone(),
+                                    status: ToolExtensionFixtureStatus::Failed,
+                                    summary: Some(summary),
+                                    diagnostic: Some(format!(
+                                        "Expected fixture summary to contain `{expected}`."
+                                    )),
+                                };
+                            }
+                        }
+                        ToolExtensionFixtureRun {
+                            fixture_id: fixture.fixture_id.clone(),
+                            status: ToolExtensionFixtureStatus::Passed,
+                            summary: Some(summary),
+                            diagnostic: None,
+                        }
+                    }
+                    Err(error) => ToolExtensionFixtureRun {
+                        fixture_id: fixture.fixture_id.clone(),
+                        status: ToolExtensionFixtureStatus::Failed,
+                        summary: None,
+                        diagnostic: Some(format!("{}: {}", error.code, error.message)),
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        let passed = fixtures
+            .iter()
+            .all(|fixture| fixture.status == ToolExtensionFixtureStatus::Passed);
+
+        Ok(ToolExtensionFixtureReport {
+            extension_id: manifest.extension_id.clone(),
+            tool_name: manifest.tool_name.clone(),
+            passed,
+            fixtures,
+        })
     }
 }
 
@@ -1082,7 +1540,7 @@ impl ToolRegistryV2 {
                         Ok(signal) => failure.doom_loop_signal = signal,
                         Err(error) => failure.error = error,
                     }
-                    outcomes[index] = Some(ToolDispatchOutcome::Failed(failure));
+                    outcomes[index] = Some(ToolDispatchOutcome::Failed(*failure));
                 }
             }
         }
@@ -1177,7 +1635,7 @@ impl ToolRegistryV2 {
                     Ok(signal) => failure.doom_loop_signal = signal,
                     Err(error) => failure.error = error,
                 }
-                ToolDispatchOutcome::Failed(failure)
+                ToolDispatchOutcome::Failed(*failure)
             }
         }
     }
@@ -1189,10 +1647,10 @@ impl ToolRegistryV2 {
         config: &ToolDispatchConfig,
         deadline: Instant,
         cancellation_token: ToolCancellationToken,
-    ) -> Result<PreparedToolCall, ToolDispatchFailure> {
+    ) -> Result<PreparedToolCall, Box<ToolDispatchFailure>> {
         let started = Instant::now();
         let Some(handler) = self.handlers.get(&call.tool_name).cloned() else {
-            return Err(failure_from_error(
+            return Err(Box::new(failure_from_error(
                 call,
                 ToolExecutionError::unavailable(
                     "agent_tool_unavailable",
@@ -1201,37 +1659,37 @@ impl ToolRegistryV2 {
                 json!({}),
                 json!({ "ok": false }),
                 started.elapsed(),
-            ));
+            )));
         };
         let descriptor = handler.descriptor();
         let pre_hook_payload = handler.pre_hook_payload(call);
 
         if let Err(error) = descriptor.validate() {
-            return Err(failure_from_error(
+            return Err(Box::new(failure_from_error(
                 call,
                 error,
                 pre_hook_payload,
                 json!({ "ok": false }),
                 started.elapsed(),
-            ));
+            )));
         }
         if let Err(error) = tracker.record_call(call) {
-            return Err(failure_from_error(
+            return Err(Box::new(failure_from_error(
                 call,
                 error,
                 pre_hook_payload,
                 json!({ "ok": false }),
                 started.elapsed(),
-            ));
+            )));
         }
         if let Err(error) = handler.validate_input(&call.input) {
-            return Err(failure_from_error(
+            return Err(Box::new(failure_from_error(
                 call,
                 error,
                 pre_hook_payload,
                 json!({ "ok": false }),
                 started.elapsed(),
-            ));
+            )));
         }
 
         match config.policy.evaluate(&descriptor, call) {
@@ -1247,8 +1705,8 @@ impl ToolRegistryV2 {
                                 json!({ "ok": false }),
                                 started.elapsed(),
                             );
-                            failure.sandbox_metadata = Some(denied.metadata);
-                            return Err(failure);
+                            failure.sandbox_metadata = Some(*denied.metadata);
+                            return Err(Box::new(failure));
                         }
                     };
 
@@ -1264,20 +1722,22 @@ impl ToolRegistryV2 {
                     cancellation_token,
                 })
             }
-            ToolPolicyDecision::Deny { code, message } => Err(failure_from_error(
+            ToolPolicyDecision::Deny { code, message } => Err(Box::new(failure_from_error(
                 call,
                 ToolExecutionError::policy_denied(code, message),
                 pre_hook_payload,
                 json!({ "ok": false }),
                 started.elapsed(),
-            )),
-            ToolPolicyDecision::RequireApproval { action_id, message } => Err(failure_from_error(
-                call,
-                ToolExecutionError::approval_required(action_id, message),
-                pre_hook_payload,
-                json!({ "ok": false }),
-                started.elapsed(),
-            )),
+            ))),
+            ToolPolicyDecision::RequireApproval { action_id, message } => {
+                Err(Box::new(failure_from_error(
+                    call,
+                    ToolExecutionError::approval_required(action_id, message),
+                    pre_hook_payload,
+                    json!({ "ok": false }),
+                    started.elapsed(),
+                )))
+            }
         }
     }
 }
@@ -1325,13 +1785,33 @@ fn execute_prepared_call(
     }
 
     let checkpoint = if prepared.descriptor.mutability == ToolMutability::Mutating {
-        match rollback.and_then(|recorder| {
-            match recorder.checkpoint_before(&prepared.call, &prepared.descriptor) {
-                Ok(checkpoint) => checkpoint,
-                Err(_) => None,
+        match rollback {
+            Some(recorder) => {
+                match recorder.checkpoint_before(&prepared.call, &prepared.descriptor) {
+                    Ok(checkpoint) => checkpoint,
+                    Err(error) => {
+                        let mut sandbox_metadata = prepared.sandbox_metadata;
+                        if let Some(metadata) = sandbox_metadata.as_mut() {
+                            metadata.exit_classification = exit_classification_from_error(&error);
+                        }
+                        return ToolDispatchOutcome::Failed(ToolDispatchFailure {
+                            tool_call_id: prepared.call.tool_call_id,
+                            tool_name: prepared.call.tool_name,
+                            error,
+                            doom_loop_signal: None,
+                            rollback_payload: None,
+                            rollback_error: None,
+                            pre_hook_payload: prepared.pre_hook_payload,
+                            post_hook_payload: json!({
+                                "ok": false,
+                                "preflight": "rollback_checkpoint_failed",
+                            }),
+                            elapsed_ms: prepared.started.elapsed().as_millis(),
+                            sandbox_metadata,
+                        });
+                    }
+                }
             }
-        }) {
-            Some(checkpoint) => Some(checkpoint),
             None => None,
         }
     } else {
@@ -1638,6 +2118,23 @@ fn truncate_tool_output(
         );
     }
 
+    if descriptor.result_truncation.preserve_json_shape {
+        let shaped = truncate_preserving_json_shape(output, max_output_bytes);
+        let returned_bytes = serde_json::to_string(&shaped)
+            .map(|value| value.len())
+            .unwrap_or(0);
+        return (
+            shaped,
+            ToolResultTruncationMetadata {
+                was_truncated: true,
+                original_bytes,
+                returned_bytes,
+                omitted_bytes: original_bytes.saturating_sub(returned_bytes),
+                max_output_bytes,
+            },
+        );
+    }
+
     let preview = truncate_utf8(&serialized, max_output_bytes);
     let returned_bytes = preview.len();
     (
@@ -1669,78 +2166,392 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
     value[..end].to_string()
 }
 
+fn truncate_preserving_json_shape(mut output: JsonValue, max_output_bytes: usize) -> JsonValue {
+    let mut string_budget = max_output_bytes.saturating_div(2).clamp(64, 4096);
+    loop {
+        let mut changed = false;
+        truncate_json_value_in_place(&mut output, string_budget, &mut changed);
+        if serde_json::to_string(&output)
+            .map(|serialized| serialized.len() <= max_output_bytes)
+            .unwrap_or(true)
+        {
+            break;
+        }
+        if string_budget <= 32 || !changed {
+            add_shape_truncation_marker(&mut output, max_output_bytes);
+            break;
+        }
+        string_budget /= 2;
+    }
+    add_shape_truncation_marker(&mut output, max_output_bytes);
+    output
+}
+
+fn truncate_json_value_in_place(value: &mut JsonValue, string_budget: usize, changed: &mut bool) {
+    match value {
+        JsonValue::String(text) => {
+            if text.len() > string_budget {
+                let omitted = text.len().saturating_sub(string_budget);
+                let mut truncated = truncate_utf8(text, string_budget);
+                truncated.push_str(&format!("\n...[truncated {omitted} byte(s)]"));
+                *text = truncated;
+                *changed = true;
+            }
+        }
+        JsonValue::Array(items) => {
+            let max_items = 64;
+            if items.len() > max_items {
+                let omitted = items.len().saturating_sub(max_items);
+                items.truncate(max_items);
+                items.push(json!({
+                    "xeroTruncatedArrayItems": omitted,
+                }));
+                *changed = true;
+            }
+            for item in items {
+                truncate_json_value_in_place(item, string_budget, changed);
+            }
+        }
+        JsonValue::Object(fields) => {
+            for item in fields.values_mut() {
+                truncate_json_value_in_place(item, string_budget, changed);
+            }
+        }
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) => {}
+    }
+}
+
+fn add_shape_truncation_marker(output: &mut JsonValue, max_output_bytes: usize) {
+    let marker = json!({
+        "wasTruncated": true,
+        "maxOutputBytes": max_output_bytes,
+        "contract": "preserve_json_shape",
+    });
+    match output {
+        JsonValue::Object(fields) => {
+            fields.insert("xeroTruncation".into(), marker);
+        }
+        _ => {
+            *output = json!({
+                "value": output.clone(),
+                "xeroTruncation": marker,
+            });
+        }
+    }
+}
+
 fn validate_input_against_schema(
     descriptor: &ToolDescriptorV2,
     input: &JsonValue,
 ) -> ToolRegistryResult<()> {
-    if descriptor
-        .input_schema
-        .get("type")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("object")
-        != "object"
-    {
-        return Ok(());
+    validate_json_value_against_schema(descriptor, "$", &descriptor.input_schema, input)
+}
+
+fn validate_json_value_against_schema(
+    descriptor: &ToolDescriptorV2,
+    path: &str,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> ToolRegistryResult<()> {
+    if let Some(branches) = schema.get("oneOf").and_then(JsonValue::as_array) {
+        if branches.iter().any(|branch| {
+            validate_json_value_against_schema(descriptor, path, branch, value).is_ok()
+        }) {
+            return Ok(());
+        }
+        return schema_error(
+            descriptor,
+            path,
+            "must match at least one declared schema branch.",
+        );
     }
-    let Some(input_object) = input.as_object() else {
-        return Err(ToolExecutionError::invalid_input(
-            "agent_tool_input_invalid",
-            format!("Tool `{}` expects an object input.", descriptor.name),
-        ));
+
+    if let Some(branches) = schema.get("anyOf").and_then(JsonValue::as_array) {
+        if branches.iter().any(|branch| {
+            validate_json_value_against_schema(descriptor, path, branch, value).is_ok()
+        }) {
+            return Ok(());
+        }
+        return schema_error(
+            descriptor,
+            path,
+            "must match at least one declared schema branch.",
+        );
+    }
+
+    if let Some(branches) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in branches {
+            validate_json_value_against_schema(descriptor, path, branch, value)?;
+        }
+    }
+
+    if let Some(enum_values) = schema.get("enum").and_then(JsonValue::as_array) {
+        if !enum_values.iter().any(|allowed| allowed == value) {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must be one of {}.", enum_values_for_message(enum_values)),
+            );
+        }
+    }
+
+    if let Some(expected_type) = schema.get("type").and_then(JsonValue::as_str) {
+        if !schema_type_matches(expected_type, value) {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must be `{expected_type}`, got {}.", json_type_name(value)),
+            );
+        }
+    }
+
+    if value.is_object()
+        && (schema.get("properties").is_some()
+            || schema.get("required").is_some()
+            || schema.get("additionalProperties").is_some())
+    {
+        validate_object_against_schema(descriptor, path, schema, value)?;
+    }
+
+    if value.is_array() {
+        validate_array_against_schema(descriptor, path, schema, value)?;
+    }
+
+    if value.is_number() {
+        validate_number_bounds(descriptor, path, schema, value)?;
+    }
+
+    if value.is_string() {
+        validate_string_bounds(descriptor, path, schema, value)?;
+    }
+
+    Ok(())
+}
+
+fn validate_object_against_schema(
+    descriptor: &ToolDescriptorV2,
+    path: &str,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> ToolRegistryResult<()> {
+    let Some(object) = value.as_object() else {
+        return schema_error(descriptor, path, "must be `object`.");
     };
 
-    if let Some(required) = descriptor
-        .input_schema
-        .get("required")
-        .and_then(JsonValue::as_array)
-    {
+    if let Some(required) = schema.get("required").and_then(JsonValue::as_array) {
         for field in required.iter().filter_map(JsonValue::as_str) {
-            if !input_object.contains_key(field) {
-                return Err(ToolExecutionError::invalid_input(
-                    "agent_tool_input_invalid",
-                    format!(
-                        "Tool `{}` input is missing required field `{field}`.",
-                        descriptor.name
-                    ),
-                ));
+            if !object.contains_key(field) {
+                return schema_error(
+                    descriptor,
+                    path,
+                    format!("is missing required field `{field}`."),
+                );
             }
         }
     }
 
-    let Some(properties) = descriptor
-        .input_schema
-        .get("properties")
-        .and_then(JsonValue::as_object)
-    else {
-        return Ok(());
-    };
-
-    for (field, schema) in properties {
-        let Some(value) = input_object.get(field) else {
-            continue;
-        };
-        if let Some(expected_type) = schema.get("type").and_then(JsonValue::as_str) {
-            let matches = match expected_type {
-                "array" => value.is_array(),
-                "boolean" => value.is_boolean(),
-                "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-                "number" => value.is_number(),
-                "object" => value.is_object(),
-                "string" => value.is_string(),
-                _ => true,
+    let properties = schema.get("properties").and_then(JsonValue::as_object);
+    if let Some(properties) = properties {
+        for (field, field_schema) in properties {
+            let Some(field_value) = object.get(field) else {
+                continue;
             };
-            if !matches {
-                return Err(ToolExecutionError::invalid_input(
-                    "agent_tool_input_invalid",
-                    format!(
-                        "Tool `{}` field `{field}` must be `{expected_type}`.",
-                        descriptor.name
-                    ),
-                ));
+            let field_path = child_path(path, field);
+            validate_json_value_against_schema(descriptor, &field_path, field_schema, field_value)?;
+        }
+    }
+
+    match schema.get("additionalProperties") {
+        Some(JsonValue::Bool(false)) => {
+            for field in object.keys() {
+                let declared = properties
+                    .map(|properties| properties.contains_key(field))
+                    .unwrap_or(false);
+                if !declared {
+                    return schema_error(
+                        descriptor,
+                        &child_path(path, field),
+                        "is not declared by this tool schema.",
+                    );
+                }
             }
+        }
+        Some(additional_schema) if additional_schema.is_object() => {
+            for (field, field_value) in object {
+                if properties.is_some_and(|properties| properties.contains_key(field)) {
+                    continue;
+                }
+                let field_path = child_path(path, field);
+                validate_json_value_against_schema(
+                    descriptor,
+                    &field_path,
+                    additional_schema,
+                    field_value,
+                )?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn validate_array_against_schema(
+    descriptor: &ToolDescriptorV2,
+    path: &str,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> ToolRegistryResult<()> {
+    let Some(items) = value.as_array() else {
+        return schema_error(descriptor, path, "must be `array`.");
+    };
+    if let Some(min_items) = schema.get("minItems").and_then(JsonValue::as_u64) {
+        if items.len() < min_items as usize {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must contain at least {min_items} item(s)."),
+            );
+        }
+    }
+    if let Some(max_items) = schema.get("maxItems").and_then(JsonValue::as_u64) {
+        if items.len() > max_items as usize {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must contain at most {max_items} item(s)."),
+            );
+        }
+    }
+    if let Some(item_schema) = schema.get("items").filter(|schema| schema.is_object()) {
+        for (index, item) in items.iter().enumerate() {
+            validate_json_value_against_schema(
+                descriptor,
+                &format!("{path}[{index}]"),
+                item_schema,
+                item,
+            )?;
         }
     }
     Ok(())
+}
+
+fn validate_number_bounds(
+    descriptor: &ToolDescriptorV2,
+    path: &str,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> ToolRegistryResult<()> {
+    let Some(actual) = value.as_f64() else {
+        return Ok(());
+    };
+    if let Some(minimum) = schema.get("minimum").and_then(JsonValue::as_f64) {
+        if actual < minimum {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must be greater than or equal to {minimum}."),
+            );
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(JsonValue::as_f64) {
+        if actual > maximum {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must be less than or equal to {maximum}."),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_bounds(
+    descriptor: &ToolDescriptorV2,
+    path: &str,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> ToolRegistryResult<()> {
+    let Some(actual) = value.as_str() else {
+        return Ok(());
+    };
+    if let Some(min_length) = schema.get("minLength").and_then(JsonValue::as_u64) {
+        if actual.chars().count() < min_length as usize {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must contain at least {min_length} character(s)."),
+            );
+        }
+    }
+    if let Some(max_length) = schema.get("maxLength").and_then(JsonValue::as_u64) {
+        if actual.chars().count() > max_length as usize {
+            return schema_error(
+                descriptor,
+                path,
+                format!("must contain at most {max_length} character(s)."),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn schema_type_matches(expected_type: &str, value: &JsonValue) -> bool {
+    match expected_type {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "null" => value.is_null(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => true,
+    }
+}
+
+fn schema_error(
+    descriptor: &ToolDescriptorV2,
+    path: &str,
+    message: impl Into<String>,
+) -> ToolRegistryResult<()> {
+    Err(ToolExecutionError::invalid_input(
+        "agent_tool_input_invalid",
+        format!(
+            "Tool `{}` input at `{path}` {}",
+            descriptor.name,
+            message.into()
+        ),
+    ))
+}
+
+fn child_path(parent: &str, child: &str) -> String {
+    if parent == "$" {
+        format!("$.{child}")
+    } else {
+        format!("{parent}.{child}")
+    }
+}
+
+fn enum_values_for_message(values: &[JsonValue]) -> String {
+    values
+        .iter()
+        .map(stable_json_signature)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn json_type_name(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(number) if number.as_i64().is_some() || number.as_u64().is_some() => {
+            "integer"
+        }
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
 }
 
 fn tool_call_signature(call: &ToolCallInput) -> String {
@@ -1797,6 +2608,7 @@ mod tests {
                 "required": ["path"]
             }),
             capability_tags: vec!["test".into()],
+            application_metadata: ToolApplicationMetadata::default(),
             effect_class: if mutability == ToolMutability::ReadOnly {
                 ToolEffectClass::FileRead
             } else {
@@ -1833,6 +2645,41 @@ mod tests {
         }
     }
 
+    fn extension_manifest() -> ToolExtensionManifest {
+        ToolExtensionManifest {
+            contract_version: TOOL_EXTENSION_MANIFEST_CONTRACT_VERSION,
+            extension_id: "acme.release_notes".into(),
+            tool_name: "acme.release_notes.generate".into(),
+            label: "Release Notes".into(),
+            description: "Generate release-note draft data from approved changelog input.".into(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "changeId": { "type": "string", "minLength": 1 }
+                },
+                "required": ["changeId"]
+            }),
+            permission: ToolExtensionPermissionManifest {
+                permission_id: "release_notes_generate".into(),
+                label: "Generate release notes".into(),
+                effect_class: ToolEffectClass::ExternalService,
+                risk_class: "external_review".into(),
+                audit_label: "release_notes_external_generation".into(),
+            },
+            mutability: ToolMutability::ReadOnly,
+            sandbox_requirement: ToolSandboxRequirement::Network,
+            approval_requirement: ToolApprovalRequirement::Policy,
+            application_metadata: ToolApplicationMetadata::default(),
+            capability_tags: vec!["extension".into(), "release_notes".into()],
+            test_fixtures: vec![ToolExtensionTestFixture {
+                fixture_id: "happy_path".into(),
+                input: json!({ "changeId": "change-1" }),
+                expected_summary_contains: Some("generated".into()),
+            }],
+        }
+    }
+
     fn sandbox_config() -> ToolDispatchConfig {
         ToolDispatchConfig {
             sandbox: Arc::new(PermissionProfileSandbox::new(SandboxExecutionContext {
@@ -1863,6 +2710,42 @@ mod tests {
     }
 
     #[test]
+    fn register_rejects_tool_application_batch_descriptors_without_safety_metadata() {
+        let mut registry = ToolRegistryV2::new();
+        let mut search = descriptor("search_batch", ToolMutability::ReadOnly);
+        search.application_metadata = ToolApplicationMetadata {
+            family: "discovery".into(),
+            kind: ToolApplicationKind::ReadOnlyBatch,
+            dispatch_safety: ToolBatchDispatchSafety::ParallelReadOnly,
+            safety_requirements: vec!["read_only".into()],
+        };
+
+        let error = registry
+            .register(StaticToolHandler::new(search, |_context, _call| {
+                Ok(ToolHandlerOutput::new("ok", json!({})))
+            }))
+            .expect_err("read-only batches must describe bounded results");
+        assert_eq!(error.category, ToolErrorCategory::InvalidInput);
+
+        let mut patch = descriptor("patch_batch", ToolMutability::Mutating);
+        patch.application_metadata = ToolApplicationMetadata {
+            family: "edit".into(),
+            kind: ToolApplicationKind::Declarative,
+            dispatch_safety: ToolBatchDispatchSafety::ToolOwnedAtomic,
+            safety_requirements: vec![
+                "validates_all_targets_before_writing".into(),
+                "reports_diff".into(),
+            ],
+        };
+        let error = registry
+            .register(StaticToolHandler::new(patch, |_context, _call| {
+                Ok(ToolHandlerOutput::new("ok", json!({})))
+            }))
+            .expect_err("mutating declarative tools must describe preview or dry-run safety");
+        assert_eq!(error.category, ToolErrorCategory::InvalidInput);
+    }
+
+    #[test]
     fn pre_hook_payload_includes_action_level_policy_metadata() {
         let mut descriptor = descriptor("command_verify", ToolMutability::Mutating);
         descriptor.effect_class = ToolEffectClass::CommandExecution;
@@ -1882,6 +2765,181 @@ mod tests {
         assert_eq!(payload["effectClass"], json!("command_execution"));
         assert_eq!(payload["sandboxRequirement"], json!("workspace_write"));
         assert_eq!(payload["approvalRequirement"], json!("policy"));
+    }
+
+    #[test]
+    fn s20_extension_manifest_registers_permissioned_non_builtin_tools() {
+        let manifest = extension_manifest();
+        let descriptor = manifest.descriptor();
+        assert_eq!(
+            descriptor.telemetry_attributes["xero.extension.audit_label"],
+            "release_notes_external_generation"
+        );
+        assert_eq!(descriptor.effect_class, ToolEffectClass::ExternalService);
+
+        let mut registry = ToolRegistryV2::new();
+        registry
+            .register(
+                StaticToolHandler::try_from_extension_manifest(manifest, |_context, call| {
+                    Ok(ToolHandlerOutput::new(
+                        format!(
+                            "generated {}",
+                            call.input["changeId"].as_str().unwrap_or("unknown")
+                        ),
+                        json!({"draftId": "draft-1"}),
+                    ))
+                })
+                .expect("extension handler"),
+            )
+            .expect("register extension tool");
+
+        let report = registry.dispatch_batch(
+            &[ToolCallInput {
+                tool_call_id: "call-extension-1".into(),
+                tool_name: "acme.release_notes.generate".into(),
+                input: json!({ "changeId": "change-1" }),
+            }],
+            &ToolDispatchConfig::default(),
+        );
+
+        let ToolDispatchOutcome::Succeeded(success) = &report.groups[0].outcomes[0] else {
+            panic!("extension tool should succeed");
+        };
+        assert_eq!(success.summary, "generated change-1");
+        assert_eq!(
+            success.pre_hook_payload["effectClass"],
+            json!("external_service")
+        );
+        assert_eq!(
+            success
+                .telemetry_attributes
+                .get("xero.extension.permission_id"),
+            Some(&"release_notes_generate".to_string())
+        );
+    }
+
+    #[test]
+    fn s20_extension_manifest_validation_rejects_unsafe_or_untestable_manifests() {
+        let mut bad = extension_manifest();
+        bad.permission.permission_id = " bad permission ".into();
+        let error = bad.validate().expect_err("permission id should be stable");
+        assert_eq!(error.code, "agent_tool_extension_identifier_invalid");
+
+        let mut untestable = extension_manifest();
+        untestable.test_fixtures.clear();
+        let error = untestable
+            .validate()
+            .expect_err("extension manifests should declare fixtures");
+        assert_eq!(error.code, "agent_tool_extension_fixture_missing");
+
+        let mut duplicate_fixture = extension_manifest();
+        duplicate_fixture
+            .test_fixtures
+            .push(ToolExtensionTestFixture {
+                fixture_id: "happy_path".into(),
+                input: json!({ "changeId": "change-2" }),
+                expected_summary_contains: Some("generated".into()),
+            });
+        let error = duplicate_fixture
+            .validate()
+            .expect_err("duplicate fixtures should fail");
+        assert_eq!(error.code, "agent_tool_extension_fixture_duplicate");
+    }
+
+    #[test]
+    fn s20_extension_fixture_verifier_executes_declared_fixtures() {
+        let manifest = extension_manifest();
+        let handler =
+            StaticToolHandler::try_from_extension_manifest(manifest.clone(), |_context, call| {
+                Ok(ToolHandlerOutput::new(
+                    format!(
+                        "generated {}",
+                        call.input["changeId"].as_str().unwrap_or("unknown")
+                    ),
+                    json!({"draftId": "draft-1"}),
+                ))
+            })
+            .expect("extension handler");
+
+        let report = handler
+            .verify_extension_test_fixtures(&manifest, &ToolExecutionContext::default())
+            .expect("fixture report");
+
+        assert!(report.passed);
+        assert_eq!(report.extension_id, "acme.release_notes");
+        assert_eq!(report.fixtures.len(), 1);
+        assert_eq!(
+            report.fixtures[0].status,
+            ToolExtensionFixtureStatus::Passed
+        );
+        assert_eq!(
+            report.fixtures[0].summary.as_deref(),
+            Some("generated change-1")
+        );
+    }
+
+    #[test]
+    fn s20_extension_fixture_verifier_reports_summary_mismatches() {
+        let manifest = extension_manifest();
+        let handler =
+            StaticToolHandler::try_from_extension_manifest(manifest.clone(), |_context, _call| {
+                Ok(ToolHandlerOutput::new("ignored input", json!({})))
+            })
+            .expect("extension handler");
+
+        let report = handler
+            .verify_extension_test_fixtures(&manifest, &ToolExecutionContext::default())
+            .expect("fixture report");
+
+        assert!(!report.passed);
+        assert_eq!(
+            report.fixtures[0].status,
+            ToolExtensionFixtureStatus::Failed
+        );
+        assert_eq!(report.fixtures[0].summary.as_deref(), Some("ignored input"));
+        assert!(report.fixtures[0]
+            .diagnostic
+            .as_deref()
+            .is_some_and(|diagnostic| diagnostic.contains("generated")));
+    }
+
+    #[test]
+    fn s20_extension_tool_policy_denials_block_before_execution() {
+        let mut registry = ToolRegistryV2::new();
+        let executed = Arc::new(AtomicBool::new(false));
+        let executed_for_handler = Arc::clone(&executed);
+        registry
+            .register(
+                StaticToolHandler::try_from_extension_manifest(
+                    extension_manifest(),
+                    move |_context, _call| {
+                        executed_for_handler.store(true, Ordering::SeqCst);
+                        Ok(ToolHandlerOutput::new("generated", json!({})))
+                    },
+                )
+                .expect("extension handler"),
+            )
+            .expect("register extension tool");
+
+        let config = ToolDispatchConfig {
+            policy: Arc::new(StaticToolPolicy::default().deny_tool(
+                "acme.release_notes.generate",
+                "Extension permission was not granted for this custom agent.",
+            )),
+            ..ToolDispatchConfig::default()
+        };
+        let report = registry.dispatch_batch(
+            &[ToolCallInput {
+                tool_call_id: "call-extension-denied".into(),
+                tool_name: "acme.release_notes.generate".into(),
+                input: json!({ "changeId": "change-1" }),
+            }],
+            &config,
+        );
+
+        let failure = report.groups[0].outcomes[0].failure().expect("denied");
+        assert_eq!(failure.error.category, ToolErrorCategory::PolicyDenied);
+        assert!(!executed.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -1909,6 +2967,152 @@ mod tests {
             outcome.failure().unwrap().error.category,
             ToolErrorCategory::InvalidInput
         );
+    }
+
+    #[test]
+    fn dispatch_rejects_enum_violations_and_undeclared_properties() {
+        let mut descriptor = descriptor("project_context_search", ToolMutability::ReadOnly);
+        descriptor.input_schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action"],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search_project_records", "search_approved_memory"]
+                },
+                "query": { "type": "string" }
+            }
+        });
+        let mut registry = ToolRegistryV2::new();
+        registry
+            .register(StaticToolHandler::new(descriptor, |_context, _call| {
+                Ok(ToolHandlerOutput::new("ok", json!({})))
+            }))
+            .expect("register project context search");
+        let mut tracker = ToolBudgetTracker::new(ToolBudget::default());
+
+        let invalid_enum = registry.dispatch_call(
+            ToolCallInput {
+                tool_call_id: "call-invalid-enum".into(),
+                tool_name: "project_context_search".into(),
+                input: json!({ "action": "delete_everything", "query": "context" }),
+            },
+            &mut tracker,
+            &ToolDispatchConfig::default(),
+        );
+        assert_eq!(
+            invalid_enum.failure().unwrap().error.category,
+            ToolErrorCategory::InvalidInput
+        );
+
+        let unexpected_field = registry.dispatch_call(
+            ToolCallInput {
+                tool_call_id: "call-extra".into(),
+                tool_name: "project_context_search".into(),
+                input: json!({
+                    "action": "search_project_records",
+                    "query": "context",
+                    "surprise": true
+                }),
+            },
+            &mut tracker,
+            &ToolDispatchConfig::default(),
+        );
+        assert_eq!(
+            unexpected_field.failure().unwrap().error.category,
+            ToolErrorCategory::InvalidInput
+        );
+    }
+
+    #[test]
+    fn dispatch_validates_nested_objects_arrays_and_integer_bounds() {
+        let mut descriptor = descriptor("structured_tool", ToolMutability::ReadOnly);
+        descriptor.input_schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["config", "paths", "limit"],
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["mode"],
+                    "properties": {
+                        "mode": { "type": "string", "enum": ["fast", "thorough"] },
+                        "dryRun": { "type": "boolean" }
+                    }
+                },
+                "paths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": { "type": "string" }
+                },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 5 }
+            }
+        });
+        let mut registry = ToolRegistryV2::new();
+        registry
+            .register(StaticToolHandler::new(descriptor, |_context, _call| {
+                Ok(ToolHandlerOutput::new("ok", json!({ "accepted": true })))
+            }))
+            .expect("register structured tool");
+
+        let valid = registry.dispatch_call(
+            ToolCallInput {
+                tool_call_id: "call-valid".into(),
+                tool_name: "structured_tool".into(),
+                input: json!({
+                    "config": { "mode": "fast", "dryRun": true },
+                    "paths": ["src/lib.rs"],
+                    "limit": 3
+                }),
+            },
+            &mut ToolBudgetTracker::new(ToolBudget::default()),
+            &ToolDispatchConfig::default(),
+        );
+        assert!(matches!(valid, ToolDispatchOutcome::Succeeded(_)));
+
+        for (id, input) in [
+            (
+                "call-bad-array",
+                json!({
+                    "config": { "mode": "fast" },
+                    "paths": ["src/lib.rs", 42],
+                    "limit": 3
+                }),
+            ),
+            (
+                "call-bad-nested",
+                json!({
+                    "config": { "mode": "sideways" },
+                    "paths": ["src/lib.rs"],
+                    "limit": 3
+                }),
+            ),
+            (
+                "call-bad-bound",
+                json!({
+                    "config": { "mode": "fast" },
+                    "paths": ["src/lib.rs"],
+                    "limit": 9
+                }),
+            ),
+        ] {
+            let outcome = registry.dispatch_call(
+                ToolCallInput {
+                    tool_call_id: id.into(),
+                    tool_name: "structured_tool".into(),
+                    input,
+                },
+                &mut ToolBudgetTracker::new(ToolBudget::default()),
+                &ToolDispatchConfig::default(),
+            );
+            assert_eq!(
+                outcome.failure().unwrap().error.category,
+                ToolErrorCategory::InvalidInput
+            );
+        }
     }
 
     #[test]
@@ -2107,6 +3311,64 @@ mod tests {
         assert_eq!(*rollback.rollbacks.lock().unwrap(), 1);
     }
 
+    #[derive(Debug)]
+    struct FailingCheckpoint;
+
+    impl ToolRollback for FailingCheckpoint {
+        fn checkpoint_before(
+            &self,
+            _call: &ToolCallInput,
+            _descriptor: &ToolDescriptorV2,
+        ) -> ToolRegistryResult<Option<JsonValue>> {
+            Err(ToolExecutionError::policy_denied(
+                "checkpoint_denied",
+                "checkpoint denied before handler execution",
+            ))
+        }
+
+        fn rollback_after_failure(
+            &self,
+            _call: &ToolCallInput,
+            _descriptor: &ToolDescriptorV2,
+            _checkpoint: &JsonValue,
+            _error: &ToolExecutionError,
+        ) -> ToolRegistryResult<JsonValue> {
+            Ok(json!({ "unexpected": true }))
+        }
+    }
+
+    #[test]
+    fn mutating_preflight_error_blocks_handler_execution() {
+        let executed = Arc::new(Mutex::new(false));
+        let executed_for_handler = Arc::clone(&executed);
+        let mut registry = ToolRegistryV2::new();
+        registry
+            .register(StaticToolHandler::new(
+                descriptor("write_file", ToolMutability::Mutating),
+                move |_context, _call| {
+                    *executed_for_handler.lock().unwrap() = true;
+                    Ok(ToolHandlerOutput::new("write", json!({ "ok": true })))
+                },
+            ))
+            .expect("register write");
+        let config = ToolDispatchConfig {
+            rollback: Some(Arc::new(FailingCheckpoint)),
+            ..ToolDispatchConfig::default()
+        };
+        let mut tracker = ToolBudgetTracker::new(ToolBudget::default());
+
+        let outcome = registry.dispatch_call(
+            call("call-1", "write_file", "src/lib.rs"),
+            &mut tracker,
+            &config,
+        );
+
+        let failure = outcome.failure().expect("preflight failure");
+        assert_eq!(failure.error.category, ToolErrorCategory::PolicyDenied);
+        assert_eq!(failure.error.code, "checkpoint_denied");
+        assert!(!*executed.lock().unwrap());
+    }
+
     #[test]
     fn repeated_failing_tool_sets_doom_loop_signal() {
         let mut registry = ToolRegistryV2::new();
@@ -2268,6 +3530,48 @@ mod tests {
     }
 
     #[test]
+    fn cancellable_handler_observes_group_deadline_control() {
+        let observed_cancel = Arc::new(Mutex::new(false));
+        let observed_cancel_for_handler = Arc::clone(&observed_cancel);
+        let mut registry = ToolRegistryV2::new();
+        registry
+            .register(StaticToolHandler::new_cancellable(
+                descriptor("slow_probe", ToolMutability::ReadOnly),
+                move |_context, call, control| {
+                    while !control.is_cancelled() {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    *observed_cancel_for_handler.lock().unwrap() = true;
+                    Err(ToolExecutionError::timeout(
+                        "slow_probe_cancelled",
+                        format!("{} saw cancellation", call.tool_name),
+                    ))
+                },
+            ))
+            .expect("register cancellable probe");
+        let config = ToolDispatchConfig {
+            budget: ToolBudget {
+                max_wall_clock_time_per_tool_group_ms: 20,
+                ..ToolBudget::default()
+            },
+            ..ToolDispatchConfig::default()
+        };
+
+        let report = registry.dispatch_batch(&[call("call-1", "slow_probe", "a")], &config);
+
+        assert!(report.groups[0].outcomes[0]
+            .failure()
+            .is_some_and(|failure| failure.error.category == ToolErrorCategory::Timeout));
+        for _ in 0..20 {
+            if *observed_cancel.lock().unwrap() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(*observed_cancel.lock().unwrap());
+    }
+
+    #[test]
     fn mutating_tools_are_split_into_sequential_groups() {
         let mut registry = ToolRegistryV2::new();
         registry
@@ -2335,5 +3639,40 @@ mod tests {
                 .exit_classification,
             SandboxExitClassification::Success
         );
+    }
+
+    #[test]
+    fn structured_truncation_preserves_json_object_shape_when_requested() {
+        let mut descriptor = descriptor("structured_read", ToolMutability::ReadOnly);
+        descriptor.result_truncation.max_output_bytes = 220;
+        descriptor.result_truncation.preserve_json_shape = true;
+        let mut registry = ToolRegistryV2::new();
+        registry
+            .register(StaticToolHandler::new(descriptor, |_context, _call| {
+                Ok(ToolHandlerOutput::new(
+                    "read",
+                    json!({
+                        "path": "src/lib.rs",
+                        "content": "a".repeat(2000),
+                    }),
+                ))
+            }))
+            .expect("register structured read");
+        let mut tracker = ToolBudgetTracker::new(ToolBudget::default());
+
+        let outcome = registry.dispatch_call(
+            call("call-1", "structured_read", "src/lib.rs"),
+            &mut tracker,
+            &ToolDispatchConfig::default(),
+        );
+
+        let ToolDispatchOutcome::Succeeded(success) = outcome else {
+            panic!("expected success");
+        };
+        assert!(success.truncation.was_truncated);
+        assert_eq!(success.output["path"], json!("src/lib.rs"));
+        assert!(success.output["content"].as_str().is_some());
+        assert!(success.output.get("xeroTruncation").is_some());
+        assert!(success.output.get("xeroTruncated").is_none());
     }
 }

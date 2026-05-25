@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { startTransition, useCallback } from 'react'
 
 import { mapAutonomousRunInspection } from '@/src/lib/xero-model/autonomous'
 import {
@@ -7,6 +7,7 @@ import {
   selectAgentSessionId,
   type RuntimeAutoCompactPreferenceDto,
   type RuntimeRunControlInputDto,
+  type RuntimeRunView,
   type StagedAgentAttachmentDto,
   type UpdateRuntimeRunControlsRequestDto,
 } from '@/src/lib/xero-model/runtime'
@@ -20,7 +21,112 @@ import {
   getOperatorActionError,
 } from './mutation-support'
 
-const DEFAULT_AGENT_SESSION_TITLE = 'New Chat'
+const MAX_FALLBACK_SESSION_TITLE_CHARS = 64
+const GENERIC_SESSION_TITLES = new Set([
+  'main',
+  'new chat',
+  'new session',
+  'untitled',
+  'untitled session',
+  'chat',
+  'session',
+  'conversation',
+  'developer conversation',
+  'developer assistant conversation',
+])
+
+function hasPromptPayload(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasAttachmentPayload(value: StagedAgentAttachmentDto[] | null | undefined): boolean {
+  return Array.isArray(value) && value.length > 0
+}
+
+function scheduleRuntimeRunProjectionUpdate(callback: () => void) {
+  if (typeof window === 'undefined') {
+    startTransition(callback)
+    return
+  }
+
+  window.setTimeout(() => {
+    startTransition(callback)
+  }, 16)
+}
+
+function collapseSessionTitleWhitespace(value: string): string {
+  return value.split(/\s+/u).filter(Boolean).join(' ')
+}
+
+function trimTrailingSessionTitlePunctuation(value: string): string {
+  return value
+    .trim()
+    .replace(/[.,:;!?\-_"'`]+$/u, '')
+    .trim()
+}
+
+function truncateSessionTitle(value: string, maxChars: number): string {
+  const trimmed = value.trim()
+  const chars = Array.from(trimmed)
+  if (chars.length <= maxChars) {
+    return trimmed
+  }
+
+  let output = ''
+  for (const word of trimmed.split(/\s+/u)) {
+    const nextLength = Array.from(output).length + (output.length === 0 ? 0 : 1) + Array.from(word).length
+    if (nextLength > maxChars) {
+      break
+    }
+    output = output.length === 0 ? word : `${output} ${word}`
+  }
+
+  return output.length > 0 ? output : chars.slice(0, maxChars).join('')
+}
+
+function isGenericSessionTitle(value: string): boolean {
+  const normalized = collapseSessionTitleWhitespace(value.trim().replace(/^["'`]+|["'`]+$/gu, '').toLowerCase())
+  return GENERIC_SESSION_TITLES.has(normalized)
+}
+
+function fallbackSessionTitleFromPrompt(prompt: string): string | null {
+  const firstLine = prompt
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? ''
+  const cleaned = collapseSessionTitleWhitespace(firstLine)
+    .replace(/^[#\-*>"'`]+/u, '')
+    .trim()
+  const title = truncateSessionTitle(
+    trimTrailingSessionTitlePunctuation(cleaned),
+    MAX_FALLBACK_SESSION_TITLE_CHARS,
+  )
+
+  return title.length > 0 && !isGenericSessionTitle(title) ? title : null
+}
+
+function controlsForSessionTitleRefresh(
+  runtimeRun: RuntimeRunView | null,
+  requestedControls: RuntimeRunControlInputDto | null | undefined,
+): RuntimeRunControlInputDto | null {
+  if (requestedControls) {
+    return requestedControls
+  }
+  const selected = runtimeRun?.controls.selected
+  if (!selected) {
+    return null
+  }
+  return {
+    runtimeAgentId: selected.runtimeAgentId,
+    agentDefinitionId: selected.agentDefinitionId,
+    providerProfileId: selected.providerProfileId,
+    modelId: selected.modelId,
+    thinkingEffort: selected.thinkingEffort,
+    approvalMode: selected.approvalMode,
+    planModeRequired: selected.planModeRequired,
+    autoCompactEnabled: selected.autoCompactEnabled,
+  }
+}
 
 export function useRunControlMutations({
   adapter,
@@ -52,6 +158,54 @@ export function useRunControlMutations({
     applyRuntimeRunUpdate,
     applyAutonomousRunStateUpdate,
   } = operations
+
+  const refreshSessionTitleFromPrompt = useCallback(
+    (
+      projectId: string,
+      agentSessionId: string,
+      prompt: string | null | undefined,
+      controls: RuntimeRunControlInputDto | null | undefined,
+    ) => {
+      const promptForAutoName = prompt?.trim() ?? ''
+      if (promptForAutoName.length === 0) {
+        return
+      }
+      const applySessionTitle = (session: Parameters<typeof mapAgentSession>[0]) => {
+        if (activeProjectIdRef.current === projectId) {
+          scheduleRuntimeRunProjectionUpdate(() => {
+            applyAgentSessionSelection(mapAgentSession(session))
+          })
+        }
+      }
+
+      void adapter
+        .autoNameAgentSession({
+          projectId,
+          agentSessionId,
+          prompt: promptForAutoName,
+          controls: controls ?? null,
+        })
+        .then(applySessionTitle)
+        .catch(() => {
+          const fallbackTitle = fallbackSessionTitleFromPrompt(promptForAutoName)
+          if (!fallbackTitle) {
+            return
+          }
+
+          void adapter
+            .updateAgentSession({
+              projectId,
+              agentSessionId,
+              title: fallbackTitle,
+            })
+            .then(applySessionTitle)
+            .catch(() => {
+              // Auto-naming should never interrupt a user prompt.
+            })
+        })
+    },
+    [activeProjectIdRef, adapter, applyAgentSessionSelection],
+  )
 
   const startAutonomousRun = useCallback(async () => {
     const projectId = getActiveProjectId(
@@ -191,21 +345,13 @@ export function useRunControlMutations({
     const agentSessionId = selectAgentSessionId(
       activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
     )
-    const selectedSession =
-      activeProjectRef.current?.id === projectId
-        ? activeProjectRef.current.agentSessions.find((session) => session.agentSessionId === agentSessionId) ?? null
-        : null
-    const promptForAutoName = options?.prompt?.trim() ?? ''
-    const shouldAutoNameSession = Boolean(
-      promptForAutoName.length > 0 &&
-        selectedSession &&
-        selectedSession.lastRunId === null &&
-        selectedSession.title.trim().toLowerCase() === DEFAULT_AGENT_SESSION_TITLE.toLowerCase(),
-    )
+    const isPromptSubmission = hasPromptPayload(options?.prompt) || hasAttachmentPayload(options?.attachments)
 
-    setRuntimeRunActionStatus('running')
-    setPendingRuntimeRunAction('start')
-    setRuntimeRunActionError(null)
+    if (!isPromptSubmission) {
+      setRuntimeRunActionStatus('running')
+      setPendingRuntimeRunAction('start')
+      setRuntimeRunActionError(null)
+    }
 
     try {
       const response = await adapter.startRuntimeRun(projectId, agentSessionId, {
@@ -213,28 +359,21 @@ export function useRunControlMutations({
         initialPrompt: options?.prompt ?? null,
         initialAttachments: options?.attachments ?? [],
       })
-      const runtimeRun = applyRuntimeRunUpdate(projectId, mapRuntimeRun(response), {
-        clearGlobalError: false,
-        loadError: null,
+      const runtimeRun = mapRuntimeRun(response)
+      scheduleRuntimeRunProjectionUpdate(() => {
+        setRuntimeRunActionError(null)
+        applyRuntimeRunUpdate(projectId, runtimeRun, {
+          clearGlobalError: false,
+          loadError: null,
+        })
       })
 
-      if (shouldAutoNameSession) {
-        void adapter
-          .autoNameAgentSession({
-            projectId,
-            agentSessionId,
-            prompt: promptForAutoName,
-            controls: options?.controls ?? null,
-          })
-          .then((session) => {
-            if (activeProjectIdRef.current === projectId) {
-              applyAgentSessionSelection(mapAgentSession(session))
-            }
-          })
-          .catch(() => {
-            // Auto-naming should never interrupt the user's first prompt.
-          })
-      }
+      refreshSessionTitleFromPrompt(
+        projectId,
+        agentSessionId,
+        options?.prompt,
+        controlsForSessionTitleRefresh(runtimeRun, options?.controls),
+      )
 
       return runtimeRun
     } catch (error) {
@@ -253,15 +392,17 @@ export function useRunControlMutations({
 
       throw error
     } finally {
-      setRuntimeRunActionStatus('idle')
-      setPendingRuntimeRunAction(null)
+      if (!isPromptSubmission) {
+        setRuntimeRunActionStatus('idle')
+        setPendingRuntimeRunAction(null)
+      }
     }
   }, [
     activeProjectIdRef,
     activeProjectRef,
     adapter,
-    applyAgentSessionSelection,
     applyRuntimeRunUpdate,
+    refreshSessionTitleFromPrompt,
     setPendingRuntimeRunAction,
     setRuntimeRunActionError,
     setRuntimeRunActionStatus,
@@ -300,10 +441,13 @@ export function useRunControlMutations({
         throw new Error('Xero cannot queue runtime-run controls until a Xero-owned agent run exists for this project.')
       }
       const resolvedRunId = runId
+      const isPromptSubmission = hasPromptPayload(request.prompt) || hasAttachmentPayload(request.attachments)
 
-      setRuntimeRunActionStatus('running')
-      setPendingRuntimeRunAction('update_controls')
-      setRuntimeRunActionError(null)
+      if (!isPromptSubmission) {
+        setRuntimeRunActionStatus('running')
+        setPendingRuntimeRunAction('update_controls')
+        setRuntimeRunActionError(null)
+      }
 
       try {
         const updateRequest: UpdateRuntimeRunControlsRequestDto = {
@@ -314,14 +458,22 @@ export function useRunControlMutations({
           prompt: request.prompt ?? null,
           attachments: request.attachments ?? [],
         }
-        if (request.autoCompact !== undefined) {
-          updateRequest.autoCompact = request.autoCompact
-        }
         const response = await adapter.updateRuntimeRunControls(updateRequest)
-        return applyRuntimeRunUpdate(projectId, mapRuntimeRun(response), {
-          clearGlobalError: false,
-          loadError: null,
+        const runtimeRun = mapRuntimeRun(response)
+        scheduleRuntimeRunProjectionUpdate(() => {
+          setRuntimeRunActionError(null)
+          applyRuntimeRunUpdate(projectId, runtimeRun, {
+            clearGlobalError: false,
+            loadError: null,
+          })
         })
+        refreshSessionTitleFromPrompt(
+          projectId,
+          agentSessionId,
+          request.prompt,
+          controlsForSessionTitleRefresh(runtimeRun, request.controls),
+        )
+        return runtimeRun
       } catch (error) {
         setRuntimeRunActionError(
           getOperatorActionError(
@@ -338,8 +490,10 @@ export function useRunControlMutations({
 
         throw error
       } finally {
-        setRuntimeRunActionStatus('idle')
-        setPendingRuntimeRunAction(null)
+        if (!isPromptSubmission) {
+          setRuntimeRunActionStatus('idle')
+          setPendingRuntimeRunAction(null)
+        }
       }
     },
     [
@@ -348,6 +502,7 @@ export function useRunControlMutations({
       runtimeRunsRef,
       adapter,
       applyRuntimeRunUpdate,
+      refreshSessionTitleFromPrompt,
       setPendingRuntimeRunAction,
       setRuntimeRunActionError,
       setRuntimeRunActionStatus,
@@ -371,10 +526,14 @@ export function useRunControlMutations({
 
       try {
         const response = await adapter.stopRuntimeRun(projectId, agentSessionId, runId)
-        return applyRuntimeRunUpdate(projectId, response ? mapRuntimeRun(response) : null, {
-          clearGlobalError: false,
-          loadError: null,
+        const runtimeRun = response ? mapRuntimeRun(response) : null
+        startTransition(() => {
+          applyRuntimeRunUpdate(projectId, runtimeRun, {
+            clearGlobalError: false,
+            loadError: null,
+          })
         })
+        return runtimeRun
       } catch (error) {
         setRuntimeRunActionError(
           getOperatorActionError(error, 'Xero could not stop the Xero-owned agent run for this project.'),

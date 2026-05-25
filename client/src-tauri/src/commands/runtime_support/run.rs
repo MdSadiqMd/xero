@@ -1,7 +1,6 @@
 use std::{
     path::{Path, PathBuf},
     thread,
-    time::Instant,
 };
 
 use rand::RngCore;
@@ -12,20 +11,22 @@ use xero_agent_core::{
 
 use crate::{
     auth::{
-        load_latest_openai_codex_session, load_openai_codex_session,
-        load_openai_codex_session_for_profile_link, now_timestamp,
+        load_latest_openai_codex_session, load_latest_xai_session, load_openai_codex_session,
+        load_openai_codex_session_for_profile_link, load_xai_session,
+        load_xai_session_for_profile_link, now_timestamp,
         openai_compatible::resolve_openai_compatible_endpoint_for_profile,
-        refresh_provider_auth_session, StoredOpenAiCodexSession,
+        refresh_provider_auth_session, StoredOpenAiCodexSession, StoredXaiSession,
     },
     commands::{
-        default_runtime_agent_id, ensure_runtime_agent_available,
+        agent_tooling_settings::resolve_agent_tool_application_style, default_runtime_agent_id,
+        ensure_runtime_agent_available,
         get_runtime_settings::runtime_settings_snapshot_for_provider_profile,
-        provider_credentials::load_provider_credentials_view, CommandError, CommandResult,
-        RuntimeRunActiveControlSnapshotDto, RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto,
-        RuntimeRunControlInputDto, RuntimeRunControlStateDto, RuntimeRunDiagnosticDto,
-        RuntimeRunDto, RuntimeRunPendingControlSnapshotDto, RuntimeRunStatusDto,
-        RuntimeRunTransportDto, RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto,
-        RUNTIME_RUN_UPDATED_EVENT,
+        provider_credentials::load_provider_credentials_view, AgentDefaultModelDto, CommandError,
+        CommandResult, RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto,
+        RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto, RuntimeRunControlInputDto,
+        RuntimeRunControlStateDto, RuntimeRunDiagnosticDto, RuntimeRunDto,
+        RuntimeRunPendingControlSnapshotDto, RuntimeRunStatusDto, RuntimeRunTransportDto,
+        RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto, RUNTIME_RUN_UPDATED_EVENT,
     },
     db::project_store::{
         self, build_runtime_run_control_state_with_profile, RuntimeRunActiveControlSnapshotRecord,
@@ -38,12 +39,13 @@ use crate::{
     runtime::{
         create_owned_agent_run, drive_owned_agent_run, normalize_openai_codex_model_id,
         AgentProviderConfig, AnthropicProviderConfig, AutonomousToolRuntime, BedrockProviderConfig,
-        OpenAiCodexResponsesProviderConfig, OpenAiCompatibleProviderConfig,
+        DeepSeekProviderConfig, OpenAiCodexResponsesProviderConfig, OpenAiCompatibleProviderConfig,
         OpenAiResponsesProviderConfig, OwnedAgentRunRequest, RuntimeProvider, VertexProviderConfig,
-        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
+        XaiResponsesProviderConfig, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
+        BEDROCK_PROVIDER_ID, CURSOR_PROVIDER_ID, DEEPSEEK_PROVIDER_ID,
         GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
         OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
-        OWNED_AGENT_RUNTIME_KIND, OWNED_AGENT_SUPERVISOR_KIND, VERTEX_PROVIDER_ID,
+        OWNED_AGENT_RUNTIME_KIND, OWNED_AGENT_SUPERVISOR_KIND, VERTEX_PROVIDER_ID, XAI_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -53,6 +55,7 @@ use super::{project::resolve_project_root, session::command_error_from_auth};
 const DEFAULT_OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_REFRESH_SKEW_SECONDS: i64 = 60;
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
 
 pub(crate) struct RuntimeRunLaunchOutcome {
     pub repo_root: PathBuf,
@@ -60,10 +63,10 @@ pub(crate) struct RuntimeRunLaunchOutcome {
     pub reconnected: bool,
 }
 
-struct ActiveProviderProfileSelection {
-    profile_id: String,
-    provider_id: String,
-    model_id: String,
+pub(crate) struct ActiveProviderProfileSelection {
+    pub(crate) profile_id: String,
+    pub(crate) provider_id: String,
+    pub(crate) model_id: String,
 }
 
 pub(crate) struct OwnedRuntimePromptStart {
@@ -93,10 +96,17 @@ pub(crate) fn load_runtime_run_status(
     project_id: &str,
     agent_session_id: &str,
 ) -> CommandResult<Option<RuntimeRunSnapshotRecord>> {
-    Ok(
-        load_persisted_runtime_run(repo_root, project_id, agent_session_id)?
-            .filter(|snapshot| snapshot.run.supervisor_kind == OWNED_AGENT_SUPERVISOR_KIND),
-    )
+    let persisted = load_persisted_runtime_run(repo_root, project_id, agent_session_id)?;
+    Ok(runtime_run_status_from_persisted(&persisted))
+}
+
+pub(crate) fn runtime_run_status_from_persisted(
+    snapshot: &Option<RuntimeRunSnapshotRecord>,
+) -> Option<RuntimeRunSnapshotRecord> {
+    snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.run.supervisor_kind == OWNED_AGENT_SUPERVISOR_KIND)
+        .cloned()
 }
 
 pub(crate) fn runtime_run_dto_from_snapshot(snapshot: &RuntimeRunSnapshotRecord) -> RuntimeRunDto {
@@ -235,22 +245,26 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
     initial_prompt: Option<String>,
     initial_attachments: Vec<crate::commands::StagedAgentAttachmentDto>,
 ) -> CommandResult<RuntimeRunLaunchOutcome> {
-    let started = Instant::now();
     let repo_root = resolve_project_root(app, state, project_id)?;
-    project_store::ensure_agent_session_active(&repo_root, project_id, agent_session_id)?;
+    let agent_session =
+        project_store::ensure_agent_session_active(&repo_root, project_id, agent_session_id)?;
     let before = load_persisted_runtime_run(&repo_root, project_id, agent_session_id)?;
 
     if let Some(existing) = before
         .as_ref()
         .filter(|snapshot| is_reconnectable_owned_runtime_run(snapshot))
     {
+        ensure_agent_matches_session_kind(
+            &agent_session,
+            existing.controls.active.runtime_agent_id,
+        )?;
         ensure_runtime_agent_available(existing.controls.active.runtime_agent_id)?;
         project_store::ensure_runtime_agent_allowed_for_project(
             &repo_root,
             project_id,
             existing.controls.active.runtime_agent_id,
         )?;
-        reject_runtime_run_provider_profile_switch(existing, requested_controls.as_ref())?;
+        reject_runtime_run_agent_switch(existing, requested_controls.as_ref())?;
         return Ok(RuntimeRunLaunchOutcome {
             repo_root,
             snapshot: existing.clone(),
@@ -258,12 +272,14 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
         });
     }
 
-    let active_profile =
-        resolve_owned_runtime_profile_selection(app, state, requested_controls.as_ref())?;
     let requested_agent_id = requested_controls
         .as_ref()
         .map(|controls| controls.runtime_agent_id)
-        .unwrap_or_else(default_runtime_agent_id);
+        .unwrap_or_else(|| match agent_session.session_kind {
+            project_store::AgentSessionKind::Standard => default_runtime_agent_id(),
+            project_store::AgentSessionKind::ComputerUse => RuntimeAgentIdDto::ComputerUse,
+        });
+    ensure_agent_matches_session_kind(&agent_session, requested_agent_id)?;
     ensure_runtime_agent_available(requested_agent_id)?;
     project_store::ensure_runtime_agent_allowed_for_project(
         &repo_root,
@@ -282,10 +298,28 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
         project_id,
         definition_selection.runtime_agent_id,
     )?;
+    let builtin_default_model = if definition_selection.definition_id
+        == project_store::default_agent_definition_id_for_runtime_agent(
+            definition_selection.runtime_agent_id,
+        ) {
+        crate::commands::agent_default_models::load_builtin_agent_default_model(
+            &state.global_db_path(app)?,
+            definition_selection.runtime_agent_id,
+        )?
+    } else {
+        None
+    };
+    let effective_requested_controls = resolve_agent_default_model_controls(
+        requested_controls.as_ref(),
+        &definition_selection,
+        builtin_default_model.as_ref(),
+    );
+    let active_profile =
+        resolve_owned_runtime_profile_selection(app, state, effective_requested_controls.as_ref())?;
     let mut run_controls = resolve_owned_runtime_run_control_state(
         &active_profile,
         &definition_selection,
-        requested_controls.as_ref(),
+        effective_requested_controls.as_ref(),
         initial_prompt.as_deref(),
     )?;
     attach_queued_runtime_attachments(&mut run_controls, &initial_attachments);
@@ -299,7 +333,7 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
     } else {
         "Owned agent runtime accepted the run."
     };
-    let snapshot = persist_owned_runtime_run(
+    let mut snapshot = persist_owned_runtime_run(
         &repo_root,
         project_id,
         agent_session_id,
@@ -316,29 +350,43 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
     let runtime_run = runtime_run_dto_from_snapshot(&snapshot);
     emit_runtime_run_updated(app, Some(&runtime_run))?;
 
-    if let Some(prompt) = prompt {
-        spawn_owned_runtime_prompt_start(
-            app.clone(),
-            state.clone(),
-            OwnedRuntimePromptStart {
-                repo_root: repo_root.clone(),
-                project_id: project_id.into(),
-                agent_session_id: agent_session_id.into(),
-                run_id: run_id.clone(),
-                provider_profile_id: active_profile.profile_id,
-                provider_id: active_profile.provider_id.clone(),
-                run_controls: run_controls.clone(),
-                accepted_snapshot: snapshot.clone(),
-                prompt,
-                attachments: initial_attachments,
-            },
-        );
+    match prompt {
+        Some(prompt) => {
+            spawn_owned_runtime_prompt_start(
+                app.clone(),
+                state.clone(),
+                OwnedRuntimePromptStart {
+                    repo_root: repo_root.clone(),
+                    project_id: project_id.into(),
+                    agent_session_id: agent_session_id.into(),
+                    run_id: run_id.clone(),
+                    provider_profile_id: active_profile.profile_id,
+                    provider_id: active_profile.provider_id.clone(),
+                    run_controls: run_controls.clone(),
+                    accepted_snapshot: snapshot.clone(),
+                    prompt,
+                    attachments: initial_attachments,
+                },
+            );
+        }
+        None => {
+            snapshot = persist_owned_runtime_run(
+                &repo_root,
+                project_id,
+                agent_session_id,
+                &run_id,
+                &active_profile.provider_id,
+                &run_controls,
+                RuntimeRunStatus::Running,
+                None,
+                "Owned agent runtime is waiting for input.",
+                snapshot.last_checkpoint_sequence.saturating_add(1),
+                Some(&snapshot),
+            )?;
+            let runtime_run = runtime_run_dto_from_snapshot(&snapshot);
+            emit_runtime_run_updated(app, Some(&runtime_run))?;
+        }
     }
-
-    eprintln!(
-        "[runtime-latency] start_runtime_run accepted project_id={project_id} agent_session_id={agent_session_id} run_id={run_id} duration_ms={}",
-        started.elapsed().as_millis()
-    );
 
     Ok(RuntimeRunLaunchOutcome {
         repo_root,
@@ -353,12 +401,7 @@ pub(crate) fn spawn_owned_runtime_prompt_start<R: Runtime + 'static>(
     task: OwnedRuntimePromptStart,
 ) {
     thread::spawn(move || {
-        if let Err(error) = bootstrap_and_drive_owned_runtime_prompt(&app, &state, task) {
-            eprintln!(
-                "[runtime-latency] owned runtime background bootstrap failed before durable failure update: {}: {}",
-                error.code, error.message
-            );
-        }
+        let _ = bootstrap_and_drive_owned_runtime_prompt(&app, &state, task);
     });
 }
 
@@ -367,7 +410,6 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
     state: &DesktopState,
     task: OwnedRuntimePromptStart,
 ) -> CommandResult<()> {
-    let total_started = Instant::now();
     let mut runtime_snapshot = task.accepted_snapshot.clone();
 
     runtime_snapshot = emit_owned_runtime_progress(
@@ -379,7 +421,6 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
         "Checking provider.",
     )?;
 
-    let preflight_started = Instant::now();
     let provider_preflight = match ensure_owned_runtime_provider_turn_capabilities(
         app,
         state,
@@ -389,15 +430,7 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
         &task.run_controls.active.model_id,
         &task.attachments,
     ) {
-        Ok(snapshot) => {
-            eprintln!(
-                "[runtime-latency] provider_preflight project_id={} run_id={} duration_ms={}",
-                task.project_id,
-                task.run_id,
-                preflight_started.elapsed().as_millis()
-            );
-            snapshot
-        }
+        Ok(snapshot) => snapshot,
         Err(error) => {
             let _ = emit_owned_runtime_failure(
                 app,
@@ -433,8 +466,23 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
             return Ok(());
         }
     };
+    let (provider_id, model_id) = agent_provider_config_identity(&provider_config);
+    let tool_application_policy =
+        match resolve_agent_tool_application_style(app, state, &provider_id, &model_id) {
+            Ok(policy) => policy,
+            Err(error) => {
+                let _ = emit_owned_runtime_failure(
+                    app,
+                    &task.repo_root,
+                    &runtime_snapshot,
+                    &error,
+                    "Tool application style resolution failed.",
+                );
+                return Ok(());
+            }
+        };
     let tool_runtime = match AutonomousToolRuntime::for_project(app, state, &task.project_id) {
-        Ok(runtime) => runtime,
+        Ok(runtime) => runtime.with_tool_application_policy(tool_application_policy),
         Err(error) => {
             let _ = emit_owned_runtime_failure(
                 app,
@@ -480,7 +528,6 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
         }
     };
 
-    let create_started = Instant::now();
     if let Err(error) = create_owned_agent_run(&owned_request) {
         drop(lease);
         let _ = emit_owned_runtime_failure(
@@ -492,13 +539,6 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
         );
         return Ok(());
     }
-    eprintln!(
-        "[runtime-latency] create_owned_agent_run project_id={} run_id={} duration_ms={}",
-        task.project_id,
-        task.run_id,
-        create_started.elapsed().as_millis()
-    );
-
     runtime_snapshot = apply_owned_runtime_run_pending_controls_with_status(
         &task.repo_root,
         &runtime_snapshot,
@@ -547,12 +587,6 @@ fn bootstrap_and_drive_owned_runtime_prompt<R: Runtime>(
         emit_runtime_run_updated(app, Some(&runtime_run))?;
     }
     drop(lease);
-    eprintln!(
-        "[runtime-latency] owned_runtime_prompt_background project_id={} run_id={} duration_ms={}",
-        task.project_id,
-        task.run_id,
-        total_started.elapsed().as_millis()
-    );
     Ok(())
 }
 
@@ -715,6 +749,56 @@ pub(crate) fn resolve_owned_agent_provider_config<R: Runtime>(
                 ))
             }
         }
+        XAI_PROVIDER_ID => match active_profile.credential_link.as_ref() {
+            Some(crate::provider_credentials::ProviderCredentialLink::ApiKey { .. }) => {
+                let api_key = runtime_settings.provider_api_key.clone().ok_or_else(|| {
+                    CommandError::user_fixable(
+                        "xai_api_key_missing",
+                        "Xero cannot start the owned xAI adapter because no xAI API key is configured.",
+                    )
+                })?;
+                Ok(AgentProviderConfig::XaiResponses(
+                    XaiResponsesProviderConfig {
+                        provider_id: XAI_PROVIDER_ID.into(),
+                        model_id,
+                        base_url: XAI_API_BASE_URL.into(),
+                        bearer_token: api_key,
+                        timeout_ms: 0,
+                    },
+                ))
+            }
+            Some(link @ crate::provider_credentials::ProviderCredentialLink::Xai { .. }) => {
+                let auth_store_path = state.global_db_path(app)?;
+                let session = load_xai_session_for_profile_link(&auth_store_path, link)
+                    .map_err(command_error_from_auth)?
+                    .ok_or_else(|| {
+                        CommandError::user_fixable(
+                            "xai_auth_missing",
+                            "Xero cannot start the owned xAI adapter because no app-local xAI OAuth session is available.",
+                        )
+                    })?;
+                let session = refresh_xai_session_before_run(app, state, session)?;
+                Ok(xai_provider_config_from_session(model_id.as_str(), session))
+            }
+            _ => {
+                let auth_store_path = state.global_db_path(app)?;
+                if let Some(session) =
+                    load_latest_xai_session(&auth_store_path).map_err(command_error_from_auth)?
+                {
+                    let session = refresh_xai_session_before_run(app, state, session)?;
+                    Ok(xai_provider_config_from_session(model_id.as_str(), session))
+                } else {
+                    Err(CommandError::user_fixable(
+                        "xai_auth_missing",
+                        "Xero cannot start the owned xAI adapter because no xAI OAuth session or API key is configured.",
+                    ))
+                }
+            }
+        },
+        CURSOR_PROVIDER_ID => Err(CommandError::user_fixable(
+            "cursor_external_agent_runtime",
+            "Cursor is configured as an external-agent provider. Use the Cursor SDK harness (`xero agent cursor`) until desktop external-agent run orchestration is wired.",
+        )),
         OPENROUTER_PROVIDER_ID => {
             let api_key = runtime_settings
                 .provider_api_key
@@ -735,6 +819,25 @@ pub(crate) fn resolve_owned_agent_provider_config<R: Runtime>(
                     timeout_ms: 0,
                 },
             ))
+        }
+        DEEPSEEK_PROVIDER_ID => {
+            let endpoint = resolve_openai_compatible_endpoint_for_profile(
+                active_profile,
+                &state.openai_compatible_auth_config(),
+            )
+            .map_err(command_error_from_auth)?;
+            let api_key = runtime_settings.provider_api_key.clone().ok_or_else(|| {
+                CommandError::user_fixable(
+                    "deepseek_api_key_missing",
+                    "Xero cannot start the owned DeepSeek adapter because no DeepSeek API key is configured.",
+                )
+            })?;
+            Ok(AgentProviderConfig::DeepSeek(DeepSeekProviderConfig {
+                model_id,
+                base_url: endpoint.effective_base_url,
+                api_key,
+                timeout_ms: 0,
+            }))
         }
         ANTHROPIC_PROVIDER_ID => {
             let api_key = runtime_settings
@@ -870,6 +973,37 @@ fn openai_codex_session_needs_refresh(session: &StoredOpenAiCodexSession, now: i
     session.expires_at <= now.saturating_add(OPENAI_CODEX_REFRESH_SKEW_SECONDS)
 }
 
+fn refresh_xai_session_before_run<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    session: StoredXaiSession,
+) -> CommandResult<StoredXaiSession> {
+    if !xai_session_needs_refresh(&session, current_unix_timestamp()) {
+        return Ok(session);
+    }
+
+    let refreshed = refresh_provider_auth_session(
+        app,
+        state,
+        RuntimeProvider::Xai,
+        session.account_id.as_str(),
+    )
+    .map_err(command_error_from_auth)?;
+    let auth_store_path = state.global_db_path(app)?;
+    load_xai_session(&auth_store_path, refreshed.account_id.as_str())
+        .map_err(command_error_from_auth)?
+        .ok_or_else(|| {
+            CommandError::retryable(
+                "xai_auth_refresh_missing",
+                "Xero refreshed xAI auth, but the refreshed session was not available in the app-local credential store.",
+            )
+        })
+}
+
+fn xai_session_needs_refresh(session: &StoredXaiSession, now: i64) -> bool {
+    session.expires_at <= now.saturating_add(OPENAI_CODEX_REFRESH_SKEW_SECONDS)
+}
+
 fn current_unix_timestamp() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -888,6 +1022,19 @@ fn openai_codex_provider_config_from_session(
         access_token: session.access_token,
         account_id: session.account_id,
         session_id: Some(session.session_id),
+        timeout_ms: 0,
+    })
+}
+
+fn xai_provider_config_from_session(
+    model_id: &str,
+    session: StoredXaiSession,
+) -> AgentProviderConfig {
+    AgentProviderConfig::XaiResponses(XaiResponsesProviderConfig {
+        provider_id: XAI_PROVIDER_ID.into(),
+        model_id: model_id.into(),
+        base_url: XAI_API_BASE_URL.into(),
+        bearer_token: session.access_token,
         timeout_ms: 0,
     })
 }
@@ -912,7 +1059,7 @@ fn is_local_provider_endpoint(base_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
+pub(crate) fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     require_persisted_profile: bool,
@@ -921,16 +1068,25 @@ fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
     model_id: &str,
     initial_attachments: &[crate::commands::StagedAgentAttachmentDto],
 ) -> CommandResult<ProviderPreflightSnapshot> {
+    if provider_id == CURSOR_PROVIDER_ID {
+        return Err(CommandError::user_fixable(
+            "cursor_external_agent_runtime",
+            "Cursor is configured as an external-agent provider. Use the Cursor SDK harness (`xero agent cursor`) until desktop external-agent run orchestration is wired.",
+        ));
+    }
+
     let mut required_features = ProviderPreflightRequiredFeatures::owned_agent_text_turn();
-    required_features.attachments = initial_attachments.iter().any(|attachment| {
-        matches!(
-            attachment.kind,
-            crate::commands::AgentAttachmentKindDto::Image
-                | crate::commands::AgentAttachmentKindDto::Document
-        )
-    });
+    required_features.attachments = !initial_attachments.is_empty();
     let preflight = if require_persisted_profile {
-        let cache_started = Instant::now();
+        let expected_cache_binding =
+            crate::provider_preflight::current_provider_preflight_cache_binding(
+                app,
+                state,
+                profile_id,
+                provider_id,
+                model_id,
+                &required_features,
+            )?;
         let reusable_snapshot = match crate::provider_preflight::latest_provider_preflight_snapshot(
             app,
             state,
@@ -938,14 +1094,13 @@ fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
             provider_id,
             model_id,
         )? {
-            Some(snapshot) => reusable_provider_preflight_snapshot(snapshot, &required_features),
+            Some(snapshot) => reusable_provider_preflight_snapshot(
+                snapshot,
+                &required_features,
+                expected_cache_binding.as_ref(),
+            ),
             None => None,
         };
-        eprintln!(
-            "[runtime-latency] provider_preflight_cache_lookup profile_id={profile_id} provider_id={provider_id} model_id={model_id} hit={} duration_ms={}",
-            reusable_snapshot.is_some(),
-            cache_started.elapsed().as_millis()
-        );
         match reusable_snapshot {
             Some(snapshot) => snapshot,
             None => crate::provider_preflight::run_selected_provider_preflight(
@@ -983,7 +1138,7 @@ fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
         return Err(CommandError::user_fixable(
             "provider_attachment_capability_missing",
             format!(
-                "Xero cannot send image or document attachments to provider `{provider_id}` with the current owned adapter. Choose an attachment-capable provider or remove the attachments before starting the run."
+                "Xero cannot send attachments to provider `{provider_id}` with the current owned adapter. Choose an attachment-capable provider or remove the attachments before starting the run."
             ),
         ));
     }
@@ -994,15 +1149,56 @@ fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
 fn reusable_provider_preflight_snapshot(
     snapshot: ProviderPreflightSnapshot,
     required_features: &ProviderPreflightRequiredFeatures,
+    expected_cache_binding: Option<&xero_agent_core::ProviderPreflightCacheBinding>,
 ) -> Option<ProviderPreflightSnapshot> {
     if snapshot.stale || snapshot.required_features != *required_features {
         return None;
+    }
+    if let Some(expected_cache_binding) = expected_cache_binding {
+        let matches_cache_binding = snapshot
+            .cache_binding
+            .as_ref()
+            .is_some_and(|binding| binding.cache_key == expected_cache_binding.cache_key);
+        if !matches_cache_binding {
+            return None;
+        }
     }
 
     let snapshot = xero_agent_core::provider_preflight_snapshot_as_cached_probe(snapshot);
     provider_preflight_blockers(&snapshot)
         .is_empty()
         .then_some(snapshot)
+}
+
+pub(crate) fn agent_provider_config_identity(config: &AgentProviderConfig) -> (String, String) {
+    match config {
+        AgentProviderConfig::Fake => (
+            OPENAI_CODEX_PROVIDER_ID.into(),
+            OPENAI_CODEX_PROVIDER_ID.into(),
+        ),
+        AgentProviderConfig::OpenAiResponses(config) => {
+            (config.provider_id.clone(), config.model_id.clone())
+        }
+        AgentProviderConfig::OpenAiCodexResponses(config) => {
+            (config.provider_id.clone(), config.model_id.clone())
+        }
+        AgentProviderConfig::XaiResponses(config) => {
+            (config.provider_id.clone(), config.model_id.clone())
+        }
+        AgentProviderConfig::OpenAiCompatible(config) => {
+            (config.provider_id.clone(), config.model_id.clone())
+        }
+        AgentProviderConfig::DeepSeek(config) => {
+            (DEEPSEEK_PROVIDER_ID.into(), config.model_id.clone())
+        }
+        AgentProviderConfig::Anthropic(config) => {
+            (config.provider_id.clone(), config.model_id.clone())
+        }
+        AgentProviderConfig::Bedrock(config) => {
+            (BEDROCK_PROVIDER_ID.into(), config.model_id.clone())
+        }
+        AgentProviderConfig::Vertex(config) => (VERTEX_PROVIDER_ID.into(), config.model_id.clone()),
+    }
 }
 
 pub(crate) fn generate_runtime_run_id() -> String {
@@ -1035,7 +1231,8 @@ fn resolve_owned_runtime_run_control_state(
     initial_prompt: Option<&str>,
 ) -> CommandResult<RuntimeRunControlStateRecord> {
     let model_id = requested_controls
-        .map(|controls| controls.model_id.clone())
+        .map(|controls| controls.model_id.trim().to_owned())
+        .filter(|model_id| !model_id.is_empty())
         .unwrap_or_else(|| active_profile.model_id.clone());
     let thinking_effort = requested_controls.and_then(|controls| controls.thinking_effort.clone());
     let runtime_agent_id = definition_selection.runtime_agent_id;
@@ -1064,6 +1261,74 @@ fn resolve_owned_runtime_run_control_state(
         &now_timestamp(),
         initial_prompt,
     )
+}
+
+fn resolve_agent_default_model_controls(
+    requested_controls: Option<&RuntimeRunControlInputDto>,
+    definition_selection: &project_store::AgentDefinitionRunSelection,
+    builtin_default_model: Option<&AgentDefaultModelDto>,
+) -> Option<RuntimeRunControlInputDto> {
+    if requested_controls
+        .map(|controls| !controls.model_id.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return requested_controls.cloned();
+    }
+
+    let snapshot_default_model = definition_selection
+        .snapshot
+        .get("defaultModel")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<AgentDefaultModelDto>(value).ok());
+    let default_model = snapshot_default_model.as_ref().or(builtin_default_model);
+    let Some(default_model) = default_model else {
+        return requested_controls.cloned();
+    };
+    let model_id = default_model.model_id.trim();
+    if model_id.is_empty() {
+        return requested_controls.cloned();
+    }
+    let provider_profile_id = default_model
+        .provider_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            requested_controls
+                .and_then(|controls| controls.provider_profile_id.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        });
+    let thinking_effort = default_model
+        .thinking_effort
+        .clone()
+        .or_else(|| requested_controls.and_then(|controls| controls.thinking_effort.clone()));
+    let approval_mode = requested_controls
+        .map(|controls| controls.approval_mode.clone())
+        .filter(|mode| {
+            definition_selection
+                .allowed_approval_modes
+                .iter()
+                .any(|allowed| allowed == mode)
+        })
+        .unwrap_or_else(|| definition_selection.default_approval_mode.clone());
+
+    Some(RuntimeRunControlInputDto {
+        runtime_agent_id: definition_selection.runtime_agent_id,
+        agent_definition_id: Some(definition_selection.definition_id.clone()),
+        provider_profile_id,
+        model_id: model_id.to_owned(),
+        thinking_effort,
+        approval_mode,
+        plan_mode_required: requested_controls
+            .map(|controls| controls.plan_mode_required)
+            .unwrap_or(false),
+        auto_compact_enabled: requested_controls
+            .map(|controls| controls.auto_compact_enabled)
+            .unwrap_or(true),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1133,6 +1398,7 @@ fn runtime_control_input_from_active(
         thinking_effort: active.thinking_effort.clone(),
         approval_mode: active.approval_mode.clone(),
         plan_mode_required: active.plan_mode_required,
+        auto_compact_enabled: active.auto_compact_enabled,
     }
 }
 
@@ -1158,33 +1424,43 @@ pub(crate) fn stop_owned_runtime_run(
 pub(crate) fn update_owned_runtime_run_controls(
     repo_root: &Path,
     snapshot: &RuntimeRunSnapshotRecord,
+    provider_id: &str,
     controls: Option<RuntimeRunControlInputDto>,
     prompt: Option<String>,
     attachments: &[crate::commands::StagedAgentAttachmentDto],
 ) -> CommandResult<RuntimeRunSnapshotRecord> {
+    let agent_session = project_store::ensure_agent_session_active(
+        repo_root,
+        &snapshot.run.project_id,
+        &snapshot.run.agent_session_id,
+    )?;
     let active = &snapshot.controls.active;
+    ensure_agent_matches_session_kind(&agent_session, active.runtime_agent_id)?;
     ensure_runtime_agent_available(active.runtime_agent_id)?;
     project_store::ensure_runtime_agent_allowed_for_project(
         repo_root,
         &snapshot.run.project_id,
         active.runtime_agent_id,
     )?;
-    if let Some(requested_agent_id) = controls
-        .as_ref()
-        .map(|controls| controls.runtime_agent_id)
-        .filter(|agent_id| agent_id != &active.runtime_agent_id)
-    {
-        return Err(CommandError::user_fixable(
-            "runtime_agent_switch_blocked",
-            format!(
-                "Xero cannot switch active runtime run `{}` from {} to {}. Stop the current run before changing agents.",
-                snapshot.run.run_id,
-                active.runtime_agent_id.label(),
-                requested_agent_id.label()
-            ),
-        ));
-    }
     let base_pending = snapshot.controls.pending.as_ref();
+    let requested_definition = match controls.as_ref() {
+        Some(controls) => {
+            let selection = project_store::resolve_agent_definition_for_run(
+                repo_root,
+                controls.agent_definition_id.as_deref(),
+                controls.runtime_agent_id,
+            )?;
+            ensure_agent_matches_session_kind(&agent_session, selection.runtime_agent_id)?;
+            ensure_runtime_agent_available(selection.runtime_agent_id)?;
+            project_store::ensure_runtime_agent_allowed_for_project(
+                repo_root,
+                &snapshot.run.project_id,
+                selection.runtime_agent_id,
+            )?;
+            Some(selection)
+        }
+        None => None,
+    };
     let model_id = controls
         .as_ref()
         .map(|controls| controls.model_id.clone())
@@ -1200,17 +1476,47 @@ pub(crate) fn update_owned_runtime_run_controls(
         .and_then(|controls| controls.thinking_effort.clone())
         .or_else(|| base_pending.and_then(|pending| pending.thinking_effort.clone()))
         .or_else(|| active.thinking_effort.clone());
-    let approval_mode = controls
+    let approval_mode = match (&controls, &requested_definition) {
+        (Some(controls), Some(selection)) => {
+            if selection
+                .allowed_approval_modes
+                .iter()
+                .any(|allowed| allowed == &controls.approval_mode)
+            {
+                controls.approval_mode.clone()
+            } else {
+                selection.default_approval_mode.clone()
+            }
+        }
+        _ => base_pending
+            .map(|pending| pending.approval_mode.clone())
+            .unwrap_or_else(|| active.approval_mode.clone()),
+    };
+    let runtime_agent_id = requested_definition
         .as_ref()
-        .map(|controls| controls.approval_mode.clone())
-        .or_else(|| base_pending.map(|pending| pending.approval_mode.clone()))
-        .unwrap_or_else(|| active.approval_mode.clone());
-    let runtime_agent_id = active.runtime_agent_id;
+        .map(|selection| selection.runtime_agent_id)
+        .or_else(|| base_pending.map(|pending| pending.runtime_agent_id))
+        .unwrap_or(active.runtime_agent_id);
+    let agent_definition_id = requested_definition
+        .as_ref()
+        .map(|selection| Some(selection.definition_id.clone()))
+        .or_else(|| base_pending.map(|pending| pending.agent_definition_id.clone()))
+        .unwrap_or_else(|| active.agent_definition_id.clone());
+    let agent_definition_version = requested_definition
+        .as_ref()
+        .map(|selection| Some(selection.version))
+        .or_else(|| base_pending.map(|pending| pending.agent_definition_version))
+        .unwrap_or(active.agent_definition_version);
     let plan_mode_required = controls
         .as_ref()
-        .map(|controls| controls.plan_mode_required)
+        .map(|controls| controls.plan_mode_required && runtime_agent_id.allows_plan_gate())
         .or_else(|| base_pending.map(|pending| pending.plan_mode_required))
         .unwrap_or(active.plan_mode_required);
+    let auto_compact_enabled = controls
+        .as_ref()
+        .map(|controls| controls.auto_compact_enabled)
+        .or_else(|| base_pending.map(|pending| pending.auto_compact_enabled))
+        .unwrap_or(active.auto_compact_enabled);
     let queued_prompt = prompt
         .as_deref()
         .map(str::trim)
@@ -1238,8 +1544,8 @@ pub(crate) fn update_owned_runtime_run_controls(
         active: active.clone(),
         pending: Some(RuntimeRunPendingControlSnapshotRecord {
             runtime_agent_id,
-            agent_definition_id: active.agent_definition_id.clone(),
-            agent_definition_version: active.agent_definition_version,
+            agent_definition_id,
+            agent_definition_version,
             provider_profile_id: provider_profile_id
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -1248,6 +1554,7 @@ pub(crate) fn update_owned_runtime_run_controls(
             thinking_effort,
             approval_mode,
             plan_mode_required,
+            auto_compact_enabled,
             revision: next_revision,
             queued_at: now,
             queued_prompt,
@@ -1261,7 +1568,7 @@ pub(crate) fn update_owned_runtime_run_controls(
         &snapshot.run.project_id,
         &snapshot.run.agent_session_id,
         &snapshot.run.run_id,
-        &snapshot.run.provider_id,
+        provider_id,
         &run_controls,
         snapshot.run.status.clone(),
         snapshot.run.last_error.clone(),
@@ -1303,6 +1610,7 @@ pub(crate) fn apply_owned_runtime_run_pending_controls_with_status(
             thinking_effort: pending.thinking_effort.clone(),
             approval_mode: pending.approval_mode.clone(),
             plan_mode_required: pending.plan_mode_required,
+            auto_compact_enabled: pending.auto_compact_enabled,
             revision: pending.revision,
             applied_at: now_timestamp(),
         },
@@ -1324,6 +1632,30 @@ pub(crate) fn apply_owned_runtime_run_pending_controls_with_status(
     )
 }
 
+fn ensure_agent_matches_session_kind(
+    session: &project_store::AgentSessionRecord,
+    runtime_agent_id: crate::commands::RuntimeAgentIdDto,
+) -> CommandResult<()> {
+    match (session.session_kind, runtime_agent_id) {
+        (
+            project_store::AgentSessionKind::ComputerUse,
+            crate::commands::RuntimeAgentIdDto::ComputerUse,
+        ) => Ok(()),
+        (project_store::AgentSessionKind::ComputerUse, _) => Err(CommandError::user_fixable(
+            "computer_use_agent_required",
+            "Computer Use sessions must run with the Computer Use agent.",
+        )),
+        (
+            project_store::AgentSessionKind::Standard,
+            crate::commands::RuntimeAgentIdDto::ComputerUse,
+        ) => Err(CommandError::user_fixable(
+            "computer_use_session_required",
+            "The Computer Use agent can only run inside a Computer Use session.",
+        )),
+        (project_store::AgentSessionKind::Standard, _) => Ok(()),
+    }
+}
+
 pub(crate) fn bind_owned_runtime_run_to_agent_handoff(
     repo_root: &Path,
     snapshot: &RuntimeRunSnapshotRecord,
@@ -1340,6 +1672,7 @@ pub(crate) fn bind_owned_runtime_run_to_agent_handoff(
             approval_mode: pending.approval_mode.clone(),
             plan_mode_required: target.run.runtime_agent_id.allows_plan_gate()
                 && pending.plan_mode_required,
+            auto_compact_enabled: pending.auto_compact_enabled,
             revision: pending.revision,
             applied_at: now_timestamp(),
         },
@@ -1353,6 +1686,7 @@ pub(crate) fn bind_owned_runtime_run_to_agent_handoff(
             approval_mode: snapshot.controls.active.approval_mode.clone(),
             plan_mode_required: target.run.runtime_agent_id.allows_plan_gate()
                 && snapshot.controls.active.plan_mode_required,
+            auto_compact_enabled: snapshot.controls.active.auto_compact_enabled,
             revision: snapshot.controls.active.revision.saturating_add(1),
             applied_at: now_timestamp(),
         },
@@ -1376,7 +1710,7 @@ pub(crate) fn bind_owned_runtime_run_to_agent_handoff(
     )
 }
 
-fn resolve_owned_runtime_profile_selection<R: Runtime>(
+pub(crate) fn resolve_owned_runtime_profile_selection<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     requested_controls: Option<&RuntimeRunControlInputDto>,
@@ -1399,7 +1733,9 @@ fn active_profile_selection_from_override(
         AgentProviderConfig::Fake => OPENAI_CODEX_PROVIDER_ID.to_string(),
         AgentProviderConfig::OpenAiResponses(config) => config.provider_id.clone(),
         AgentProviderConfig::OpenAiCodexResponses(config) => config.provider_id.clone(),
+        AgentProviderConfig::XaiResponses(config) => config.provider_id.clone(),
         AgentProviderConfig::OpenAiCompatible(config) => config.provider_id.clone(),
+        AgentProviderConfig::DeepSeek(_) => DEEPSEEK_PROVIDER_ID.to_string(),
         AgentProviderConfig::Anthropic(config) => config.provider_id.clone(),
         AgentProviderConfig::Bedrock(_) => BEDROCK_PROVIDER_ID.to_string(),
         AgentProviderConfig::Vertex(_) => VERTEX_PROVIDER_ID.to_string(),
@@ -1411,7 +1747,9 @@ fn active_profile_selection_from_override(
             AgentProviderConfig::Fake => Some("test-model".to_string()),
             AgentProviderConfig::OpenAiResponses(config) => Some(config.model_id),
             AgentProviderConfig::OpenAiCodexResponses(config) => Some(config.model_id),
+            AgentProviderConfig::XaiResponses(config) => Some(config.model_id),
             AgentProviderConfig::OpenAiCompatible(config) => Some(config.model_id),
+            AgentProviderConfig::DeepSeek(config) => Some(config.model_id),
             AgentProviderConfig::Anthropic(config) => Some(config.model_id),
             AgentProviderConfig::Bedrock(config) => Some(config.model_id),
             AgentProviderConfig::Vertex(config) => Some(config.model_id),
@@ -1501,7 +1839,7 @@ fn load_provider_profile_selection<R: Runtime>(
     })
 }
 
-fn reject_runtime_run_provider_profile_switch(
+fn reject_runtime_run_agent_switch(
     snapshot: &RuntimeRunSnapshotRecord,
     requested_controls: Option<&RuntimeRunControlInputDto>,
 ) -> CommandResult<()> {
@@ -1518,30 +1856,6 @@ fn reject_runtime_run_provider_profile_switch(
                 snapshot.controls.active.runtime_agent_id.label()
             ),
         ));
-    }
-
-    let requested_profile_id = requested_controls
-        .and_then(|controls| controls.provider_profile_id.as_deref())
-        .map(str::trim)
-        .filter(|profile_id| !profile_id.is_empty());
-    let active_profile_id = snapshot
-        .controls
-        .active
-        .provider_profile_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|profile_id| !profile_id.is_empty());
-
-    if let (Some(requested), Some(active)) = (requested_profile_id, active_profile_id) {
-        if requested != active {
-            return Err(CommandError::user_fixable(
-                "runtime_run_provider_switch_blocked",
-                format!(
-                    "Xero cannot switch active runtime run `{}` from provider `{active}` to `{requested}`. Stop the current run before changing providers.",
-                    snapshot.run.run_id
-                ),
-            ));
-        }
     }
 
     Ok(())
@@ -1578,6 +1892,7 @@ fn runtime_run_control_state_dto(
             thinking_effort: controls.active.thinking_effort.clone(),
             approval_mode: controls.active.approval_mode.clone(),
             plan_mode_required: controls.active.plan_mode_required,
+            auto_compact_enabled: controls.active.auto_compact_enabled,
             revision: controls.active.revision,
             applied_at: controls.active.applied_at.clone(),
         },
@@ -1593,6 +1908,7 @@ fn runtime_run_control_state_dto(
                 thinking_effort: pending.thinking_effort.clone(),
                 approval_mode: pending.approval_mode.clone(),
                 plan_mode_required: pending.plan_mode_required,
+                auto_compact_enabled: pending.auto_compact_enabled,
                 revision: pending.revision,
                 queued_at: pending.queued_at.clone(),
                 queued_prompt: pending.queued_prompt.clone(),
@@ -1684,9 +2000,11 @@ fn queued_runtime_attachments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::RuntimeAgentIdDto;
     use xero_agent_core::{
-        provider_capability_catalog, provider_preflight_snapshot, ProviderCapabilityCatalogInput,
-        ProviderPreflightInput, ProviderPreflightSource, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
+        provider_capability_catalog, provider_preflight_cache_binding, provider_preflight_snapshot,
+        ProviderCapabilityCatalogInput, ProviderPreflightInput, ProviderPreflightSource,
+        DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
     };
 
     fn stored_codex_session(expires_at: i64) -> StoredOpenAiCodexSession {
@@ -1699,6 +2017,91 @@ mod tests {
             expires_at,
             updated_at: "2026-04-29T18:14:27Z".into(),
         }
+    }
+
+    fn definition_selection(
+        snapshot: serde_json::Value,
+    ) -> project_store::AgentDefinitionRunSelection {
+        project_store::AgentDefinitionRunSelection {
+            definition_id: "custom_engineer".into(),
+            version: 1,
+            display_name: "Custom Engineer".into(),
+            base_capability_profile: "engineering".into(),
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
+            default_approval_mode: crate::commands::RuntimeRunApprovalModeDto::Suggest,
+            allowed_approval_modes: vec![
+                crate::commands::RuntimeRunApprovalModeDto::Suggest,
+                crate::commands::RuntimeRunApprovalModeDto::AutoEdit,
+            ],
+            snapshot,
+        }
+    }
+
+    #[test]
+    fn agent_default_model_controls_apply_when_requested_model_is_empty() {
+        let selection = definition_selection(serde_json::json!({
+            "defaultModel": {
+                "providerId": "anthropic",
+                "providerProfileId": "anthropic-work",
+                "modelId": "claude-sonnet-4-5",
+                "thinkingEffort": "high"
+            }
+        }));
+        let requested = RuntimeRunControlInputDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
+            agent_definition_id: Some("custom_engineer".into()),
+            provider_profile_id: None,
+            model_id: String::new(),
+            thinking_effort: None,
+            approval_mode: crate::commands::RuntimeRunApprovalModeDto::AutoEdit,
+            plan_mode_required: true,
+            auto_compact_enabled: false,
+        };
+
+        let controls = resolve_agent_default_model_controls(Some(&requested), &selection, None)
+            .expect("default controls");
+
+        assert_eq!(
+            controls.provider_profile_id.as_deref(),
+            Some("anthropic-work")
+        );
+        assert_eq!(controls.model_id, "claude-sonnet-4-5");
+        assert_eq!(
+            controls.thinking_effort,
+            Some(crate::commands::ProviderModelThinkingEffortDto::High)
+        );
+        assert_eq!(
+            controls.approval_mode,
+            crate::commands::RuntimeRunApprovalModeDto::AutoEdit
+        );
+        assert!(!controls.auto_compact_enabled);
+    }
+
+    #[test]
+    fn explicit_requested_model_wins_over_agent_default() {
+        let selection = definition_selection(serde_json::json!({
+            "defaultModel": {
+                "providerId": "anthropic",
+                "providerProfileId": "anthropic-work",
+                "modelId": "claude-sonnet-4-5"
+            }
+        }));
+        let requested = RuntimeRunControlInputDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
+            agent_definition_id: Some("custom_engineer".into()),
+            provider_profile_id: Some("openai-work".into()),
+            model_id: "gpt-5.5".into(),
+            thinking_effort: None,
+            approval_mode: crate::commands::RuntimeRunApprovalModeDto::Suggest,
+            plan_mode_required: false,
+            auto_compact_enabled: true,
+        };
+
+        let controls = resolve_agent_default_model_controls(Some(&requested), &selection, None)
+            .expect("requested controls");
+
+        assert_eq!(controls.provider_profile_id.as_deref(), Some("openai-work"));
+        assert_eq!(controls.model_id, "gpt-5.5");
     }
 
     #[test]
@@ -1781,7 +2184,8 @@ mod tests {
 
         assert!(reusable_provider_preflight_snapshot(
             snapshot,
-            &ProviderPreflightRequiredFeatures::owned_agent_text_turn()
+            &ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+            None,
         )
         .is_none());
     }
@@ -1793,10 +2197,35 @@ mod tests {
         let reused = reusable_provider_preflight_snapshot(
             snapshot,
             &ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+            None,
         )
         .expect("reusable preflight");
 
         assert_eq!(reused.source, ProviderPreflightSource::CachedProbe);
         assert!(provider_preflight_blockers(&reused).is_empty());
+    }
+
+    #[test]
+    fn cached_preflight_reuse_requires_matching_cache_binding_when_known() {
+        let required = ProviderPreflightRequiredFeatures::owned_agent_text_turn();
+        let mut snapshot = preflight_snapshot(ProviderPreflightSource::LiveProbe);
+        snapshot.cache_binding = Some(provider_preflight_cache_binding(
+            OPENAI_CODEX_PROVIDER_ID,
+            "gpt-5.4",
+            "https://chatgpt.com/backend-api/codex/responses",
+            "openai_codex:account-a",
+            &required,
+        ));
+        let expected = provider_preflight_cache_binding(
+            OPENAI_CODEX_PROVIDER_ID,
+            "gpt-5.4",
+            "https://chatgpt.com/backend-api/codex/responses",
+            "openai_codex:account-b",
+            &required,
+        );
+
+        assert!(
+            reusable_provider_preflight_snapshot(snapshot, &required, Some(&expected)).is_none()
+        );
     }
 }

@@ -13,6 +13,8 @@ interface CapturedRuntimeProps {
   onSelectSidebarSession?: (id: string) => void
   onCreateSession?: () => void
   isCreatingSession?: boolean
+  agentCreateCanvasIncluded?: boolean
+  onStartWorkflowAgentCreate?: () => void
 }
 
 vi.mock('@/components/xero/agent-runtime/live-agent-runtime', () => ({
@@ -24,12 +26,20 @@ vi.mock('@/components/xero/agent-runtime/live-agent-runtime', () => ({
     onSelectSidebarSession,
     onCreateSession,
     isCreatingSession,
+    agentCreateCanvasIncluded,
+    onStartWorkflowAgentCreate,
   }: CapturedRuntimeProps & { agent: unknown }) => {
     if (!agent) return null
     return (
       <div data-testid="live-agent-runtime">
         <div data-testid="live-agent-runtime-in-sidebar">{inSidebar ? 'true' : 'false'}</div>
         <div data-testid="live-agent-runtime-session-count">{sidebarSessions?.length ?? 0}</div>
+        <div data-testid="live-agent-runtime-canvas-included">
+          {agentCreateCanvasIncluded ? 'true' : 'false'}
+        </div>
+        <button type="button" onClick={() => onStartWorkflowAgentCreate?.()}>
+          mock-start-workflow-agent-create
+        </button>
         <button type="button" onClick={() => onCloseSidebar?.()}>
           mock-close
         </button>
@@ -60,9 +70,11 @@ const sessions: AgentSessionView[] = [
     agentSessionId: 'session-a',
     title: 'First session',
     summary: '',
+    sessionKind: 'standard',
     status: 'active',
     statusLabel: 'Active',
     selected: true,
+    remoteVisible: false,
     createdAt: '2026-04-15T20:00:00Z',
     updatedAt: '2026-04-15T20:00:00Z',
     archivedAt: null,
@@ -70,6 +82,7 @@ const sessions: AgentSessionView[] = [
     lastRuntimeKind: null,
     lastProviderId: null,
     lineage: null,
+    isComputerUse: false,
     isActive: true,
     isArchived: false,
   },
@@ -78,9 +91,11 @@ const sessions: AgentSessionView[] = [
     agentSessionId: 'session-b',
     title: 'Second session',
     summary: '',
+    sessionKind: 'standard',
     status: 'active',
     statusLabel: 'Active',
     selected: false,
+    remoteVisible: false,
     createdAt: '2026-04-16T20:00:00Z',
     updatedAt: '2026-04-16T20:00:00Z',
     archivedAt: null,
@@ -88,6 +103,7 @@ const sessions: AgentSessionView[] = [
     lastRuntimeKind: null,
     lastProviderId: null,
     lineage: null,
+    isComputerUse: false,
     isActive: true,
     isArchived: false,
   },
@@ -149,6 +165,21 @@ describe('AgentDockSidebar', () => {
     expect(onCreateSession).toHaveBeenCalledTimes(1)
   })
 
+  it('forwards the Agent Create canvas context into the agent runtime', () => {
+    renderDock({ agentCreateCanvasIncluded: true })
+
+    expect(screen.getByTestId('live-agent-runtime-canvas-included')).toHaveTextContent('true')
+  })
+
+  it('forwards the workflow canvas Agent Create action into the agent runtime', () => {
+    const onStartWorkflowAgentCreate = vi.fn()
+    renderDock({ onStartWorkflowAgentCreate })
+
+    fireEvent.click(screen.getByRole('button', { name: 'mock-start-workflow-agent-create' }))
+
+    expect(onStartWorkflowAgentCreate).toHaveBeenCalledTimes(1)
+  })
+
   it('forwards onSelectSession into the agent runtime header', () => {
     const onSelectSession = vi.fn()
     renderDock({ onSelectSession })
@@ -173,6 +204,7 @@ describe('AgentDockSidebar', () => {
     const aside = screen.getByLabelText('Agent dock')
     expect(aside.getAttribute('aria-hidden')).toBe('true')
     expect((aside as HTMLElement).style.width).toBe('0px')
+    expect((aside as HTMLElement).style.transition).toContain('width 160ms')
     expect(screen.queryByTestId('live-agent-runtime')).not.toBeInTheDocument()
     expect(screen.queryByText('No active session')).not.toBeInTheDocument()
   })

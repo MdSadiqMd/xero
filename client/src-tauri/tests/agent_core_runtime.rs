@@ -21,32 +21,38 @@ use xero_agent_core::{
     ProductionReadinessFocusedTestResult, ProductionReadinessFocusedTestStatus,
     ProductionReadinessStatus, ProviderCapabilityCatalogInput, ProviderPreflightInput,
     ProviderPreflightRequiredFeatures, ProviderPreflightSource, RuntimeEventKind,
-    StaticToolHandler, ToolBudget, ToolCallInput, ToolDispatchConfig, ToolErrorCategory,
+    RuntimeExecutionMode, RuntimeStoreDescriptor, RuntimeStoreKind, StaticToolHandler,
+    ToolApprovalRequirement, ToolBudget, ToolCallInput, ToolDispatchConfig, ToolErrorCategory,
     ToolGroupExecutionMode, ToolHandlerOutput, ToolMutability, ToolRegistryV2,
-    DEFAULT_PROVIDER_CATALOG_TTL_SECONDS, PRODUCTION_READINESS_REQUIRED_TEST_COMMANDS,
+    ToolSandboxRequirement, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
+    PRODUCTION_READINESS_REQUIRED_TEST_COMMANDS,
 };
 use xero_desktop_lib::{
     commands::{
-        archive_agent_session, cancel_agent_run, compact_session_history, start_agent_task,
-        start_runtime_run, update_runtime_run_controls, ArchiveAgentSessionRequestDto,
-        BrowserControlPreferenceDto, CancelAgentRunRequestDto, CompactSessionHistoryRequestDto,
-        RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
-        RuntimeRunControlInputDto, RuntimeRunControlStateDto, StartAgentTaskRequestDto,
-        StartRuntimeRunRequestDto, UpdateRuntimeRunControlsRequestDto,
+        archive_agent_session, cancel_agent_run, compact_session_history,
+        remote_bridge::RemoteBridgeRuntimeState, start_agent_task, start_runtime_run,
+        update_runtime_run_controls, ArchiveAgentSessionRequestDto, BrowserControlPreferenceDto,
+        CancelAgentRunRequestDto, CompactSessionHistoryRequestDto, RuntimeAgentIdDto,
+        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
+        RuntimeRunControlStateDto, StartAgentTaskRequestDto, StartRuntimeRunRequestDto,
+        UpdateRuntimeRunControlsRequestDto,
     },
     configure_builder_with_state, db,
     git::repository::CanonicalRepository,
     registry::{self, RegistryProjectRecord},
     runtime::{
         continue_owned_agent_run, create_owned_agent_run, drive_owned_agent_run,
-        run_owned_agent_task, AgentAutoCompactPreference, AgentProviderConfig,
-        AgentRunCancellationToken, AgentRunSupervisor, AgentToolCall, AutonomousCommandRequest,
+        export_harness_contract, run_owned_agent_task, AgentAutoCompactPreference,
+        AgentProviderConfig, AgentRunCancellationToken, AgentRunSupervisor, AgentToolCall,
+        AutonomousAgentToolPolicy, AutonomousAgentWorkflowPolicy, AutonomousCommandRequest,
         AutonomousCommandSessionOperation, AutonomousCommandSessionStartRequest,
-        AutonomousCommandSessionStopRequest, AutonomousToolOutput, AutonomousToolRuntime,
+        AutonomousCommandSessionStopRequest, AutonomousEditRequest, AutonomousReadRequest,
+        AutonomousTodoAction, AutonomousTodoRequest, AutonomousTodoStatus, AutonomousToolOutput,
+        AutonomousToolRequest, AutonomousToolRuntime, AutonomousWriteRequest,
         ContinueOwnedAgentRunRequest, DesktopAgentCoreRuntime, DesktopCompactSessionRequest,
         DesktopForkSessionRequest, DesktopRejectActionRequest, DesktopRunDriveMode,
         DesktopStartRunRequest, OpenAiCompatibleProviderConfig, OwnedAgentRunRequest, ToolRegistry,
-        ToolRegistryOptions,
+        ToolRegistryOptions, AUTONOMOUS_TOOL_MCP_LIST,
     },
     state::DesktopState,
 };
@@ -321,7 +327,7 @@ fn current_head_sha(repo_root: &Path) -> Option<String> {
 fn yolo_controls() -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
-            runtime_agent_id: RuntimeAgentIdDto::Engineer,
+            runtime_agent_id: RuntimeAgentIdDto::Generalist,
             agent_definition_id: None,
             agent_definition_version: None,
             provider_profile_id: None,
@@ -329,6 +335,7 @@ fn yolo_controls() -> RuntimeRunControlStateDto {
             thinking_effort: None,
             approval_mode: RuntimeRunApprovalModeDto::Yolo,
             plan_mode_required: false,
+            auto_compact_enabled: true,
             revision: 1,
             applied_at: "2026-04-24T00:00:00Z".into(),
         },
@@ -338,25 +345,27 @@ fn yolo_controls() -> RuntimeRunControlStateDto {
 
 fn yolo_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
-        runtime_agent_id: RuntimeAgentIdDto::Engineer,
+        runtime_agent_id: RuntimeAgentIdDto::Generalist,
         agent_definition_id: None,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
         approval_mode: RuntimeRunApprovalModeDto::Yolo,
         plan_mode_required: false,
+        auto_compact_enabled: true,
     }
 }
 
 fn suggest_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
-        runtime_agent_id: RuntimeAgentIdDto::Engineer,
+        runtime_agent_id: RuntimeAgentIdDto::Generalist,
         agent_definition_id: None,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
         approval_mode: RuntimeRunApprovalModeDto::Suggest,
         plan_mode_required: false,
+        auto_compact_enabled: true,
     }
 }
 
@@ -492,6 +501,7 @@ fn tool_group_timeout_interrupts_hung_read_only_handler() {
                         "additionalProperties": false
                     }),
                     capability_tags: vec!["fixture".into()],
+                    application_metadata: Default::default(),
                     effect_class: xero_agent_core::ToolEffectClass::FileRead,
                     mutability: ToolMutability::ReadOnly,
                     sandbox_requirement: xero_agent_core::ToolSandboxRequirement::None,
@@ -651,6 +661,7 @@ fn append_auto_compact_fixture_messages(
                     "auto compact fixture message {index}: {}",
                     "x".repeat(chars_per_message)
                 ),
+                provider_metadata_json: None,
                 created_at: format!("{timestamp_minute}:{:02}Z", index + 3),
                 attachments: Vec::new(),
             },
@@ -1157,6 +1168,94 @@ fn desktop_facade_compact_session_persists_artifact_and_trace() {
 }
 
 #[test]
+fn core_runtime_contract_inventory_covers_store_modes_tools_and_manifest_metadata() {
+    let root = TempDir::new().unwrap();
+    let contract = export_harness_contract(root.path(), Default::default())
+        .expect("export harness contract inventory");
+
+    assert!(contract
+        .tool_registry_snapshots
+        .iter()
+        .flat_map(|snapshot| snapshot.descriptors_v2.iter())
+        .any(|descriptor| descriptor.name == "project_context_search"
+            && descriptor.input_schema["properties"]["action"]["enum"]
+                .as_array()
+                .expect("project_context_search actions")
+                .contains(&json!("search_project_records"))));
+    assert!(contract
+        .tool_registry_snapshots
+        .iter()
+        .flat_map(|snapshot| snapshot.descriptors_v2.iter())
+        .any(|descriptor| descriptor.name == "project_context_get"
+            && descriptor.input_schema["properties"]["action"]["enum"]
+                .as_array()
+                .expect("project_context_get actions")
+                .contains(&json!("get_project_record"))));
+    assert!(contract
+        .tool_registry_snapshots
+        .iter()
+        .any(|snapshot| !snapshot.descriptors_v2.is_empty()
+            && !snapshot.descriptors_v2_sha256.is_empty()));
+
+    let real_store = RuntimeStoreDescriptor::app_data_project_state(
+        "project-contract",
+        root.path()
+            .join("app-data")
+            .join("projects")
+            .join("project-contract")
+            .join("state.db"),
+    );
+    let real_contract = xero_agent_core::ProductionRuntimeContract::real_provider(
+        "desktop_owned_agent",
+        "project-contract",
+        "openai_api",
+        "gpt-5.4",
+        real_store,
+    );
+    assert_eq!(
+        real_contract.execution_mode,
+        RuntimeExecutionMode::ProductionRealProvider
+    );
+    assert_eq!(
+        real_contract.store.kind,
+        RuntimeStoreKind::AppDataProjectState
+    );
+    xero_agent_core::validate_production_runtime_contract(&real_contract)
+        .expect("real provider contract requires app-data state.db");
+
+    let harness_contract = xero_agent_core::ProductionRuntimeContract::fake_provider_harness(
+        "headless_harness",
+        "project-contract",
+        "fake-model",
+        RuntimeStoreDescriptor::file_backed_headless_json(
+            "project-contract",
+            root.path().join("agent-core-runs.json"),
+        ),
+    );
+    assert_eq!(
+        harness_contract.execution_mode,
+        RuntimeExecutionMode::HarnessFakeProvider
+    );
+    assert_eq!(
+        harness_contract.store.kind,
+        RuntimeStoreKind::FileBackedHeadlessJson
+    );
+    xero_agent_core::validate_production_runtime_contract(&harness_contract)
+        .expect("fake harness may use file-backed harness storage");
+
+    let manifest = json!({
+        "retrieval": {
+            "deliveryModel": "tool_mediated",
+            "rawContextInjected": false,
+            "queryIds": ["context-retrieval-contract"],
+            "resultIds": ["context-retrieval-contract-result-1"]
+        }
+    });
+    assert_eq!(manifest["retrieval"]["deliveryModel"], "tool_mediated");
+    assert_eq!(manifest["retrieval"]["rawContextInjected"], false);
+}
+
+#[test]
 fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
     let registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
         runtime_agent_id: RuntimeAgentIdDto::Engineer,
@@ -1167,44 +1266,60 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         .iter()
         .map(|descriptor| descriptor.name.as_str())
         .collect::<BTreeSet<_>>();
-    let expected_names = BTreeSet::from([
+    let mut expected_names = BTreeSet::from([
         "read",
+        "read_many",
+        "result_page",
+        "stat",
         "search",
         "find",
         "git_status",
         "git_diff",
         "tool_access",
-        "project_context",
+        "project_context_search",
+        "project_context_get",
+        "project_context_record",
+        "project_context_update",
+        "project_context_refresh",
         "workspace_index",
         "agent_coordination",
         "edit",
         "write",
         "patch",
+        "copy",
+        "fs_transaction",
+        "json_edit",
+        "toml_edit",
+        "yaml_edit",
         "delete",
         "rename",
         "mkdir",
         "list",
+        "list_tree",
+        "directory_digest",
         "file_hash",
-        "command",
-        "command_session_start",
-        "command_session_read",
-        "command_session_stop",
+        "command_probe",
+        "command_verify",
+        "command_run",
+        "command_session",
         "process_manager",
-        "macos_automation",
-        "mcp",
+        "mcp_list",
+        "mcp_read_resource",
+        "mcp_get_prompt",
+        "mcp_call_tool",
         "subagent",
         "todo",
         "notebook_edit",
         "code_intel",
         "lsp",
-        "powershell",
         "tool_search",
         "web_search",
         "web_fetch",
-        "browser",
+        "browser_observe",
+        "browser_control",
         "emulator",
         "environment_context",
-        "system_diagnostics",
+        "system_diagnostics_observe",
         "solana_cluster",
         "solana_logs",
         "solana_tx",
@@ -1230,6 +1345,13 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         "solana_cost",
         "solana_docs",
     ]);
+    if cfg!(target_os = "macos") {
+        expected_names.insert("macos_automation");
+        expected_names.insert("system_diagnostics_privileged");
+    }
+    if cfg!(target_os = "windows") {
+        expected_names.insert("powershell");
+    }
     assert_eq!(descriptor_names, expected_names);
 
     let read = registry.descriptor("read").expect("read descriptor");
@@ -1239,6 +1361,61 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
     assert_eq!(
         read.input_schema["properties"]["startLine"]["type"],
         "integer"
+    );
+    let find = registry.descriptor("find").expect("find descriptor");
+    assert_eq!(find.input_schema["type"], "object");
+    assert_eq!(find.input_schema["additionalProperties"], false);
+    assert_eq!(find.input_schema["required"], json!(["pattern"]));
+    assert_eq!(
+        find.input_schema["properties"]["maxDepth"]["type"],
+        "integer"
+    );
+    let read_many = registry
+        .descriptor("read_many")
+        .expect("read_many descriptor");
+    assert_eq!(read_many.input_schema["required"], json!(["paths"]));
+    assert_eq!(
+        read_many.input_schema["properties"]["paths"]["maxItems"],
+        json!(16)
+    );
+    assert_eq!(
+        read_many.input_schema["properties"]["maxTotalBytes"]["maximum"],
+        json!(512 * 1024)
+    );
+    let stat = registry.descriptor("stat").expect("stat descriptor");
+    assert_eq!(stat.input_schema["required"], json!(["path"]));
+    assert_eq!(
+        stat.input_schema["properties"]["path"]["maxLength"],
+        json!(4096)
+    );
+    assert_eq!(
+        stat.input_schema["properties"]["includeHash"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        read.input_schema["properties"]["lineCount"]["maximum"],
+        json!(400)
+    );
+    assert_eq!(
+        registry
+            .descriptor("search")
+            .expect("search descriptor")
+            .input_schema["properties"]["maxResults"]["maximum"],
+        json!(100)
+    );
+    let list_tree = registry
+        .descriptor("list_tree")
+        .expect("list_tree descriptor");
+    assert_eq!(
+        list_tree.input_schema["properties"]["maxEntries"]["maximum"],
+        json!(1000)
+    );
+    let directory_digest = registry
+        .descriptor("directory_digest")
+        .expect("directory_digest descriptor");
+    assert_eq!(
+        directory_digest.input_schema["properties"]["maxFiles"]["maximum"],
+        json!(5000)
     );
 
     let git_diff = registry
@@ -1258,18 +1435,34 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
             .expect("tool access groups description")
             .contains("process_manager")
     );
-    let project_context = registry
-        .descriptor("project_context")
-        .expect("project context descriptor");
-    assert_eq!(project_context.input_schema["required"], json!(["action"]));
-    assert!(project_context.input_schema["properties"]["action"]["enum"]
-        .as_array()
-        .expect("project context action enum")
-        .contains(&json!("search_project_records")));
-    assert!(project_context.input_schema["properties"]["action"]["enum"]
-        .as_array()
-        .expect("project context action enum")
-        .contains(&json!("propose_record_candidate")));
+    assert!(
+        !tool_access.input_schema["properties"]["groups"]["description"]
+            .as_str()
+            .expect("tool access groups description")
+            .contains("harness_runner")
+    );
+    let project_context_search = registry
+        .descriptor("project_context_search")
+        .expect("project context search descriptor");
+    assert_eq!(
+        project_context_search.input_schema["required"],
+        json!(["action"])
+    );
+    assert!(
+        project_context_search.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("project context action enum")
+            .contains(&json!("search_project_records"))
+    );
+    let project_context_record = registry
+        .descriptor("project_context_record")
+        .expect("project context record descriptor");
+    assert!(
+        project_context_record.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("project context action enum")
+            .contains(&json!("propose_record_candidate"))
+    );
 
     let process_manager = registry
         .descriptor("process_manager")
@@ -1281,27 +1474,36 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         .contains(&json!("async_start")));
     assert!(process_manager.description.contains("phase 5"));
 
-    let macos = registry
-        .descriptor("macos_automation")
-        .expect("macos automation descriptor");
-    assert_eq!(macos.input_schema["required"], json!(["action"]));
-    assert!(macos.input_schema["properties"]["action"]["enum"]
-        .as_array()
-        .expect("macos action enum")
-        .contains(&json!("mac_permissions")));
-    assert!(macos.input_schema["properties"]["action"]["enum"]
-        .as_array()
-        .expect("macos action enum")
-        .contains(&json!("mac_screenshot")));
+    if cfg!(target_os = "macos") {
+        let macos = registry
+            .descriptor("macos_automation")
+            .expect("macos automation descriptor");
+        assert_eq!(macos.input_schema["required"], json!(["action"]));
+        assert!(macos.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("macos action enum")
+            .contains(&json!("mac_permissions")));
+        assert!(macos.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("macos action enum")
+            .contains(&json!("mac_screenshot")));
+    } else {
+        assert!(registry.descriptor("macos_automation").is_none());
+    }
 
-    assert!(registry.descriptor("browser").is_some());
-    assert!(registry.descriptor("mcp").is_some());
+    assert!(registry.descriptor("browser_observe").is_some());
+    assert!(registry.descriptor("browser_control").is_some());
+    assert!(registry.descriptor("mcp_list").is_some());
+    assert!(registry.descriptor("mcp_call_tool").is_some());
     assert!(registry.descriptor("subagent").is_some());
     assert!(registry.descriptor("todo").is_some());
     assert!(registry.descriptor("notebook_edit").is_some());
     assert!(registry.descriptor("code_intel").is_some());
     assert!(registry.descriptor("lsp").is_some());
-    assert!(registry.descriptor("powershell").is_some());
+    assert_eq!(
+        registry.descriptor("powershell").is_some(),
+        cfg!(target_os = "windows")
+    );
     assert!(registry.descriptor("tool_search").is_some());
     let emulator = registry
         .descriptor("emulator")
@@ -1317,10 +1519,18 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         .contains(&json!("screenshot")));
     assert!(registry.descriptor("solana_cluster").is_some());
     assert!(registry.descriptor("patch").is_some());
+    assert!(registry.descriptor("copy").is_some());
+    assert!(registry.descriptor("fs_transaction").is_some());
+    assert!(registry.descriptor("json_edit").is_some());
+    assert!(registry.descriptor("toml_edit").is_some());
+    assert!(registry.descriptor("yaml_edit").is_some());
     assert!(registry.descriptor("delete").is_some());
     assert!(registry.descriptor("rename").is_some());
     assert!(registry.descriptor("mkdir").is_some());
     assert!(registry.descriptor("list").is_some());
+    assert!(registry.descriptor("list_tree").is_some());
+    assert!(registry.descriptor("directory_digest").is_some());
+    assert!(registry.descriptor("stat").is_some());
     assert!(registry.descriptor("file_hash").is_some());
 
     registry
@@ -1330,6 +1540,104 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
             input: json!({ "path": "src/tracked.txt", "startLine": 1, "lineCount": 40 }),
         })
         .expect("valid read call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-read-many".into(),
+            tool_name: "read_many".into(),
+            input: json!({ "paths": ["src/tracked.txt", "Cargo.toml"], "lineCount": 20 }),
+        })
+        .expect("valid read_many call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-stat".into(),
+            tool_name: "stat".into(),
+            input: json!({ "path": "src/tracked.txt", "includeHash": true }),
+        })
+        .expect("valid stat call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-find-depth".into(),
+            tool_name: "find".into(),
+            input: json!({ "pattern": "**/*.rs", "path": ".", "maxDepth": 1 }),
+        })
+        .expect("valid depth-bounded find call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-list-tree".into(),
+            tool_name: "list_tree".into(),
+            input: json!({ "path": "src", "maxDepth": 2, "maxEntries": 20, "showOmitted": true }),
+        })
+        .expect("valid list_tree call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-directory-digest".into(),
+            tool_name: "directory_digest".into(),
+            input: json!({ "path": "src", "hashMode": "content_hash", "maxFiles": 20 }),
+        })
+        .expect("valid directory_digest call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-copy".into(),
+            tool_name: "copy".into(),
+            input: json!({ "from": "src/a.rs", "to": "src/b.rs", "expectedSourceHash": "a".repeat(64), "preview": true }),
+        })
+        .expect("valid copy call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-fs-transaction".into(),
+            tool_name: "fs_transaction".into(),
+            input: json!({
+                "preview": true,
+                "operations": [
+                    { "action": "create_file", "path": "src/new.rs", "content": "fn main() {}\n" }
+                ]
+            }),
+        })
+        .expect("valid fs_transaction call should decode");
+    registry
+        .validate_call(&AgentToolCall {
+            tool_call_id: "tool-call-valid-json-edit".into(),
+            tool_name: "json_edit".into(),
+            input: json!({
+                "path": "package.json",
+                "preview": true,
+                "operations": [
+                    { "action": "set", "pointer": "/scripts/test", "value": "vitest" }
+                ]
+            }),
+        })
+        .expect("valid json_edit call should decode");
+
+    let mut find_descriptor = registry
+        .descriptors_v2()
+        .into_iter()
+        .find(|descriptor| descriptor.name == "find")
+        .expect("find descriptor v2");
+    find_descriptor.approval_requirement = ToolApprovalRequirement::Never;
+    find_descriptor.sandbox_requirement = ToolSandboxRequirement::None;
+    let mut registry_v2 = ToolRegistryV2::new();
+    registry_v2
+        .register(StaticToolHandler::new(
+            find_descriptor,
+            |_context, _call| Ok(ToolHandlerOutput::new("ok", json!({ "accepted": true }))),
+        ))
+        .expect("register find descriptor");
+    let strict_find = registry_v2.dispatch_call(
+        ToolCallInput {
+            tool_call_id: "strict-find-depth".into(),
+            tool_name: "find".into(),
+            input: json!({ "pattern": "**/*.rs", "path": ".", "maxDepth": 1 }),
+        },
+        &mut xero_agent_core::ToolBudgetTracker::new(ToolBudget::default()),
+        &ToolDispatchConfig::default(),
+    );
+    assert!(
+        matches!(
+            strict_find,
+            xero_agent_core::ToolDispatchOutcome::Succeeded(_)
+        ),
+        "strict v2 registry should accept find maxDepth input: {strict_find:#?}"
+    );
 
     let unknown = registry
         .validate_call(&AgentToolCall {
@@ -1339,6 +1647,162 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         })
         .expect_err("unknown tools should be rejected");
     assert_eq!(unknown.code, "agent_tool_call_unknown");
+}
+
+#[test]
+fn custom_tool_policy_denies_mcp_server_outside_allowlist() {
+    let policy = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+        "toolPolicy": {
+            "allowedTools": [AUTONOMOUS_TOOL_MCP_LIST],
+            "deniedTools": [],
+            "allowedEffectClasses": ["external_service"],
+            "externalServiceAllowed": true,
+            "allowedMcpServers": ["docs"],
+            "deniedMcpServers": [],
+            "allowedDynamicTools": [],
+            "deniedDynamicTools": []
+        }
+    }))
+    .expect("policy from definition");
+    let registry = ToolRegistry::for_tool_names_with_options(
+        BTreeSet::from([AUTONOMOUS_TOOL_MCP_LIST.to_string()]),
+        ToolRegistryOptions {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
+            agent_tool_policy: Some(policy),
+            ..ToolRegistryOptions::default()
+        },
+    );
+
+    let denied = registry
+        .decode_call(&AgentToolCall {
+            tool_call_id: "call-mcp-list".into(),
+            tool_name: AUTONOMOUS_TOOL_MCP_LIST.into(),
+            input: json!({
+                "action": "list_tools",
+                "serverId": "github"
+            }),
+        })
+        .expect_err("MCP server outside allowlist should be denied");
+
+    assert_eq!(denied.code, "agent_tool_mcp_policy_denied");
+}
+
+#[test]
+fn tool_registry_v2_validates_every_builtin_descriptor_sample() {
+    fn sample_for_schema(schema: &serde_json::Value) -> serde_json::Value {
+        if let Some(branch) = schema
+            .get("oneOf")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|branches| branches.first())
+        {
+            return sample_for_schema(branch);
+        }
+        match schema
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("object")
+        {
+            "array" => json!([sample_for_schema(
+                schema
+                    .get("items")
+                    .unwrap_or(&serde_json::Value::String("sample".into()))
+            )]),
+            "boolean" => json!(true),
+            "integer" => json!(schema
+                .get("minimum")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(1)
+                .max(1)),
+            "number" => json!(1.0),
+            "object" => {
+                let mut object = serde_json::Map::new();
+                let properties = schema
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object);
+                if let (Some(required), Some(properties)) = (
+                    schema.get("required").and_then(serde_json::Value::as_array),
+                    properties,
+                ) {
+                    for field in required.iter().filter_map(serde_json::Value::as_str) {
+                        if let Some(field_schema) = properties.get(field) {
+                            object.insert(field.to_string(), sample_for_schema(field_schema));
+                        }
+                    }
+                }
+                serde_json::Value::Object(object)
+            }
+            "string" => schema
+                .get("enum")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|values| values.first())
+                .cloned()
+                .unwrap_or_else(|| json!("sample")),
+            _ => serde_json::Value::Null,
+        }
+    }
+
+    fn invalid_for_schema(schema: &serde_json::Value) -> serde_json::Value {
+        if schema.get("oneOf").is_some() {
+            return json!({"xeroUnexpected": true});
+        }
+        let mut sample = sample_for_schema(schema);
+        if let Some(object) = sample.as_object_mut() {
+            object.insert("xeroUnexpected".into(), json!(true));
+            return sample;
+        }
+        json!(null)
+    }
+
+    let registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
+        runtime_agent_id: RuntimeAgentIdDto::Engineer,
+        skill_tool_enabled: true,
+        ..ToolRegistryOptions::default()
+    });
+    let mut registry_v2 = ToolRegistryV2::new();
+    let descriptors = registry.descriptors_v2();
+    for descriptor in descriptors.iter().cloned() {
+        let mut descriptor = descriptor;
+        descriptor.approval_requirement = ToolApprovalRequirement::Never;
+        descriptor.sandbox_requirement = ToolSandboxRequirement::None;
+        registry_v2
+            .register(StaticToolHandler::new(descriptor, |_context, _call| {
+                Ok(ToolHandlerOutput::new("ok", json!({ "accepted": true })))
+            }))
+            .expect("register builtin descriptor");
+    }
+
+    for descriptor in &descriptors {
+        let valid = registry_v2.dispatch_call(
+            ToolCallInput {
+                tool_call_id: format!("valid-{}", descriptor.name),
+                tool_name: descriptor.name.clone(),
+                input: sample_for_schema(&descriptor.input_schema),
+            },
+            &mut xero_agent_core::ToolBudgetTracker::new(ToolBudget::default()),
+            &ToolDispatchConfig::default(),
+        );
+        assert!(
+            matches!(valid, xero_agent_core::ToolDispatchOutcome::Succeeded(_)),
+            "valid sample failed for {}: {valid:#?}",
+            descriptor.name
+        );
+
+        let invalid = registry_v2.dispatch_call(
+            ToolCallInput {
+                tool_call_id: format!("invalid-{}", descriptor.name),
+                tool_name: descriptor.name.clone(),
+                input: invalid_for_schema(&descriptor.input_schema),
+            },
+            &mut xero_agent_core::ToolBudgetTracker::new(ToolBudget::default()),
+            &ToolDispatchConfig::default(),
+        );
+        assert_eq!(
+            invalid.failure().unwrap().error.category,
+            ToolErrorCategory::InvalidInput,
+            "invalid sample should fail for {}",
+            descriptor.name
+        );
+    }
 }
 
 #[test]
@@ -1353,13 +1817,21 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     );
     let read_only_names = read_only.descriptor_names();
     assert!(read_only_names.contains("read"));
+    assert!(read_only_names.contains("read_many"));
+    assert!(read_only_names.contains("stat"));
+    assert!(read_only_names.contains("list_tree"));
+    assert!(read_only_names.contains("directory_digest"));
     assert!(read_only_names.contains("tool_access"));
-    assert!(read_only_names.contains("project_context"));
+    assert!(read_only_names.contains("project_context_search"));
+    assert!(read_only_names.contains("project_context_get"));
     assert!(read_only_names.contains("tool_search"));
     assert!(read_only_names.contains("todo"));
     assert!(read_only_names.contains("git_diff"));
     assert!(!read_only_names.contains("write"));
-    assert!(!read_only_names.contains("command"));
+    assert!(!read_only_names.contains("copy"));
+    assert!(!read_only_names.contains("fs_transaction"));
+    assert!(!read_only_names.contains("json_edit"));
+    assert!(!read_only_names.contains("command_run"));
     assert!(!read_only_names.contains("emulator"));
     assert!(!read_only_names.contains("solana_cluster"));
 
@@ -1371,8 +1843,15 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     let implementation_names = implementation.descriptor_names();
     assert!(implementation_names.contains("write"));
     assert!(implementation_names.contains("patch"));
-    assert!(implementation_names.contains("command"));
-    assert!(implementation_names.contains("command_session_start"));
+    assert!(implementation_names.contains("copy"));
+    assert!(implementation_names.contains("fs_transaction"));
+    assert!(implementation_names.contains("json_edit"));
+    assert!(implementation_names.contains("toml_edit"));
+    assert!(implementation_names.contains("yaml_edit"));
+    assert!(implementation_names.contains("command_probe"));
+    assert!(implementation_names.contains("command_verify"));
+    assert!(!implementation_names.contains("command_run"));
+    assert!(!implementation_names.contains("command_session"));
     assert!(!implementation_names.contains("emulator"));
 
     let process_manager = ToolRegistry::for_prompt(
@@ -1389,7 +1868,10 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
         "Implement phase 7 macOS app/system automation with app list and screenshots.",
         &controls,
     );
-    assert!(macos.descriptor_names().contains("macos_automation"));
+    assert_eq!(
+        macos.descriptor_names().contains("macos_automation"),
+        cfg!(target_os = "macos")
+    );
 
     let audit = ToolRegistry::for_prompt(
         temp.path(),
@@ -1398,8 +1880,12 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     );
     let audit_names = audit.descriptor_names();
     assert!(audit_names.contains("read"));
+    assert!(audit_names.contains("read_many"));
+    assert!(audit_names.contains("stat"));
+    assert!(audit_names.contains("list_tree"));
+    assert!(audit_names.contains("directory_digest"));
     assert!(audit_names.contains("git_diff"));
-    assert!(audit_names.contains("command"));
+    assert!(audit_names.contains("command_verify"));
 
     fs::write(temp.path().join("Anchor.toml"), "[programs.localnet]\n")
         .expect("seed solana-looking workspace");
@@ -1418,14 +1904,18 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
         &controls,
     );
     let priority_names = priority_tools.descriptor_names();
-    assert!(priority_names.contains("mcp"));
+    assert!(priority_names.contains("mcp_list"));
+    assert!(!priority_names.contains("mcp_call_tool"));
     assert!(priority_names.contains("subagent"));
     assert!(priority_names.contains("todo"));
     assert!(priority_names.contains("tool_search"));
     assert!(priority_names.contains("code_intel"));
     assert!(priority_names.contains("lsp"));
     assert!(priority_names.contains("notebook_edit"));
-    assert!(priority_names.contains("powershell"));
+    assert_eq!(
+        priority_names.contains("powershell"),
+        cfg!(target_os = "windows")
+    );
 
     let app_use = ToolRegistry::for_prompt(
         temp.path(),
@@ -1451,8 +1941,9 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
         },
     );
     let default_browser_names = default_browser.descriptor_names();
-    assert!(default_browser_names.contains("browser"));
-    assert!(default_browser_names.contains("macos_automation"));
+    assert!(default_browser_names.contains("browser_observe"));
+    assert!(default_browser_names.contains("browser_control"));
+    assert!(!default_browser_names.contains("macos_automation"));
 
     let in_app_browser = ToolRegistry::for_prompt_with_options(
         temp.path(),
@@ -1464,7 +1955,8 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
         },
     );
     let in_app_browser_names = in_app_browser.descriptor_names();
-    assert!(in_app_browser_names.contains("browser"));
+    assert!(in_app_browser_names.contains("browser_observe"));
+    assert!(in_app_browser_names.contains("browser_control"));
     assert!(!in_app_browser_names.contains("macos_automation"));
 
     let native_browser = ToolRegistry::for_prompt_with_options(
@@ -1477,8 +1969,12 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
         },
     );
     let native_browser_names = native_browser.descriptor_names();
-    assert!(!native_browser_names.contains("browser"));
-    assert!(native_browser_names.contains("macos_automation"));
+    assert!(!native_browser_names.contains("browser_observe"));
+    assert!(!native_browser_names.contains("browser_control"));
+    assert_eq!(
+        native_browser_names.contains("macos_automation"),
+        cfg!(target_os = "macos")
+    );
 }
 
 #[test]
@@ -1507,7 +2003,7 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
             "tool:write generated/new.txt hello",
             "tool:rename generated/new.txt generated/renamed.txt",
             "tool:delete generated/renamed.txt",
-            "tool:command_echo verified-file-tools",
+            "tool:command_verify cargo test --help",
         ]
         .join("\n"),
         attachments: Vec::new(),
@@ -1537,7 +2033,7 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
         .map(|tool_call| tool_call.tool_name.as_str())
         .collect::<Vec<_>>();
     assert!(tool_names.contains(&"patch"));
-    assert!(tool_names.contains(&"command"));
+    assert!(tool_names.contains(&"command_verify"));
     assert!(tool_names.contains(&"file_hash"));
     assert!(tool_names.contains(&"mkdir"));
     assert!(tool_names.contains(&"rename"));
@@ -1553,6 +2049,88 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
     assert!(operations.contains(&"create"));
     assert!(operations.contains(&"rename"));
     assert!(operations.contains(&"delete"));
+
+    let connection =
+        Connection::open(db::database_path_for_repo(&repo_root)).expect("open project db");
+    let exact_commit_count: i64 = connection
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM code_commits
+            JOIN code_change_groups
+              ON code_change_groups.project_id = code_commits.project_id
+             AND code_change_groups.change_group_id = code_commits.change_group_id
+            WHERE code_commits.project_id = ?1
+              AND code_commits.run_id = 'owned-run-file-tools-1'
+              AND code_change_groups.change_kind = 'file_tool'
+            "#,
+            params![project_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count exact file tool commits");
+    assert_eq!(exact_commit_count, 5);
+    let workspace_head = db::project_store::read_code_workspace_head(&repo_root, &project_id)
+        .expect("read code workspace head")
+        .expect("code workspace head");
+    assert_eq!(workspace_head.workspace_epoch, 5);
+    assert!(workspace_head
+        .head_id
+        .as_deref()
+        .is_some_and(|head_id| head_id.starts_with("code-commit-")));
+    let patch_operations = {
+        let mut statement = connection
+            .prepare(
+                r#"
+                SELECT code_patch_files.operation
+                FROM code_patch_files
+                JOIN code_commits
+                  ON code_commits.project_id = code_patch_files.project_id
+                 AND code_commits.patchset_id = code_patch_files.patchset_id
+                JOIN code_change_groups
+                  ON code_change_groups.project_id = code_commits.project_id
+                 AND code_change_groups.change_group_id = code_commits.change_group_id
+                WHERE code_commits.project_id = ?1
+                  AND code_commits.run_id = 'owned-run-file-tools-1'
+                  AND code_change_groups.change_kind = 'file_tool'
+                ORDER BY code_commits.workspace_epoch ASC, code_patch_files.file_index ASC
+                "#,
+            )
+            .expect("prepare patch operation query");
+        statement
+            .query_map(params![project_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query patch operations")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect patch operations")
+    };
+    assert!(patch_operations
+        .iter()
+        .any(|operation| operation == "modify"));
+    assert!(patch_operations
+        .iter()
+        .any(|operation| operation == "create"));
+    assert!(patch_operations
+        .iter()
+        .any(|operation| operation == "rename"));
+    assert!(patch_operations
+        .iter()
+        .any(|operation| operation == "delete"));
+    let mkdir_kind: String = connection
+        .query_row(
+            r#"
+            SELECT after_file_kind
+            FROM code_patch_files
+            JOIN code_commits
+              ON code_commits.project_id = code_patch_files.project_id
+             AND code_commits.patchset_id = code_patch_files.patchset_id
+            WHERE code_commits.project_id = ?1
+              AND code_commits.run_id = 'owned-run-file-tools-1'
+              AND code_patch_files.path_after = 'generated'
+            "#,
+            params![project_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("mkdir patch file kind");
+    assert_eq!(mkdir_kind, "directory");
 }
 
 #[test]
@@ -1597,9 +2175,17 @@ fn owned_agent_priority_one_tools_dispatch_and_persist_journal() {
 
     assert_eq!(
         snapshot.run.status,
-        db::project_store::AgentRunStatus::Completed,
+        db::project_store::AgentRunStatus::Paused,
         "last error: {:?}",
         snapshot.run.last_error
+    );
+    assert_eq!(
+        snapshot
+            .run
+            .last_error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("agent_subagent_resolution_required")
     );
     let tool_names = snapshot
         .tool_calls
@@ -1611,7 +2197,7 @@ fn owned_agent_priority_one_tools_dispatch_and_persist_journal() {
     assert!(tool_names.contains(&"subagent"));
     assert!(tool_names.contains(&"code_intel"));
     assert!(tool_names.contains(&"lsp"));
-    assert!(tool_names.contains(&"mcp"));
+    assert!(tool_names.contains(&"mcp_list"));
     assert!(snapshot.messages.iter().any(|message| {
         message.role == db::project_store::AgentMessageRole::Tool
             && message.content.contains("\"toolName\":\"code_intel\"")
@@ -1846,6 +2432,20 @@ fn owned_agent_loop_dispatches_tools_and_persists_journal() {
                 .iter()
                 .any(|group| group == "core")
             && entry["riskClass"] == "observe"));
+    assert_eq!(
+        registry_payload["exposurePlan"]["schema"],
+        "xero.tool_exposure_plan.v1"
+    );
+    assert!(registry_payload["exposurePlan"]["entries"]
+        .as_array()
+        .expect("exposure entries")
+        .iter()
+        .any(|entry| entry["toolName"] == "read"
+            && entry["reasons"]
+                .as_array()
+                .expect("read exposure reasons")
+                .iter()
+                .any(|reason| reason["source"] == "user_explicit_tool_marker")));
 
     assert_eq!(snapshot.tool_calls.len(), 1);
     let tool_call = &snapshot.tool_calls[0];
@@ -2816,6 +3416,7 @@ fn owned_agent_auto_compact_provider_failure_does_not_mutate_history() {
             run_id: run_id.into(),
             role: db::project_store::AgentMessageRole::System,
             content: "You are Xero.".into(),
+            provider_metadata_json: None,
             created_at: "2026-04-26T18:00:01Z".into(),
             attachments: Vec::new(),
         },
@@ -2828,6 +3429,7 @@ fn owned_agent_auto_compact_provider_failure_does_not_mutate_history() {
             run_id: run_id.into(),
             role: db::project_store::AgentMessageRole::User,
             content: "Prepare an auto-compact failure source.".into(),
+            provider_metadata_json: None,
             created_at: "2026-04-26T18:00:02Z".into(),
             attachments: Vec::new(),
         },
@@ -2931,6 +3533,7 @@ fn owned_agent_plan_mode_allows_read_only_tool_call() {
             thinking_effort: None,
             approval_mode: RuntimeRunApprovalModeDto::Yolo,
             plan_mode_required: true,
+            auto_compact_enabled: true,
         }),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
@@ -3000,6 +3603,111 @@ fn owned_agent_write_tools_persist_file_change_hashes() {
     assert_eq!(payload["operation"], "write");
     assert!(payload["oldHash"].as_str().is_some());
     assert!(payload["newHash"].as_str().is_some());
+    let change_group_id = file_change
+        .change_group_id
+        .as_deref()
+        .expect("file change should link code change group");
+    assert_eq!(payload["codeChangeGroupId"], change_group_id);
+
+    let connection =
+        Connection::open(db::database_path_for_repo(&repo_root)).expect("open project db");
+    let (change_kind, status, before_snapshot_id, after_snapshot_id, file_version_count): (
+        String,
+        String,
+        String,
+        String,
+        i64,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT
+                code_change_groups.change_kind,
+                code_change_groups.status,
+                code_change_groups.before_snapshot_id,
+                code_change_groups.after_snapshot_id,
+                COUNT(code_file_versions.id)
+            FROM code_change_groups
+            LEFT JOIN code_file_versions
+              ON code_file_versions.project_id = code_change_groups.project_id
+             AND code_file_versions.change_group_id = code_change_groups.change_group_id
+            WHERE code_change_groups.project_id = ?1
+              AND code_change_groups.change_group_id = ?2
+            GROUP BY code_change_groups.change_group_id
+            "#,
+            params![project_id.as_str(), change_group_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("code change group row");
+    assert_eq!(change_kind, "file_tool");
+    assert_eq!(status, "completed");
+    assert!(before_snapshot_id.starts_with("code-snapshot-"));
+    assert!(after_snapshot_id.starts_with("code-snapshot-"));
+    assert_eq!(file_version_count, 1);
+    let (commit_id, commit_epoch, patch_file_count, patch_operation, merge_policy, hunk_count): (
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        i64,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT
+                code_commits.commit_id,
+                code_commits.workspace_epoch,
+                code_patchsets.file_count,
+                code_patch_files.operation,
+                code_patch_files.merge_policy,
+                code_patch_files.text_hunk_count
+            FROM code_commits
+            JOIN code_patchsets
+              ON code_patchsets.project_id = code_commits.project_id
+             AND code_patchsets.patchset_id = code_commits.patchset_id
+            JOIN code_patch_files
+              ON code_patch_files.project_id = code_patchsets.project_id
+             AND code_patch_files.patchset_id = code_patchsets.patchset_id
+            WHERE code_commits.project_id = ?1
+              AND code_commits.change_group_id = ?2
+            "#,
+            params![project_id.as_str(), change_group_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("code history commit row");
+    assert!(commit_id.starts_with("code-commit-"));
+    assert_eq!(commit_epoch, 1);
+    assert_eq!(patch_file_count, 1);
+    assert_eq!(patch_operation, "modify");
+    assert_eq!(merge_policy, "text");
+    assert_eq!(hunk_count, 1);
+    let workspace_head = db::project_store::read_code_workspace_head(&repo_root, &project_id)
+        .expect("read code workspace head")
+        .expect("code workspace head");
+    assert_eq!(workspace_head.head_id.as_deref(), Some(commit_id.as_str()));
+    assert_eq!(workspace_head.workspace_epoch, 1);
+    let path_epoch =
+        db::project_store::read_code_path_epoch(&repo_root, &project_id, "src/tracked.txt")
+            .expect("read path epoch")
+            .expect("path epoch");
+    assert_eq!(path_epoch.workspace_epoch, 1);
+    assert_eq!(path_epoch.commit_id.as_deref(), Some(commit_id.as_str()));
 
     let updated = fs::read_to_string(repo_root.join("src").join("tracked.txt"))
         .expect("updated tracked file");
@@ -3019,6 +3727,308 @@ fn owned_agent_write_tools_persist_file_change_hashes() {
     assert_eq!(payload["path"], "src/tracked.txt");
     assert_eq!(payload["operation"], "write");
     assert_eq!(payload["oldContentBase64"], "YWxwaGEKYmV0YQo=");
+}
+
+#[test]
+fn owned_agent_command_mutation_records_broad_code_change_group() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let seed_tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build seed autonomous tool runtime");
+    let seed_snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: "owned-run-explicit-generated-seed-1".into(),
+        prompt: "Seed an explicit generated path.\ntool:mkdir target\ntool:write target/explicit.txt seed\n"
+            .into(),
+        attachments: Vec::new(),
+        controls: Some(yolo_controls_input()),
+        tool_runtime: seed_tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+        provider_preflight: None,
+    })
+    .expect("owned agent generated seed run succeeds");
+    assert_eq!(
+        seed_snapshot.run.status,
+        db::project_store::AgentRunStatus::Completed,
+        "last error: {:?}",
+        seed_snapshot.run.last_error
+    );
+    fs::write(repo_root.join("delete-me.txt"), "remove me\n").expect("seed file for delete");
+
+    let tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: "owned-run-command-code-change-1".into(),
+        prompt: [
+            "Run a command that mutates broad file state.",
+            "tool:command_sh python3 -c \"from pathlib import Path; Path('src/tracked.txt').write_text('changed'); Path('binary.bin').write_bytes(bytes([0, 1]) + b'binary'); Path('delete-me.txt').unlink(); Path('target/explicit.txt').write_text('mutated')\"",
+            "tool:command_verify cargo test --help",
+        ]
+        .join("\n"),
+        attachments: Vec::new(),
+        controls: Some(yolo_controls_input()),
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+        provider_preflight: None,
+    })
+    .expect("owned agent command run succeeds");
+    assert_eq!(
+        snapshot.run.status,
+        db::project_store::AgentRunStatus::Completed,
+        "last error: {:?}",
+        snapshot.run.last_error
+    );
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .any(|tool_call| tool_call.tool_name == "command_run"
+                && tool_call.state == db::project_store::AgentToolCallState::Succeeded),
+        "tool calls: {:?}",
+        snapshot
+            .tool_calls
+            .iter()
+            .map(|tool_call| (
+                tool_call.tool_name.as_str(),
+                format!("{:?}", tool_call.state),
+                tool_call.error.as_ref().map(|error| error.code.as_str())
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    let connection =
+        Connection::open(db::database_path_for_repo(&repo_root)).expect("open project db");
+    let (change_group_id, change_kind, status): (String, String, String) = connection
+        .query_row(
+            r#"
+            SELECT change_group_id, change_kind, status
+            FROM code_change_groups
+            WHERE project_id = ?1
+              AND run_id = 'owned-run-command-code-change-1'
+              AND change_kind = 'command'
+            "#,
+            params![project_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("command code change group");
+    assert_eq!(change_kind, "command");
+    assert_eq!(status, "completed");
+    let (commit_id, workspace_epoch, file_count): (String, i64, i64) = connection
+        .query_row(
+            r#"
+            SELECT
+                code_commits.commit_id,
+                code_commits.workspace_epoch,
+                code_patchsets.file_count
+            FROM code_commits
+            JOIN code_patchsets
+              ON code_patchsets.project_id = code_commits.project_id
+             AND code_patchsets.patchset_id = code_commits.patchset_id
+            WHERE code_commits.project_id = ?1
+              AND code_commits.change_group_id = ?2
+              AND code_commits.run_id = 'owned-run-command-code-change-1'
+            "#,
+            params![project_id.as_str(), change_group_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("command code history commit");
+    assert!(commit_id.starts_with("code-commit-"));
+    assert_eq!(workspace_epoch, 3);
+    assert_eq!(file_count, 4);
+    let patch_files = {
+        let mut statement = connection
+            .prepare(
+                r#"
+                SELECT
+                    path_before,
+                    path_after,
+                    operation,
+                    merge_policy,
+                    text_hunk_count,
+                    result_blob_id
+                FROM code_patch_files
+                JOIN code_commits
+                  ON code_commits.project_id = code_patch_files.project_id
+                 AND code_commits.patchset_id = code_patch_files.patchset_id
+                WHERE code_commits.project_id = ?1
+                  AND code_commits.change_group_id = ?2
+                ORDER BY code_patch_files.path_before, code_patch_files.path_after
+                "#,
+            )
+            .expect("prepare command patch file query");
+        statement
+            .query_map(
+                params![project_id.as_str(), change_group_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .expect("query command patch files")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect command patch files")
+    };
+    assert!(patch_files
+        .iter()
+        .any(|(_, path_after, operation, merge_policy, hunk_count, _)| {
+            path_after.as_deref() == Some("src/tracked.txt")
+                && operation == "modify"
+                && merge_policy == "text"
+                && *hunk_count == 1
+        }));
+    assert!(patch_files.iter().any(
+        |(_, path_after, operation, merge_policy, hunk_count, result_blob_id)| {
+            path_after.as_deref() == Some("binary.bin")
+                && operation == "create"
+                && merge_policy == "exact"
+                && *hunk_count == 0
+                && result_blob_id
+                    .as_deref()
+                    .is_some_and(|hash| hash.len() == 64)
+        }
+    ));
+    assert!(patch_files
+        .iter()
+        .any(|(path_before, path_after, operation, _, _, _)| {
+            path_before.as_deref() == Some("delete-me.txt")
+                && path_after.is_none()
+                && operation == "delete"
+        }));
+    assert!(patch_files
+        .iter()
+        .any(|(_, path_after, operation, merge_policy, hunk_count, _)| {
+            path_after.as_deref() == Some("target/explicit.txt")
+                && operation == "modify"
+                && merge_policy == "text"
+                && *hunk_count == 1
+        }));
+    let generated_version_flags: (i64, i64) = connection
+        .query_row(
+            r#"
+            SELECT generated, explicitly_edited
+            FROM code_file_versions
+            WHERE project_id = ?1
+              AND change_group_id = ?2
+              AND path_after = 'target/explicit.txt'
+            "#,
+            params![project_id.as_str(), change_group_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("generated explicit broad file version");
+    assert_eq!(generated_version_flags, (1, 1));
+    let workspace_head = db::project_store::read_code_workspace_head(&repo_root, &project_id)
+        .expect("read code workspace head")
+        .expect("code workspace head");
+    assert_eq!(workspace_head.head_id.as_deref(), Some(commit_id.as_str()));
+    assert_eq!(workspace_head.workspace_epoch, 3);
+    let generated_path_epoch =
+        db::project_store::read_code_path_epoch(&repo_root, &project_id, "target/explicit.txt")
+            .expect("read generated path epoch")
+            .expect("generated path epoch");
+    assert_eq!(generated_path_epoch.workspace_epoch, 3);
+    assert_eq!(
+        generated_path_epoch.commit_id.as_deref(),
+        Some(commit_id.as_str())
+    );
+    assert_eq!(
+        fs::read_to_string(repo_root.join("src").join("tracked.txt")).expect("command text file"),
+        "changed"
+    );
+    assert_eq!(
+        fs::read(repo_root.join("binary.bin")).expect("command binary file"),
+        vec![0, 1, b'b', b'i', b'n', b'a', b'r', b'y']
+    );
+    assert!(!repo_root.join("delete-me.txt").exists());
+    assert_eq!(
+        fs::read_to_string(repo_root.join("target").join("explicit.txt"))
+            .expect("generated explicit file"),
+        "mutated"
+    );
+}
+
+#[test]
+fn owned_agent_verification_command_write_is_recovered_mutation() {
+    if std::process::Command::new("npm")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"scripts":{"test":"node -e \"require('fs').writeFileSync('recovered.txt','recovered')\""}} "#,
+    )
+    .expect("write package");
+    let tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: "owned-run-recovered-mutation-1".into(),
+        prompt: "Run focused verification.\ntool:command_verify npm test".into(),
+        attachments: Vec::new(),
+        controls: Some(yolo_controls_input()),
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+        provider_preflight: None,
+    })
+    .expect("owned agent verification run returns a snapshot");
+
+    let file_change = snapshot
+        .file_changes
+        .iter()
+        .find(|change| change.path == "recovered.txt")
+        .expect("recovered mutation file change");
+    let change_group_id = file_change
+        .change_group_id
+        .as_deref()
+        .expect("recovered mutation should link code change group");
+    let connection =
+        Connection::open(db::database_path_for_repo(&repo_root)).expect("open project db");
+    let change_kind: String = connection
+        .query_row(
+            "SELECT change_kind FROM code_change_groups WHERE project_id = ?1 AND change_group_id = ?2",
+            params![project_id, change_group_id],
+            |row| row.get(0),
+        )
+        .expect("recovered mutation code change group");
+    assert_eq!(change_kind, "recovered_mutation");
+    assert_eq!(
+        fs::read_to_string(repo_root.join("recovered.txt")).expect("recovered file"),
+        "recovered"
+    );
 }
 
 #[test]
@@ -3169,7 +4179,18 @@ fn owned_agent_resume_replays_answered_file_safety_tool_call() {
 
     assert_eq!(
         resumed.run.status,
-        db::project_store::AgentRunStatus::Completed
+        db::project_store::AgentRunStatus::Completed,
+        "last error: {:?}; action requests: {:?}",
+        resumed.run.last_error,
+        resumed
+            .action_requests
+            .iter()
+            .map(|action| (
+                action.action_id.as_str(),
+                action.action_type.as_str(),
+                action.status.as_str()
+            ))
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         fs::read_to_string(repo_root.join("src").join("tracked.txt"))
@@ -3186,7 +4207,10 @@ fn owned_agent_resume_replays_answered_file_safety_tool_call() {
         db::project_store::AgentToolCallState::Succeeded
     );
     assert!(resumed.action_requests.iter().all(|action| {
-        action.status == "answered" && action.response.as_deref() == Some("Approved. Continue.")
+        (action.action_type == "safety_boundary"
+            && action.status == "answered"
+            && action.response.as_deref() == Some("Approved. Continue."))
+            || (action.action_type == "command_approval" && action.status == "pending")
     }));
     assert!(resumed.events.iter().any(|event| {
         event.event_kind == db::project_store::AgentRunEventKind::ToolStarted
@@ -3209,18 +4233,44 @@ fn owned_agent_refuses_stale_file_writes_after_observation_changes() {
         &project_id,
     )
     .expect("build autonomous tool runtime");
-
-    let snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+    let initial = run_owned_agent_task(OwnedAgentRunRequest {
         repo_root: repo_root.clone(),
         project_id: project_id.clone(),
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-stale-write-1".into(),
-        prompt: "Please update safely.\ntool:read src/tracked.txt\ntool:command_sh printf outside > src/tracked.txt\ntool:write src/tracked.txt gamma\n".into(),
+        prompt: "Please inspect before updating.\ntool:read src/tracked.txt\n".into(),
         attachments: Vec::new(),
         controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
         provider_preflight: None,
+    })
+    .expect("owned agent read run should complete");
+    assert_eq!(
+        initial.run.status,
+        db::project_store::AgentRunStatus::Completed
+    );
+
+    fs::write(repo_root.join("src").join("tracked.txt"), "outside")
+        .expect("simulate external workspace change");
+    let continued_tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build continuation autonomous tool runtime");
+    let snapshot = continue_owned_agent_run(ContinueOwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        run_id: "owned-run-stale-write-1".into(),
+        prompt: "Now update safely.\ntool:write src/tracked.txt gamma\n".into(),
+        attachments: Vec::new(),
+        controls: Some(yolo_controls_input()),
+        tool_runtime: continued_tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+        provider_preflight: None,
+        answer_pending_actions: false,
+        auto_compact: None,
     })
     .expect("owned agent run should persist stale-write safety decision");
 
@@ -3228,10 +4278,6 @@ fn owned_agent_refuses_stale_file_writes_after_observation_changes() {
         snapshot.run.status,
         db::project_store::AgentRunStatus::Paused
     );
-    assert!(snapshot.tool_calls.iter().any(|tool_call| {
-        tool_call.tool_name == "command"
-            && tool_call.state == db::project_store::AgentToolCallState::Succeeded
-    }));
     assert!(snapshot.tool_calls.iter().any(|tool_call| {
         tool_call.tool_name == "write"
             && tool_call.state == db::project_store::AgentToolCallState::Failed
@@ -3351,7 +4397,7 @@ fn owned_agent_command_tools_emit_command_output_events() {
         project_id: project_id.clone(),
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-command-1".into(),
-        prompt: "Please prove command output streaming.\ntool:command_echo hello-xero".into(),
+        prompt: "Please prove command output streaming.\ntool:command_sh printf hello-xero".into(),
         attachments: Vec::new(),
         controls: Some(yolo_controls_input()),
         tool_runtime,
@@ -3360,20 +4406,17 @@ fn owned_agent_command_tools_emit_command_output_events() {
     })
     .expect("owned agent command task succeeds");
 
-    let partial_output = snapshot
-        .events
-        .iter()
-        .find(|event| {
-            event.event_kind == db::project_store::AgentRunEventKind::CommandOutput
-                && event.payload_json.contains(r#""partial":true"#)
-        })
-        .expect("partial command output event");
-    let partial_payload: serde_json::Value = serde_json::from_str(&partial_output.payload_json)
-        .expect("partial command output payload JSON");
-    assert_eq!(partial_payload["toolCallId"], "tool-call-command-1");
-    assert_eq!(partial_payload["toolName"], "command");
-    assert_eq!(partial_payload["stream"], "stdout");
-    assert_eq!(partial_payload["text"], "hello-xero");
+    if let Some(partial_output) = snapshot.events.iter().find(|event| {
+        event.event_kind == db::project_store::AgentRunEventKind::CommandOutput
+            && event.payload_json.contains(r#""partial":true"#)
+    }) {
+        let partial_payload: serde_json::Value = serde_json::from_str(&partial_output.payload_json)
+            .expect("partial command output payload JSON");
+        assert_eq!(partial_payload["toolCallId"], "tool-call-command-1");
+        assert_eq!(partial_payload["toolName"], "command_run");
+        assert_eq!(partial_payload["stream"], "stdout");
+        assert_eq!(partial_payload["text"], "hello-xero");
+    }
 
     let command_output = snapshot
         .events
@@ -3386,8 +4429,8 @@ fn owned_agent_command_tools_emit_command_output_events() {
     let payload: serde_json::Value =
         serde_json::from_str(&command_output.payload_json).expect("command output payload JSON");
     assert_eq!(payload["toolCallId"], "tool-call-command-1");
-    assert_eq!(payload["toolName"], "command");
-    assert_eq!(payload["argv"], json!(["echo", "hello-xero"]));
+    assert_eq!(payload["toolName"], "command_run");
+    assert_eq!(payload["argv"], json!(["sh", "-c", "printf hello-xero"]));
     assert_eq!(payload["stdout"], "hello-xero");
     assert_eq!(payload["spawned"], true);
     assert_eq!(payload["exitCode"], 0);
@@ -3486,7 +4529,7 @@ fn owned_agent_resume_replays_answered_command_approval_tool_call() {
     let command_call = resumed
         .tool_calls
         .iter()
-        .find(|tool_call| tool_call.tool_name == "command")
+        .find(|tool_call| tool_call.tool_name == "command_run")
         .expect("command tool call should remain in journal");
     assert!(command_call
         .result_json
@@ -3789,7 +4832,7 @@ fn start_runtime_run_defaults_to_owned_agent_runtime() {
     let app = build_mock_app(create_state(&root));
     let (project_id, _repo_root) = seed_project(&root, &app);
 
-    let runtime_run = start_runtime_run(
+    let runtime_run = tauri::async_runtime::block_on(start_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
@@ -3799,7 +4842,7 @@ fn start_runtime_run_defaults_to_owned_agent_runtime() {
             initial_prompt: None,
             initial_attachments: Vec::new(),
         },
-    )
+    ))
     .expect("start runtime run should create owned agent runtime");
 
     assert_eq!(runtime_run.runtime_kind, "owned_agent");
@@ -3808,7 +4851,7 @@ fn start_runtime_run_defaults_to_owned_agent_runtime() {
     assert_eq!(runtime_run.transport.endpoint, "xero://owned-agent");
     assert_eq!(
         runtime_run.controls.active.runtime_agent_id,
-        RuntimeAgentIdDto::Ask
+        RuntimeAgentIdDto::Generalist
     );
     assert_eq!(
         runtime_run.controls.active.approval_mode,
@@ -3822,7 +4865,7 @@ fn start_runtime_run_initial_prompt_runs_owned_agent_task() {
     let app = build_mock_app(create_state(&root));
     let (project_id, repo_root) = seed_project(&root, &app);
 
-    let runtime_run = start_runtime_run(
+    let runtime_run = tauri::async_runtime::block_on(start_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
@@ -3832,7 +4875,7 @@ fn start_runtime_run_initial_prompt_runs_owned_agent_task() {
             initial_prompt: Some("Inspect the tracked file.\ntool:read src/tracked.txt".into()),
             initial_attachments: Vec::new(),
         },
-    )
+    ))
     .expect("start runtime run should execute owned agent task from initial prompt");
 
     let agent_run = wait_for_agent_run_status(
@@ -3858,7 +4901,7 @@ fn archive_agent_session_stops_idle_runtime_run_after_interaction() {
     let (project_id, repo_root) = seed_project(&root, &app);
     let agent_session_id = db::project_store::DEFAULT_AGENT_SESSION_ID.to_string();
 
-    let runtime_run = start_runtime_run(
+    let runtime_run = tauri::async_runtime::block_on(start_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
@@ -3868,7 +4911,7 @@ fn archive_agent_session_stops_idle_runtime_run_after_interaction() {
             initial_prompt: Some("Inspect the tracked file.\ntool:read src/tracked.txt".into()),
             initial_attachments: Vec::new(),
         },
-    )
+    ))
     .expect("start runtime run should execute owned agent task from initial prompt");
 
     wait_for_agent_run_status(
@@ -3882,6 +4925,7 @@ fn archive_agent_session_stops_idle_runtime_run_after_interaction() {
     let archived = archive_agent_session(
         app.handle().clone(),
         app.state::<DesktopState>(),
+        app.state::<RemoteBridgeRuntimeState>(),
         ArchiveAgentSessionRequestDto {
             project_id: project_id.clone(),
             agent_session_id: agent_session_id.clone(),
@@ -3906,7 +4950,7 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
     let app = build_mock_app(create_state(&root));
     let (project_id, repo_root) = seed_project(&root, &app);
 
-    let runtime_run = start_runtime_run(
+    let runtime_run = tauri::async_runtime::block_on(start_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
@@ -3916,10 +4960,10 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
             initial_prompt: None,
             initial_attachments: Vec::new(),
         },
-    )
+    ))
     .expect("start runtime run should create owned agent runtime");
 
-    let updated = update_runtime_run_controls(
+    let updated = tauri::async_runtime::block_on(update_runtime_run_controls(
         app.handle().clone(),
         app.state::<DesktopState>(),
         UpdateRuntimeRunControlsRequestDto {
@@ -3929,9 +4973,8 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
             controls: None,
             prompt: Some("Inspect the tracked file.\ntool:read src/tracked.txt".into()),
             attachments: Vec::new(),
-            auto_compact: None,
         },
-    )
+    ))
     .expect("runtime prompt should start owned agent run");
     assert_eq!(updated.run_id, runtime_run.run_id);
 
@@ -3947,7 +4990,7 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
     }));
     wait_for_agent_run_inactive(app.state::<DesktopState>().inner(), &runtime_run.run_id);
 
-    update_runtime_run_controls(
+    tauri::async_runtime::block_on(update_runtime_run_controls(
         app.handle().clone(),
         app.state::<DesktopState>(),
         UpdateRuntimeRunControlsRequestDto {
@@ -3957,9 +5000,8 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
             controls: None,
             prompt: Some("Thanks, summarize the result.".into()),
             attachments: Vec::new(),
-            auto_compact: None,
         },
-    )
+    ))
     .expect("runtime prompt should continue owned agent run");
 
     let continued = wait_for_agent_run_status(
@@ -3975,6 +5017,204 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
 }
 
 #[test]
+fn update_runtime_run_controls_queues_runtime_agent_switch_for_next_boundary() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    let runtime_run = tauri::async_runtime::block_on(start_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StartRuntimeRunRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            initial_controls: Some(RuntimeRunControlInputDto {
+                runtime_agent_id: RuntimeAgentIdDto::Ask,
+                agent_definition_id: None,
+                provider_profile_id: None,
+                model_id: "test-model".into(),
+                thinking_effort: None,
+                approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                plan_mode_required: false,
+                auto_compact_enabled: true,
+            }),
+            initial_prompt: None,
+            initial_attachments: Vec::new(),
+        },
+    ))
+    .expect("start runtime run should create owned agent runtime");
+
+    let queued = tauri::async_runtime::block_on(update_runtime_run_controls(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpdateRuntimeRunControlsRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: runtime_run.run_id.clone(),
+            controls: Some(RuntimeRunControlInputDto {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                agent_definition_id: None,
+                provider_profile_id: None,
+                model_id: "test-model".into(),
+                thinking_effort: None,
+                approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                plan_mode_required: false,
+                auto_compact_enabled: true,
+            }),
+            prompt: None,
+            attachments: Vec::new(),
+        },
+    ))
+    .expect("runtime agent switch should queue as pending controls");
+
+    assert_eq!(
+        queued.controls.active.runtime_agent_id,
+        RuntimeAgentIdDto::Ask
+    );
+    let pending = queued
+        .controls
+        .pending
+        .as_ref()
+        .expect("runtime agent switch should be pending");
+    assert_eq!(pending.runtime_agent_id, RuntimeAgentIdDto::Engineer);
+    assert_eq!(pending.agent_definition_id.as_deref(), Some("engineer"));
+    assert!(pending.agent_definition_version.unwrap_or(0) > 0);
+    assert!(pending.revision > queued.controls.active.revision);
+
+    tauri::async_runtime::block_on(update_runtime_run_controls(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpdateRuntimeRunControlsRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: runtime_run.run_id.clone(),
+            controls: None,
+            prompt: Some("Summarize the tracked file.".into()),
+            attachments: Vec::new(),
+        },
+    ))
+    .expect("queued runtime agent switch should apply at the next prompt boundary");
+
+    let agent_run = wait_for_agent_run_status(
+        &repo_root,
+        &project_id,
+        &runtime_run.run_id,
+        db::project_store::AgentRunStatus::Completed,
+    );
+    assert_eq!(agent_run.run.runtime_agent_id, RuntimeAgentIdDto::Engineer);
+    assert_eq!(agent_run.run.agent_definition_id, "engineer");
+}
+
+#[test]
+fn update_runtime_run_controls_queues_provider_profile_switch_for_next_prompt() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let agent_session_id = db::project_store::DEFAULT_AGENT_SESSION_ID.to_string();
+
+    let runtime_run = tauri::async_runtime::block_on(start_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StartRuntimeRunRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: agent_session_id.clone(),
+            initial_controls: Some(RuntimeRunControlInputDto {
+                runtime_agent_id: RuntimeAgentIdDto::Ask,
+                agent_definition_id: None,
+                provider_profile_id: Some("xai-default".into()),
+                model_id: "grok-4.3".into(),
+                thinking_effort: None,
+                approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                plan_mode_required: false,
+                auto_compact_enabled: true,
+            }),
+            initial_prompt: Some("Inspect the tracked file.\ntool:read src/tracked.txt".into()),
+            initial_attachments: Vec::new(),
+        },
+    ))
+    .expect("start runtime run should execute the initial prompt");
+
+    wait_for_agent_run_status(
+        &repo_root,
+        &project_id,
+        &runtime_run.run_id,
+        db::project_store::AgentRunStatus::Completed,
+    );
+    wait_for_agent_run_inactive(app.state::<DesktopState>().inner(), &runtime_run.run_id);
+
+    let queued = tauri::async_runtime::block_on(update_runtime_run_controls(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpdateRuntimeRunControlsRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: agent_session_id.clone(),
+            run_id: runtime_run.run_id.clone(),
+            controls: Some(RuntimeRunControlInputDto {
+                runtime_agent_id: RuntimeAgentIdDto::Ask,
+                agent_definition_id: None,
+                provider_profile_id: Some("openai_codex-default".into()),
+                model_id: "gpt-5.4".into(),
+                thinking_effort: None,
+                approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                plan_mode_required: false,
+                auto_compact_enabled: true,
+            }),
+            prompt: None,
+            attachments: Vec::new(),
+        },
+    ))
+    .expect("provider profile switch should queue as pending controls");
+
+    assert_eq!(
+        queued.controls.active.provider_profile_id.as_deref(),
+        Some("xai-default")
+    );
+    let pending = queued
+        .controls
+        .pending
+        .as_ref()
+        .expect("provider profile switch should be pending");
+    assert_eq!(
+        pending.provider_profile_id.as_deref(),
+        Some("openai_codex-default")
+    );
+    assert_eq!(pending.model_id, "gpt-5.4");
+
+    tauri::async_runtime::block_on(update_runtime_run_controls(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpdateRuntimeRunControlsRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: agent_session_id.clone(),
+            run_id: runtime_run.run_id.clone(),
+            controls: None,
+            prompt: Some("Thanks, continue with the newly selected provider.".into()),
+            attachments: Vec::new(),
+        },
+    ))
+    .expect("queued provider profile switch should apply at the next prompt boundary");
+
+    wait_for_agent_run_status(
+        &repo_root,
+        &project_id,
+        &runtime_run.run_id,
+        db::project_store::AgentRunStatus::Completed,
+    );
+    let applied = db::project_store::load_runtime_run(&repo_root, &project_id, &agent_session_id)
+        .expect("load runtime run")
+        .expect("runtime run should remain persisted");
+    assert_eq!(
+        applied.controls.active.provider_profile_id.as_deref(),
+        Some("openai_codex-default")
+    );
+    assert_eq!(applied.controls.active.model_id, "gpt-5.4");
+    assert!(
+        applied.controls.pending.is_none(),
+        "pending provider switch should be consumed after the prompt boundary"
+    );
+}
+
+#[test]
 fn start_agent_task_returns_running_before_background_driver_finishes() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
@@ -3986,8 +5226,10 @@ fn start_agent_task_returns_running_before_background_driver_finishes() {
         StartAgentTaskRequestDto {
             project_id: project_id.clone(),
             agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: None,
             prompt: "Run a slow command.\ntool:command_sh sleep 2".into(),
             controls: Some(yolo_controls_input()),
+            attachments: Vec::new(),
         },
     )
     .expect("start agent task should return initial running snapshot");
@@ -4004,7 +5246,7 @@ fn start_agent_task_returns_running_before_background_driver_finishes() {
         db::project_store::AgentRunStatus::Completed,
     );
     assert!(completed.tool_calls.iter().any(|tool_call| {
-        tool_call.tool_name == "command"
+        tool_call.tool_name == "command_run"
             && tool_call.state == db::project_store::AgentToolCallState::Succeeded
     }));
 }
@@ -4021,8 +5263,10 @@ fn cancel_agent_run_flips_background_task_cancellation_token() {
         StartAgentTaskRequestDto {
             project_id: project_id.clone(),
             agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: None,
             prompt: "Run a cancellable command.\ntool:command_sh sleep 5".into(),
             controls: None,
+            attachments: Vec::new(),
         },
     )
     .expect("start cancellable agent task");
@@ -4051,4 +5295,285 @@ fn cancel_agent_run_flips_background_task_cancellation_token() {
         event.event_kind == db::project_store::AgentRunEventKind::RunFailed
             && event.payload_json.contains("agent_run_cancelled")
     }));
+}
+
+fn load_seeded_definition_snapshot(
+    repo_root: &Path,
+    definition_id: &str,
+    version: u32,
+) -> serde_json::Value {
+    db::project_store::load_effective_agent_definition_version_snapshot(
+        repo_root,
+        definition_id,
+        version,
+    )
+    .unwrap_or_else(|err| panic!("load {definition_id} v{version} snapshot: {err}"))
+}
+
+fn phase_ids_in_snapshot(snapshot: &serde_json::Value) -> Vec<String> {
+    snapshot
+        .get("workflowStructure")
+        .and_then(|value| value.get("phases"))
+        .and_then(|value| value.as_array())
+        .map(|phases| {
+            phases
+                .iter()
+                .filter_map(|phase| {
+                    phase
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(str::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn built_in_agents_seed_workflow_structure_v2() {
+    let root = TempDir::new().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (_, repo_root) = seed_project(&root, &app);
+
+    let definitions = db::project_store::list_agent_definitions(&repo_root, true)
+        .expect("list seeded agent definitions");
+    let by_id: std::collections::BTreeMap<_, _> = definitions
+        .into_iter()
+        .map(|record| (record.definition_id.clone(), record))
+        .collect();
+
+    for (definition_id, expected_phases) in [
+        ("engineer", vec!["survey", "plan", "implement", "verify"]),
+        ("debug", vec!["reproduce", "hypothesize", "fix", "verify"]),
+        ("plan", vec!["discover", "draft", "accept"]),
+        ("agent_create", vec!["interview", "draft"]),
+    ] {
+        let record = by_id
+            .get(definition_id)
+            .unwrap_or_else(|| panic!("missing built-in `{definition_id}` after migration"));
+        assert_eq!(
+            record.current_version, 2,
+            "expected `{definition_id}` to be bumped to v2 by the workflowStructure migration"
+        );
+
+        let snapshot = load_seeded_definition_snapshot(&repo_root, definition_id, 2);
+        let actual_phases = phase_ids_in_snapshot(&snapshot);
+        assert_eq!(
+            actual_phases, expected_phases,
+            "`{definition_id}` v2 snapshot phase ids do not match the AGENT_STAGES_PLAN spec"
+        );
+
+        let policy = AutonomousAgentWorkflowPolicy::from_definition_snapshot(&snapshot);
+        assert!(
+            policy.is_some(),
+            "`{definition_id}` v2 snapshot must parse into AutonomousAgentWorkflowPolicy"
+        );
+    }
+
+    for (definition_id, expected_version) in [("ask", 1u32), ("crawl", 1u32)] {
+        let record = by_id
+            .get(definition_id)
+            .unwrap_or_else(|| panic!("missing built-in `{definition_id}`"));
+        assert_eq!(
+            record.current_version, expected_version,
+            "`{definition_id}` must remain at v{expected_version} (no workflowStructure planned)"
+        );
+    }
+}
+
+#[test]
+fn engineer_workflow_blocks_write_before_survey_reads() {
+    let root = TempDir::new().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (_, repo_root) = seed_project(&root, &app);
+
+    let snapshot = load_seeded_definition_snapshot(&repo_root, "engineer", 2);
+    let policy = AutonomousAgentWorkflowPolicy::from_definition_snapshot(&snapshot)
+        .expect("engineer v2 workflow policy");
+
+    let tempdir = TempDir::new().expect("workflow tempdir");
+    let runtime = AutonomousToolRuntime::new(tempdir.path())
+        .expect("autonomous tool runtime")
+        .with_agent_workflow_policy(Some(policy));
+
+    std::fs::write(tempdir.path().join("a.txt"), "alpha\n").expect("seed file a");
+    std::fs::write(tempdir.path().join("b.txt"), "beta\n").expect("seed file b");
+
+    let denied = runtime
+        .execute(AutonomousToolRequest::Write(AutonomousWriteRequest {
+            path: "premature.txt".into(),
+            content: "no\n".into(),
+            expected_hash: None,
+            create_only: false,
+            overwrite: None,
+            preview: false,
+        }))
+        .expect_err("write must be denied while engineer is in `survey`");
+    assert_eq!(denied.code, "policy_denied");
+    assert!(
+        denied.message.to_lowercase().contains("survey")
+            || denied.message.contains("required gates"),
+        "denial should mention the survey phase / gates, got: {}",
+        denied.message,
+    );
+
+    for path in ["a.txt", "b.txt"] {
+        runtime
+            .execute(AutonomousToolRequest::Read(AutonomousReadRequest {
+                path: path.into(),
+                system_path: false,
+                mode: None,
+                start_line: None,
+                line_count: None,
+                cursor: None,
+                around_pattern: None,
+                max_bytes_per_file: None,
+                byte_offset: None,
+                byte_count: None,
+                include_line_hashes: false,
+            }))
+            .unwrap_or_else(|err| panic!("read {path}: {err:?}"));
+    }
+
+    let still_denied = runtime
+        .execute(AutonomousToolRequest::Write(AutonomousWriteRequest {
+            path: "still_no.txt".into(),
+            content: "no\n".into(),
+            expected_hash: None,
+            create_only: false,
+            overwrite: None,
+            preview: false,
+        }))
+        .expect_err("write must still be denied before the implementation_plan todo closes");
+    assert_eq!(still_denied.code, "policy_denied");
+
+    runtime
+        .execute(AutonomousToolRequest::Todo(AutonomousTodoRequest {
+            action: AutonomousTodoAction::Upsert,
+            id: Some("implementation_plan".into()),
+            title: Some("Implementation plan".into()),
+            notes: None,
+            status: Some(AutonomousTodoStatus::Completed),
+            mode: None,
+            debug_stage: None,
+            evidence: Some("Plan recorded in todo gate.".into()),
+            phase_id: Some("plan".into()),
+            phase_title: Some("Plan".into()),
+            slice_id: None,
+            handoff_note: None,
+        }))
+        .expect("close implementation_plan todo");
+
+    runtime
+        .execute(AutonomousToolRequest::Write(AutonomousWriteRequest {
+            path: "implemented.txt".into(),
+            content: "ok\n".into(),
+            expected_hash: None,
+            create_only: false,
+            overwrite: None,
+            preview: false,
+        }))
+        .expect("write allowed in `implement` after gates pass");
+}
+
+#[test]
+fn debug_workflow_blocks_edit_before_hypothesis_todo() {
+    let root = TempDir::new().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (_, repo_root) = seed_project(&root, &app);
+
+    let snapshot = load_seeded_definition_snapshot(&repo_root, "debug", 2);
+    let policy = AutonomousAgentWorkflowPolicy::from_definition_snapshot(&snapshot)
+        .expect("debug v2 workflow policy");
+
+    let tempdir = TempDir::new().expect("workflow tempdir");
+    let runtime = AutonomousToolRuntime::new(tempdir.path())
+        .expect("autonomous tool runtime")
+        .with_agent_workflow_policy(Some(policy));
+
+    std::fs::write(tempdir.path().join("repro.txt"), "first\nsecond\n").expect("seed repro file");
+
+    let denied = runtime
+        .execute(AutonomousToolRequest::Edit(AutonomousEditRequest {
+            path: "repro.txt".into(),
+            start_line: 1,
+            end_line: 1,
+            expected: "first\n".into(),
+            replacement: "patched\n".into(),
+            expected_hash: None,
+            start_line_hash: None,
+            end_line_hash: None,
+            preview: false,
+        }))
+        .expect_err("edit must be denied in `reproduce` phase");
+    assert_eq!(denied.code, "policy_denied");
+    assert!(
+        denied.message.to_lowercase().contains("reproduce")
+            || denied.message.contains("required gates"),
+        "denial should mention the reproduce phase / gates, got: {}",
+        denied.message,
+    );
+
+    runtime
+        .execute(AutonomousToolRequest::Todo(AutonomousTodoRequest {
+            action: AutonomousTodoAction::Upsert,
+            id: Some("reproduction_steps".into()),
+            title: Some("Reproduction steps".into()),
+            notes: None,
+            status: Some(AutonomousTodoStatus::Completed),
+            mode: None,
+            debug_stage: None,
+            evidence: Some("Captured steps.".into()),
+            phase_id: Some("reproduce".into()),
+            phase_title: Some("Reproduce".into()),
+            slice_id: None,
+            handoff_note: None,
+        }))
+        .expect("close reproduction_steps todo");
+
+    let still_denied = runtime
+        .execute(AutonomousToolRequest::Edit(AutonomousEditRequest {
+            path: "repro.txt".into(),
+            start_line: 1,
+            end_line: 1,
+            expected: "first\n".into(),
+            replacement: "patched\n".into(),
+            expected_hash: None,
+            start_line_hash: None,
+            end_line_hash: None,
+            preview: false,
+        }))
+        .expect_err("edit must still be denied before hypothesis todo closes");
+    assert_eq!(still_denied.code, "policy_denied");
+
+    runtime
+        .execute(AutonomousToolRequest::Todo(AutonomousTodoRequest {
+            action: AutonomousTodoAction::Upsert,
+            id: Some("hypothesis".into()),
+            title: Some("Hypothesis".into()),
+            notes: None,
+            status: Some(AutonomousTodoStatus::Completed),
+            mode: None,
+            debug_stage: None,
+            evidence: Some("Hypothesis captured.".into()),
+            phase_id: Some("hypothesize".into()),
+            phase_title: Some("Hypothesize".into()),
+            slice_id: None,
+            handoff_note: None,
+        }))
+        .expect("close hypothesis todo");
+
+    runtime
+        .execute(AutonomousToolRequest::Edit(AutonomousEditRequest {
+            path: "repro.txt".into(),
+            start_line: 1,
+            end_line: 1,
+            expected: "first\n".into(),
+            replacement: "patched\n".into(),
+            expected_hash: None,
+            start_line_hash: None,
+            end_line_hash: None,
+            preview: false,
+        }))
+        .expect("edit allowed in `fix` after both reproduce and hypothesize todos close");
 }

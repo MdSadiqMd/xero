@@ -8,6 +8,7 @@ import { AGENT_WORKSPACE_DROP_TARGET_ID } from '@/components/xero/agent-runtime/
 import { isAgentPaneWorking } from '@/components/xero/agent-runtime/runtime-stream-helpers'
 import type { AgentPaneCloseState, AgentRuntimeProps } from '@/components/xero/agent-runtime'
 import { LiveAgentRuntimeView } from '@/components/xero/agent-runtime/live-agent-runtime'
+import type { RuntimeAgentIdDto } from '@/src/lib/xero-model/runtime'
 import type {
   AgentWorkspaceLayoutState,
   AgentWorkspacePaneView,
@@ -135,6 +136,9 @@ export interface AgentWorkspaceProps
       | 'onResumeOperatorRun'
       | 'onRefreshNotificationRoutes'
       | 'onUpsertNotificationRoute'
+      | 'pendingInitialRuntimeAgentId'
+      | 'pendingInitialAgentDefinitionId'
+      | 'onPendingInitialRuntimeAgentIdConsumed'
     >,
     PaneAwareRuntimeHandlers {
   active?: boolean
@@ -147,6 +151,13 @@ export interface AgentWorkspaceProps
   onFocusPane?: (paneId: string) => void
   onSplitterRatiosChange?: (arrangementKey: string, ratios: number[]) => void
   onPaneCloseStateChange?: (paneId: string, state: AgentPaneCloseState) => void
+  /** Per-session pending runtime agent to apply when its pane mounts. */
+  pendingInitialRuntimeAgent?: {
+    agentSessionId: string
+    runtimeAgentId: RuntimeAgentIdDto
+    agentDefinitionId?: string | null
+  } | null
+  onClearPendingInitialRuntimeAgent?: (agentSessionId: string) => void
 }
 
 export const AgentWorkspace = memo(function AgentWorkspace({
@@ -175,6 +186,8 @@ export const AgentWorkspace = memo(function AgentWorkspace({
   onResumeOperatorRun,
   onRefreshNotificationRoutes,
   onUpsertNotificationRoute,
+  pendingInitialRuntimeAgent = null,
+  onClearPendingInitialRuntimeAgent,
   ...runtimeProps
 }: AgentWorkspaceProps) {
   const stableRuntimeProps = useShallowStableRecord(runtimeProps)
@@ -251,6 +264,8 @@ export const AgentWorkspace = memo(function AgentWorkspace({
           onResumeOperatorRun={onResumeOperatorRun}
           onRefreshNotificationRoutes={onRefreshNotificationRoutes}
           onUpsertNotificationRoute={onUpsertNotificationRoute}
+          pendingInitialRuntimeAgent={pendingInitialRuntimeAgent}
+          onClearPendingInitialRuntimeAgent={onClearPendingInitialRuntimeAgent}
         />
       )
     },
@@ -259,6 +274,7 @@ export const AgentWorkspace = memo(function AgentWorkspace({
       density,
       highChurnStore,
       onCancelAutonomousRun,
+      onClearPendingInitialRuntimeAgent,
       onClosePane,
       onComposerControlsChange,
       onFocusPane,
@@ -279,6 +295,7 @@ export const AgentWorkspace = memo(function AgentWorkspace({
       onUpsertNotificationRoute,
       paneCount,
       panes,
+      pendingInitialRuntimeAgent,
       spawnPaneDisabled,
       stableRuntimeProps,
     ],
@@ -343,8 +360,17 @@ interface PaneRuntimeWrapperProps extends PaneAwareRuntimeHandlers {
     | 'onResumeOperatorRun'
     | 'onRefreshNotificationRoutes'
     | 'onUpsertNotificationRoute'
+    | 'pendingInitialRuntimeAgentId'
+    | 'pendingInitialAgentDefinitionId'
+    | 'onPendingInitialRuntimeAgentIdConsumed'
   >
   highChurnStore: XeroHighChurnStore
+  pendingInitialRuntimeAgent?: {
+    agentSessionId: string
+    runtimeAgentId: RuntimeAgentIdDto
+    agentDefinitionId?: string | null
+  } | null
+  onClearPendingInitialRuntimeAgent?: (agentSessionId: string) => void
 }
 
 const PaneRuntime = memo(function PaneRuntime({
@@ -376,9 +402,31 @@ const PaneRuntime = memo(function PaneRuntime({
   onResumeOperatorRun,
   onRefreshNotificationRoutes,
   onUpsertNotificationRoute,
+  pendingInitialRuntimeAgent,
+  onClearPendingInitialRuntimeAgent,
   dragHandle,
 }: PaneRuntimeWrapperProps) {
   const paneId = pane.paneId
+  const paneSessionId = pane.agent.project.selectedAgentSessionId
+  const pendingInitialRuntimeAgentId =
+    pendingInitialRuntimeAgent &&
+    paneSessionId &&
+    pendingInitialRuntimeAgent.agentSessionId === paneSessionId
+      ? pendingInitialRuntimeAgent.runtimeAgentId
+      : null
+  const pendingInitialAgentDefinitionId =
+    pendingInitialRuntimeAgent &&
+    paneSessionId &&
+    pendingInitialRuntimeAgent.agentSessionId === paneSessionId
+      ? pendingInitialRuntimeAgent.agentDefinitionId ?? null
+      : null
+  const handlePendingInitialRuntimeAgentIdConsumed = useMemo(
+    () =>
+      paneSessionId && onClearPendingInitialRuntimeAgent
+        ? () => onClearPendingInitialRuntimeAgent(paneSessionId)
+        : undefined,
+    [onClearPendingInitialRuntimeAgent, paneSessionId],
+  )
   const paneBoundHandlers = useMemo<
     Partial<
       Pick<
@@ -500,6 +548,9 @@ const PaneRuntime = memo(function PaneRuntime({
       onFocusPane={handleFocus}
       onPaneCloseStateChange={handlePaneCloseStateChange}
       dragHandle={dragHandle}
+      pendingInitialRuntimeAgentId={pendingInitialRuntimeAgentId}
+      pendingInitialAgentDefinitionId={pendingInitialAgentDefinitionId}
+      onPendingInitialRuntimeAgentIdConsumed={handlePendingInitialRuntimeAgentIdConsumed}
     />
   )
 })

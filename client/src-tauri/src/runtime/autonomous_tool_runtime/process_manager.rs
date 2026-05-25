@@ -37,6 +37,7 @@ use super::{
 use crate::{
     auth::now_timestamp,
     commands::{validate_non_empty, CommandError, CommandResult},
+    db::project_app_data_dir_for_repo,
     runtime::{
         cancelled_error,
         process_tree::{
@@ -67,7 +68,7 @@ const MAX_PROCESS_HIGHLIGHTS: usize = 32;
 const MAX_SYSTEM_PROCESS_RESULTS: usize = 200;
 const MAX_SYSTEM_TREE_PROCESSES: usize = 512;
 const MAX_SYSTEM_PORT_RESULTS: usize = 200;
-const ASYNC_JOB_ARTIFACT_DIR: &str = "xero-process-artifacts";
+const ASYNC_JOB_ARTIFACT_DIR: &str = "tool-artifacts/process";
 const REDACTED_PROCESS_OUTPUT_SUMMARY: &str =
     "Process output was redacted before durable persistence.";
 const INTERNAL_MARKER_PREFIX: &str = "__XERO_";
@@ -229,6 +230,7 @@ struct OwnedProcessLaunchConfig {
     persistent: bool,
     async_job: bool,
     timeout_ms: Option<u64>,
+    output_artifact_dir: PathBuf,
 }
 
 impl OwnedProcess {
@@ -644,7 +646,7 @@ impl OwnedProcess {
         let text = filter_internal_marker_text(&durable.text);
         let redacted = durable.redacted;
 
-        let dir = env::temp_dir().join(ASYNC_JOB_ARTIFACT_DIR);
+        let dir = self.launch_config.output_artifact_dir.clone();
         fs::create_dir_all(&dir).map_err(|error| {
             CommandError::system_fault(
                 "autonomous_tool_process_manager_artifact_failed",
@@ -1033,6 +1035,8 @@ impl AutonomousToolRuntime {
             persistent: request.persistent,
             async_job: options.async_job,
             timeout_ms: options.async_job.then_some(prepared.timeout_ms),
+            output_artifact_dir: project_app_data_dir_for_repo(&self.repo_root)
+                .join(ASYNC_JOB_ARTIFACT_DIR),
         };
         let wants_stdin = launch_config.interactive || launch_config.shell_mode;
         command
@@ -3018,7 +3022,10 @@ fn macos_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
     ps_system_processes()
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "macos",
+    all(unix, not(any(target_os = "linux", target_os = "macos")))
+))]
 fn ps_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,ppid=,comm="])
@@ -3111,7 +3118,7 @@ fn process_executable_path(pid: u32) -> Option<String> {
     Some(String::from_utf8_lossy(&buffer[..len]).into_owned())
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn process_executable_path(_pid: u32) -> Option<String> {
     None
 }
@@ -3645,7 +3652,10 @@ fn linux_ipv6_addr(value: &str) -> String {
         .join(":")
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "macos",
+    all(unix, not(any(target_os = "linux", target_os = "macos")))
+))]
 fn lsof_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
     let output = Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcPn"])
@@ -3698,6 +3708,10 @@ fn lsof_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
     Ok(ports)
 }
 
+#[cfg(any(
+    target_os = "macos",
+    all(unix, not(any(target_os = "linux", target_os = "macos")))
+))]
 fn parse_lsof_address(value: &str) -> Option<(String, u16)> {
     let without_state = value.split(" (").next().unwrap_or(value);
     let (addr, port) = if let Some(end) = without_state.rfind("]:") {
@@ -4006,7 +4020,7 @@ fn normalized_external_signal(signal: Option<&str>) -> CommandResult<ExternalSig
                 return Err(CommandError::user_fixable(
                     "autonomous_tool_process_manager_signal_invalid",
                     "Xero supports external signals TERM, KILL, INT, HUP, QUIT, USR1, USR2, STOP, and CONT.",
-                ))
+                ));
             }
         };
         Ok(signal)
@@ -4026,7 +4040,7 @@ fn normalized_external_signal(signal: Option<&str>) -> CommandResult<ExternalSig
                 return Err(CommandError::user_fixable(
                     "autonomous_tool_process_manager_signal_invalid",
                     "Xero supports external Windows signals TERM and KILL.",
-                ))
+                ));
             }
         };
         Ok(signal)
@@ -6048,7 +6062,15 @@ mod tests {
             .output_artifact
             .as_ref()
             .expect("async job output artifact");
-        assert!(std::path::Path::new(&artifact.path).is_file());
+        let artifact_path = std::path::Path::new(&artifact.path);
+        let expected_artifact_dir =
+            crate::db::project_app_data_dir_for_repo(tempdir.path()).join(ASYNC_JOB_ARTIFACT_DIR);
+        assert!(
+            artifact_path.starts_with(&expected_artifact_dir),
+            "async job artifact should live under project app-data: {}",
+            artifact.path
+        );
+        assert!(artifact_path.is_file());
         assert!(artifact.byte_count > 0);
         assert!(
             std::fs::read_to_string(&artifact.path)
@@ -6372,6 +6394,7 @@ mod tests {
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,
+                    auto_compact_enabled: true,
                     revision: 1,
                     applied_at: now_timestamp(),
                 },

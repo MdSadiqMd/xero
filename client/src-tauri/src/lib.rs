@@ -1,6 +1,8 @@
 pub mod auth;
 pub mod commands;
 pub mod db;
+pub mod developer_tool_harness_terminal;
+pub mod developer_tool_harness_tui;
 pub mod environment;
 pub mod global_db;
 pub mod mcp;
@@ -20,7 +22,7 @@ pub mod git {
     pub mod status;
 }
 
-pub fn configure_builder_with_state<R: tauri::Runtime>(
+pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
     builder: tauri::Builder<R>,
     desktop_state: state::DesktopState,
 ) -> tauri::Builder<R> {
@@ -29,11 +31,10 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .manage(commands::BrowserState::default())
         .manage(commands::DictationState::default())
         .manage(commands::EmulatorState::default())
+        .manage(commands::AdrenalineModeState::default())
+        .manage(commands::ClosedLidModeState::default())
+        .manage(commands::remote_bridge::RemoteBridgeRuntimeState::default())
         .manage(commands::project_assets::ProjectAssetState::default())
-        .register_asynchronous_uri_scheme_protocol(
-            commands::emulator::URI_SCHEME,
-            commands::emulator::handle_uri_scheme,
-        )
         .register_asynchronous_uri_scheme_protocol(
             commands::project_assets::URI_SCHEME,
             commands::project_assets::handle,
@@ -99,6 +100,24 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
                 });
             }
 
+            {
+                let app_handle = app.handle().clone();
+                if let Err(error) =
+                    commands::adrenaline_mode::apply_persisted_settings_on_startup(&app_handle)
+                {
+                    eprintln!("[power] Adrenaline Mode startup skipped: {error}");
+                }
+            }
+
+            {
+                let app_handle = app.handle().clone();
+                if let Err(error) =
+                    commands::remote_bridge::start_remote_bridge_if_registered(&app_handle)
+                {
+                    eprintln!("[remote-bridge] startup skipped: {error}");
+                }
+            }
+
             // One-shot backfill: rows written before pricing was wired in (or
             // after a pricing-table update) need their cost recomputed. We
             // walk the registry and price every zero-cost row that has tokens.
@@ -135,6 +154,36 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
                                     project_db_path.display()
                                 );
                             }
+
+                            match db::project_store::maintain_code_rollback_storage(
+                                root,
+                                &record.project_id,
+                            ) {
+                                Ok(report) => {
+                                    for diagnostic in report
+                                        .diagnostics
+                                        .iter()
+                                        .chain(report.prune.diagnostics.iter())
+                                    {
+                                        eprintln!(
+                                            "[storage] code rollback diagnostic for {}: {} - {}",
+                                            record.root_path, diagnostic.code, diagnostic.message
+                                        );
+                                    }
+                                    if report.prune.pruned_blob_count > 0 {
+                                        eprintln!(
+                                            "[storage] pruned {} unreferenced code rollback blob(s) for {}",
+                                            report.prune.pruned_blob_count, record.root_path
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "[storage] code rollback maintenance skipped for {}: {error}",
+                                        record.root_path
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -161,27 +210,103 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 use tauri::Manager;
+                commands::adrenaline_mode::shutdown_on_close(window.app_handle());
                 commands::dictation::shutdown_on_close(window.app_handle());
                 commands::emulator::shutdown::shutdown_on_close(window.app_handle());
+                commands::remote_bridge::shutdown_on_close(window.app_handle());
             }
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(updater_plugin())
         .invoke_handler(tauri::generate_handler![
             commands::import_repository::import_repository,
             commands::create_repository::create_repository,
             commands::platform::desktop_platform,
+            commands::local_environment::get_launch_mode,
+            commands::local_environment::get_local_environment_config,
+            commands::local_environment::save_local_environment_config,
+            commands::local_environment::regenerate_secret_key_base,
+            commands::dock_icon::set_theme_dock_icon,
+            commands::developer_tool_harness::developer_tool_catalog,
+            commands::developer_tool_harness::developer_tool_dry_run,
+            commands::developer_tool_harness::developer_tool_harness_project,
+            commands::developer_tool_harness::developer_tool_model_run,
+            commands::developer_tool_harness::developer_tool_sequence_delete,
+            commands::developer_tool_harness::developer_tool_sequence_list,
+            commands::developer_tool_harness::developer_tool_sequence_upsert,
+            commands::developer_tool_harness::developer_tool_synthetic_run,
             commands::development_storage::developer_storage_overview,
             commands::development_storage::developer_storage_read_table,
             commands::list_projects::list_projects,
             commands::remove_project::remove_project,
+            commands::wipe_data::wipe_project_data,
+            commands::wipe_data::wipe_all_xero_data,
+            commands::get_project_load_bundle::get_project_load_bundle,
+            commands::project_state::create_project_state_backup,
+            commands::project_state::list_project_state_backups,
+            commands::project_state::restore_project_state_backup,
+            commands::project_state::repair_project_state,
+            commands::project_state::read_app_ui_state,
+            commands::project_state::read_project_ui_state,
+            commands::project_state::write_app_ui_state,
+            commands::project_state::write_project_ui_state,
+            commands::remote_bridge::bridge_status,
+            commands::remote_bridge::bridge_sign_in,
+            commands::remote_bridge::bridge_poll_github_login,
+            commands::remote_bridge::bridge_sign_out,
+            commands::remote_bridge::bridge_revoke_device,
+            commands::remote_bridge::bridge_publish_theme,
+            commands::project_records::list_project_context_records,
+            commands::project_records::delete_project_context_record,
+            commands::project_records::supersede_project_context_record,
             commands::agent_definition::list_agent_definitions,
             commands::agent_definition::archive_agent_definition,
             commands::agent_definition::get_agent_definition_version,
+            commands::agent_definition::get_agent_definition_version_diff,
+            commands::agent_definition::preview_agent_definition,
+            commands::agent_definition::save_agent_definition,
+            commands::agent_definition::update_agent_definition,
+            commands::agent_default_models::set_agent_default_model,
+            commands::agent_extensions::validate_agent_tool_extension_manifest,
+            commands::workflow_agents::list_workflow_agents,
+            commands::workflow_agents::get_workflow_agent_detail,
+            commands::workflow_agents::get_workflow_agent_graph_projection,
+            commands::workflow_agents::get_agent_authoring_catalog,
+            commands::workflow_agents::search_agent_authoring_skills,
+            commands::workflow_agents::resolve_agent_authoring_skill,
+            commands::workflow_agents::get_agent_tool_pack_catalog,
+            commands::workflows::validate_workflow_definition,
+            commands::workflows::create_workflow_definition,
+            commands::workflows::update_workflow_definition,
+            commands::workflows::list_workflow_definitions,
+            commands::workflows::get_workflow_definition,
+            commands::workflows::start_workflow_run,
+            commands::workflows::get_workflow_run,
+            commands::workflows::explain_workflow_run_blocker,
+            commands::workflows::export_workflow_run_bundle,
+            commands::workflows::resume_workflow_next_incomplete_phase,
+            commands::workflows::list_workflow_runs,
+            commands::workflows::cancel_workflow_run,
+            commands::workflows::retry_workflow_node_run,
+            commands::workflows::skip_workflow_branch,
+            commands::workflows::resume_workflow_checkpoint,
+            commands::workflows::read_workflow_delivery_state,
+            commands::workflows::write_workflow_delivery_state,
+            commands::workflows::export_workflow_delivery_state,
+            commands::workflows::wipe_workflow_delivery_state,
+            commands::agent_reports::get_agent_run_start_explanation,
+            commands::agent_reports::get_agent_knowledge_inspection,
+            commands::agent_reports::get_agent_handoff_context_summary,
+            commands::agent_reports::get_agent_support_diagnostics_bundle,
+            commands::agent_reports::get_capability_permission_explanation,
+            commands::agent_reports::get_agent_database_touchpoint_explanation,
             commands::agent_session::create_agent_session,
             commands::agent_session::list_agent_sessions,
             commands::agent_session::get_agent_session,
             commands::agent_session::update_agent_session,
+            commands::global_computer_use::ensure_global_computer_use_session,
             commands::agent_session_title::auto_name_agent_session,
             commands::agent_session::archive_agent_session,
             commands::agent_session::restore_agent_session,
@@ -203,24 +328,31 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::session_history::branch_agent_session,
             commands::session_history::rewind_agent_session,
             commands::session_history::list_session_memories,
+            commands::session_history::get_session_memory_review_queue,
             commands::session_history::extract_session_memory_candidates,
             commands::session_history::update_session_memory,
+            commands::session_history::correct_session_memory,
             commands::session_history::delete_session_memory,
             commands::get_project_snapshot::get_project_snapshot,
             commands::get_project_usage_summary::get_project_usage_summary,
             commands::get_repository_status::get_repository_status,
             commands::get_repository_diff::get_repository_diff,
+            commands::code_rollback::apply_selective_undo,
+            commands::code_rollback::apply_session_rollback,
             commands::git_operations::git_stage_paths,
             commands::git_operations::git_unstage_paths,
             commands::git_operations::git_discard_changes,
+            commands::git_operations::git_revert_patch,
             commands::git_operations::git_commit,
             commands::git_commit_message::git_generate_commit_message,
             commands::git_operations::git_fetch,
             commands::git_operations::git_pull,
             commands::git_operations::git_push,
+            commands::project_files::list_project_file_index,
             commands::project_files::list_project_files,
             commands::project_files::read_project_file,
             commands::project_files::write_project_file,
+            commands::project_files::stat_project_files,
             commands::project_assets::revoke_project_asset_tokens,
             commands::project_files::open_project_file_external,
             commands::project_files::create_project_entry,
@@ -229,6 +361,9 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::project_files::delete_project_entry,
             commands::search_project::search_project,
             commands::search_project::replace_in_project,
+            commands::editor_diagnostics::run_project_typecheck,
+            commands::editor_workflows::format_project_document,
+            commands::editor_workflows::run_project_lint,
             commands::workspace_index::workspace_index,
             commands::workspace_index::workspace_status,
             commands::workspace_index::workspace_query,
@@ -249,6 +384,12 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::skills::upsert_skill_local_root,
             commands::skills::remove_skill_local_root,
             commands::skills::update_project_skill_source,
+            commands::project_runner::update_project_start_targets,
+            commands::project_runner::suggest_project_start_targets,
+            commands::project_runner::terminal_open,
+            commands::project_runner::terminal_write,
+            commands::project_runner::terminal_resize,
+            commands::project_runner::terminal_close,
             commands::skills::update_github_skill_source,
             commands::skills::upsert_plugin_root,
             commands::skills::remove_plugin_root,
@@ -265,7 +406,6 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::environment_user_tools::environment_verify_user_tool,
             commands::environment_user_tools::environment_save_user_tool,
             commands::environment_user_tools::environment_remove_user_tool,
-            commands::provider_diagnostics::check_provider_profile,
             commands::provider_credentials::list_provider_credentials,
             commands::provider_credentials::upsert_provider_credential,
             commands::provider_credentials::delete_provider_credential,
@@ -273,6 +413,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::submit_openai_callback::submit_openai_callback,
             commands::start_oauth_login::start_oauth_login,
             commands::complete_oauth_callback::complete_oauth_callback,
+            commands::xai_device_code_login::start_xai_device_code_login,
+            commands::xai_device_code_login::poll_xai_device_code_login,
             commands::logout_runtime_session::logout_runtime_session,
             commands::start_autonomous_run::start_autonomous_run,
             commands::stage_agent_attachment::stage_agent_attachment,
@@ -300,6 +442,12 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::dictation::speech_dictation_cancel,
             commands::soul_settings::soul_settings,
             commands::soul_settings::soul_update_settings,
+            commands::agent_tooling_settings::agent_tooling_settings,
+            commands::agent_tooling_settings::agent_tooling_update_settings,
+            commands::adrenaline_mode::adrenaline_mode_settings,
+            commands::adrenaline_mode::adrenaline_mode_update_settings,
+            commands::adrenaline_mode::closed_lid_mode_settings,
+            commands::adrenaline_mode::closed_lid_mode_update_settings,
             commands::browser::browser_show,
             commands::browser::browser_resize,
             commands::browser::browser_hide,
@@ -347,6 +495,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::emulator::emulator_input,
             commands::emulator::emulator_rotate,
             commands::emulator::emulator_subscribe_ready,
+            commands::emulator::emulator_frame,
             commands::emulator::emulator_screenshot,
             commands::emulator::emulator_ui_dump,
             commands::emulator::emulator_find,
@@ -427,6 +576,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::solana::solana_logs_subscribe,
             commands::solana::solana_logs_unsubscribe,
             commands::solana::solana_logs_recent,
+            commands::solana::solana_logs_view,
             commands::solana::solana_logs_active,
             commands::solana::solana_indexer_scaffold,
             commands::solana::solana_indexer_run,
@@ -449,13 +599,51 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         ])
 }
 
-pub fn configure_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+fn updater_plugin<R: tauri::Runtime + 'static>(
+) -> tauri::plugin::TauriPlugin<R, tauri_plugin_updater::Config> {
+    if std::any::TypeId::of::<R>() == std::any::TypeId::of::<tauri::test::MockRuntime>() {
+        return tauri::plugin::Builder::<R, tauri_plugin_updater::Config>::new("updater").build();
+    }
+
+    tauri_plugin_updater::Builder::new().build()
+}
+
+pub fn configure_builder<R: tauri::Runtime + 'static>(
+    builder: tauri::Builder<R>,
+) -> tauri::Builder<R> {
     configure_builder_with_state(builder, state::DesktopState::default())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     configure_builder(tauri::Builder::default())
-        .run(tauri::generate_context!())
-        .expect("error while running Xero desktop host");
+        .build(tauri::generate_context!())
+        .expect("error while building Xero desktop host")
+        .run(|app, event| {
+            if matches!(
+                &event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
+                commands::adrenaline_mode::shutdown_on_close(app);
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                if let tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } = event
+                {
+                    if !has_visible_windows {
+                        window_state::restore_main_window(app);
+                    }
+                }
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = app;
+                let _ = event;
+            }
+        });
 }

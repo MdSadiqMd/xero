@@ -3,15 +3,16 @@ import { Hero } from "@/components/landing/hero"
 import { Features } from "@/components/landing/features"
 import { FeatureGrid } from "@/components/landing/feature-grid"
 import { Models } from "@/components/landing/models"
-import { Integrations } from "@/components/landing/integrations"
-import { Workflow } from "@/components/landing/workflow"
+import { CloudApp } from "@/components/landing/cloud"
 import { Pricing } from "@/components/landing/pricing"
 import { CTA } from "@/components/landing/cta"
 import { SiteFooter } from "@/components/landing/site-footer"
+import { LandingStructuredData } from "@/components/landing/structured-data"
 
 export default function Page() {
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <LandingStructuredData />
       <SiteHeader />
       <main>
         <Hero />
@@ -22,8 +23,7 @@ export default function Page() {
         <Features />
         <FeatureGrid />
         <Models />
-        <Integrations />
-        <Workflow />
+        <CloudApp />
         <Pricing />
         <CTA />
       </main>

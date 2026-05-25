@@ -170,12 +170,13 @@ pub enum EnvironmentHealthStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvironmentSemanticIndexState {
     Ready,
     Indexing,
     Stale,
+    #[default]
     Empty,
     Failed,
     Unavailable,
@@ -207,12 +208,6 @@ impl EnvironmentSemanticIndexState {
 
     pub const fn is_ready(self) -> bool {
         matches!(self, Self::Ready)
-    }
-}
-
-impl Default for EnvironmentSemanticIndexState {
-    fn default() -> Self {
-        Self::Empty
     }
 }
 
@@ -1520,6 +1515,10 @@ mod tests {
     fn run_record(project_id: &str, run_id: &str) -> NewRunRecord {
         NewRunRecord {
             trace_id: None,
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: project_id.into(),
             agent_session_id: "session-1".into(),
             run_id: run_id.into(),
@@ -1747,6 +1746,9 @@ mod tests {
                 },
                 controls: Some(RunControls {
                     runtime_agent_id: "engineer".into(),
+                    agent_definition_id: Some("engineer".into()),
+                    agent_definition_version: Some(1),
+                    thinking_effort: None,
                     approval_mode: "yolo".into(),
                     plan_mode_required: false,
                 }),

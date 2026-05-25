@@ -71,6 +71,7 @@ function makeDiff(patch: string): RepositoryDiffResponseDto {
     repository,
     scope: 'unstaged',
     patch,
+    files: [],
     truncated: false,
     baseRevision: null,
   }
@@ -163,8 +164,8 @@ describe('VcsSidebar', () => {
 
     await waitFor(() => expect(screen.getByText('removed line')).toBeInTheDocument())
 
-    expect(screen.getByText('removed line').closest('div')).toHaveClass('bg-destructive/70')
-    expect(screen.getByText('added line').closest('div')).toHaveClass('bg-success/70')
+    expect(screen.getByText('removed line').closest('div')).toHaveClass('bg-destructive/15')
+    expect(screen.getByText('added line').closest('div')).toHaveClass('bg-success/15')
   })
 
   it('does not render the diff pane when there are no changes to display', () => {
@@ -187,16 +188,16 @@ describe('VcsSidebar', () => {
     expect(onLoadDiff).not.toHaveBeenCalled()
   })
 
-  it('opens the floating panel immediately without staging a slide animation', () => {
+  it('opens the floating panel with the shared right-sidebar animation frame', () => {
     const { props, rerender } = renderVcsSidebar('', { open: false })
     expect(screen.queryByLabelText('Source control panel')).not.toBeInTheDocument()
 
     rerender(<VcsSidebar {...props} open />)
 
     const panel = screen.getByLabelText('Source control panel')
-    expect(panel).not.toHaveClass('invisible')
-    expect(panel.style.transform).toBe('')
-    expect(panel.style.transition).toBe('')
+    expect(panel).toHaveAttribute('data-slot', 'floating-right-sidebar-panel')
+    expect(panel).toHaveClass('gpu-layer')
+    expect(document.querySelector('[data-slot="floating-right-sidebar-overlay"]')).toBeInTheDocument()
   })
 
   it('keeps the hidden panel unpainted when closed status changes add a diff pane', () => {
@@ -353,6 +354,49 @@ describe('VcsSidebar', () => {
     expect(onLoadDiff).toHaveBeenCalledTimes(1)
   })
 
+  it('renders selected file diffs from structured Rust rows without parsing the raw patch', async () => {
+    resetDiffPerformanceStatsForTests()
+    const onLoadDiff = vi.fn(async (): Promise<RepositoryDiffResponseDto> => ({
+      ...makeDiff('diff --git a/file.txt b/file.txt\n+fallback raw patch'),
+      files: [
+        {
+          oldPath: 'file.txt',
+          newPath: 'file.txt',
+          displayPath: 'file.txt',
+          status: 'modified',
+          cacheKey: 'modified:file.txt',
+          patch: '',
+          truncated: false,
+          hunks: [
+            {
+              header: '@@ -1 +1 @@',
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              truncated: false,
+              rows: [
+                {
+                  kind: 'add',
+                  prefix: '+',
+                  text: 'structured rust row',
+                  oldLineNumber: null,
+                  newLineNumber: 1,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }))
+
+    renderVcsSidebar('', { onLoadDiff })
+
+    await waitFor(() => expect(screen.getByText('structured rust row')).toBeInTheDocument())
+    expect(screen.queryByText('fallback raw patch')).not.toBeInTheDocument()
+    expect(getDiffParsingStats().parses).toBe(0)
+  })
+
   it('windows large source-control file groups', async () => {
     const entries = Array.from({ length: 1_000 }, (_, index) => ({
       path: `src/file-${String(index).padStart(4, '0')}.ts`,
@@ -371,6 +415,32 @@ describe('VcsSidebar', () => {
 
     await waitFor(() => expect(screen.getByText('file-0000.ts')).toBeInTheDocument())
     expect(screen.queryByText('file-0999.ts')).not.toBeInTheDocument()
+  })
+
+  it('keeps changed-file rows from shrinking when the list overflows', async () => {
+    const entries = Array.from({ length: 64 }, (_, index) => ({
+      path: `src/file-${String(index).padStart(4, '0')}.ts`,
+      staged: null,
+      unstaged: 'modified' as const,
+      untracked: false,
+    }))
+
+    renderVcsSidebar(makeSingleFilePatch('visible diff'), {
+      status: makeStatus({
+        unstagedCount: entries.length,
+        statusCount: entries.length,
+        entries,
+      }),
+    })
+
+    await waitFor(() => expect(screen.getByText('file-0000.ts')).toBeInTheDocument())
+
+    expect(screen.getByLabelText('Changed files')).toHaveClass('overflow-y-auto')
+    expect(screen.getByText('No staged changes').closest('[role="presentation"]')).toHaveClass(
+      'shrink-0',
+    )
+    expect(screen.getByText('Changes').closest('[role="presentation"]')).toHaveClass('shrink-0')
+    expect(screen.getByText('file-0000.ts').closest('[role="option"]')).toHaveClass('shrink-0')
   })
 
   it('windows large unified diffs', async () => {

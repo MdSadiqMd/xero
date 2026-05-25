@@ -95,6 +95,7 @@ impl EnvironmentLifecycleExecutor for DesktopEnvironmentLifecycleExecutor {
             description: "Run an approved trusted setup script before an owned-agent run.".into(),
             input_schema: json!({ "type": "object" }),
             capability_tags: vec!["setup".into(), "subprocess".into()],
+            application_metadata: Default::default(),
             effect_class: ToolEffectClass::CommandExecution,
             mutability: ToolMutability::Mutating,
             sandbox_requirement: ToolSandboxRequirement::FullLocal,
@@ -460,6 +461,7 @@ fn provider_config_has_credentials(config: &AgentProviderConfig) -> bool {
         AgentProviderConfig::OpenAiCodexResponses(config) => {
             !config.access_token.trim().is_empty() && !config.account_id.trim().is_empty()
         }
+        AgentProviderConfig::XaiResponses(config) => !config.bearer_token.trim().is_empty(),
         AgentProviderConfig::OpenAiCompatible(config) => {
             config
                 .api_key
@@ -468,6 +470,7 @@ fn provider_config_has_credentials(config: &AgentProviderConfig) -> bool {
                 .is_some_and(|key| !key.is_empty())
                 || config.provider_id == crate::runtime::OLLAMA_PROVIDER_ID
         }
+        AgentProviderConfig::DeepSeek(config) => !config.api_key.trim().is_empty(),
         AgentProviderConfig::Anthropic(config) => !config.api_key.trim().is_empty(),
         AgentProviderConfig::Bedrock(config) => {
             !config.region.trim().is_empty() && binary_available("aws")
@@ -607,6 +610,7 @@ fn binary_available(binary: &str) -> bool {
         description: "Probe a required environment binary through the sandbox runner.".into(),
         input_schema: json!({ "type": "object" }),
         capability_tags: vec!["environment".into(), "subprocess".into()],
+        application_metadata: Default::default(),
         effect_class: ToolEffectClass::CommandExecution,
         mutability: ToolMutability::ReadOnly,
         sandbox_requirement: ToolSandboxRequirement::ReadOnly,
@@ -995,6 +999,10 @@ fn core_snapshot_from_desktop(
 ) -> CoreRunSnapshot {
     CoreRunSnapshot {
         trace_id: snapshot.run.trace_id.clone(),
+        runtime_agent_id: snapshot.run.runtime_agent_id.as_str().to_string(),
+        agent_definition_id: snapshot.run.agent_definition_id.clone(),
+        agent_definition_version: i64::from(snapshot.run.agent_definition_version),
+        system_prompt: snapshot.run.system_prompt.clone(),
         project_id: snapshot.run.project_id.clone(),
         agent_session_id: snapshot.run.agent_session_id.clone(),
         run_id: snapshot.run.run_id.clone(),
@@ -1026,7 +1034,10 @@ fn core_message_from_desktop(message: AgentMessageRecord) -> CoreRuntimeMessage 
         run_id: message.run_id,
         role: core_message_role_from_desktop(&message.role),
         content: message.content,
-        provider_metadata: None,
+        provider_metadata: message
+            .provider_metadata_json
+            .as_deref()
+            .and_then(|metadata| serde_json::from_str(metadata).ok()),
         created_at: message.created_at,
     }
 }
@@ -1157,6 +1168,7 @@ fn core_event_kind_from_desktop(kind: &AgentRunEventKind) -> CoreRuntimeEventKin
         AgentRunEventKind::RunPaused => CoreRuntimeEventKind::RunPaused,
         AgentRunEventKind::RunCompleted => CoreRuntimeEventKind::RunCompleted,
         AgentRunEventKind::RunFailed => CoreRuntimeEventKind::RunFailed,
+        AgentRunEventKind::SubagentLifecycle => CoreRuntimeEventKind::SubagentLifecycle,
     }
 }
 
@@ -1192,6 +1204,7 @@ fn desktop_event_kind_from_core(kind: &CoreRuntimeEventKind) -> AgentRunEventKin
         CoreRuntimeEventKind::ToolPermissionGrant => AgentRunEventKind::ToolPermissionGrant,
         CoreRuntimeEventKind::ProviderModelChanged => AgentRunEventKind::ProviderModelChanged,
         CoreRuntimeEventKind::RuntimeSettingsChanged => AgentRunEventKind::RuntimeSettingsChanged,
+        CoreRuntimeEventKind::SubagentLifecycle => AgentRunEventKind::SubagentLifecycle,
     }
 }
 

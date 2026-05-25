@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { AgentsSection } from '@/components/xero/settings-dialog/agents-section'
 import type {
   AgentDefinitionSummaryDto,
+  AgentDefinitionVersionDiffDto,
   AgentDefinitionVersionSummaryDto,
 } from '@/src/lib/xero-model/agent-definition'
 
@@ -24,10 +25,10 @@ const builtin: AgentDefinitionSummaryDto = {
 const projectCustom: AgentDefinitionSummaryDto = {
   definitionId: 'project_research',
   currentVersion: 3,
-  displayName: 'Project Research',
+  displayName: 'User Research',
   shortLabel: 'Research',
-  description: 'Project-aware observe-only researcher.',
-  scope: 'project_custom',
+  description: 'User-created observe-only researcher.',
+  scope: 'global_custom',
   lifecycleState: 'active',
   baseCapabilityProfile: 'observe_only',
   createdAt: '2026-04-30T18:00:00Z',
@@ -75,7 +76,7 @@ describe('AgentsSection', () => {
     })
 
     expect(await screen.findByText('Ask')).toBeInTheDocument()
-    expect(await screen.findByText('Project Research')).toBeInTheDocument()
+    expect(await screen.findByText('User Research')).toBeInTheDocument()
     // built-ins do not get an Archive button
     const archiveButtons = screen.queryAllByRole('button', { name: /^Archive$/i })
     expect(archiveButtons).toHaveLength(1)
@@ -141,7 +142,7 @@ describe('AgentsSection', () => {
       />,
     )
 
-    await screen.findByText('Project Research')
+    await screen.findByText('User Research')
     expect(screen.queryByText('Archived Helper')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Include archived/i }))
@@ -176,7 +177,7 @@ describe('AgentsSection', () => {
       />,
     )
 
-    await screen.findByText('Project Research')
+    await screen.findByText('User Research')
     fireEvent.click(screen.getByRole('button', { name: /Version history/i }))
 
     await waitFor(() => {
@@ -188,5 +189,131 @@ describe('AgentsSection', () => {
     })
     const headings = await screen.findAllByText(/^Version \d/)
     expect(headings.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('loads a diff between the latest two versions when history opens', async () => {
+    const list = vi.fn(async () => ({ definitions: [projectCustom] }))
+    const getVersion = vi.fn(async (request: { version: number }) => ({
+      definitionId: projectCustom.definitionId,
+      version: request.version,
+      createdAt: `2026-05-0${request.version}T09:00:00Z`,
+      validationStatus: 'valid' as const,
+      validationDiagnosticCount: 0,
+      snapshot: {},
+      validationReport: { status: 'valid' as const, diagnostics: [] },
+    }))
+    const diff: AgentDefinitionVersionDiffDto = {
+      schema: 'xero.agent_definition_version_diff.v1',
+      definitionId: projectCustom.definitionId,
+      fromVersion: 2,
+      toVersion: 3,
+      fromCreatedAt: '2026-05-02T09:00:00Z',
+      toCreatedAt: '2026-05-03T09:00:00Z',
+      changed: true,
+      changedSections: ['toolPolicy'],
+      sections: [
+        {
+          section: 'toolPolicy',
+          changed: true,
+          fields: ['toolPolicy', 'tools'],
+          before: {
+            toolPolicy: { allowedTools: ['read'] },
+            tools: ['read'],
+          },
+          after: {
+            toolPolicy: { allowedTools: ['read', 'web_search'] },
+            tools: ['read', 'web_search'],
+          },
+        },
+      ],
+    }
+    const getDiff = vi.fn(async () => diff)
+
+    render(
+      <AgentsSection
+        projectId="project-1"
+        projectLabel="Xero"
+        onListAgentDefinitions={list}
+        onGetAgentDefinitionVersion={getVersion}
+        onGetAgentDefinitionVersionDiff={getDiff}
+      />,
+    )
+
+    await screen.findByText('User Research')
+    fireEvent.click(screen.getByRole('button', { name: /Version history/i }))
+
+    await waitFor(() => {
+      expect(getDiff).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        definitionId: projectCustom.definitionId,
+        fromVersion: 2,
+        toVersion: 3,
+      })
+    })
+
+    expect(await screen.findByText('Tool policy')).toBeInTheDocument()
+    expect(screen.getByText('1 section changed')).toBeInTheDocument()
+  })
+
+  it('reloads the diff when the user picks a different version pair', async () => {
+    const list = vi.fn(async () => ({ definitions: [projectCustom] }))
+    const getVersion = vi.fn(async (request: { version: number }) => ({
+      definitionId: projectCustom.definitionId,
+      version: request.version,
+      createdAt: `2026-05-0${request.version}T09:00:00Z`,
+      validationStatus: 'valid' as const,
+      validationDiagnosticCount: 0,
+      snapshot: {},
+      validationReport: { status: 'valid' as const, diagnostics: [] },
+    }))
+    const diff: AgentDefinitionVersionDiffDto = {
+      schema: 'xero.agent_definition_version_diff.v1',
+      definitionId: projectCustom.definitionId,
+      fromVersion: 1,
+      toVersion: 3,
+      fromCreatedAt: '2026-05-01T09:00:00Z',
+      toCreatedAt: '2026-05-03T09:00:00Z',
+      changed: false,
+      changedSections: [],
+      sections: [
+        {
+          section: 'identity',
+          changed: false,
+          fields: ['displayName'],
+          before: { displayName: 'Same' },
+          after: { displayName: 'Same' },
+        },
+      ],
+    }
+    const getDiff = vi.fn(async () => diff)
+
+    render(
+      <AgentsSection
+        projectId="project-1"
+        projectLabel="Xero"
+        onListAgentDefinitions={list}
+        onGetAgentDefinitionVersion={getVersion}
+        onGetAgentDefinitionVersionDiff={getDiff}
+      />,
+    )
+
+    await screen.findByText('User Research')
+    fireEvent.click(screen.getByRole('button', { name: /Version history/i }))
+
+    await waitFor(() => {
+      expect(getDiff).toHaveBeenCalledTimes(1)
+    })
+
+    const fromPicker = screen.getByLabelText('From version')
+    fireEvent.change(fromPicker, { target: { value: '1' } })
+
+    await waitFor(() => {
+      expect(getDiff).toHaveBeenLastCalledWith({
+        projectId: 'project-1',
+        definitionId: projectCustom.definitionId,
+        fromVersion: 1,
+        toVersion: 3,
+      })
+    })
   })
 })

@@ -1,4 +1,4 @@
-import type { RuntimeProviderIdDto } from './runtime'
+import type { RuntimeProviderIdDto } from '@xero/ui/model/runtime'
 
 export type ProviderBaseUrlMode = 'none' | 'optional' | 'required'
 export type ProviderApiVersionMode = 'none' | 'optional' | 'required'
@@ -14,12 +14,18 @@ export type ProviderRuntimeKind =
   | 'openrouter'
   | 'anthropic'
   | 'openai_compatible'
+  | 'deepseek'
+  | 'xai'
+  | 'cursor_sdk'
   | 'gemini'
 export type ProviderPresetId =
   | 'openrouter'
   | 'anthropic'
   | 'github_models'
   | 'openai_api'
+  | 'deepseek'
+  | 'xai'
+  | 'external_cursor_sdk'
   | 'ollama'
   | 'azure_openai'
   | 'gemini_ai_studio'
@@ -43,6 +49,8 @@ export interface CloudProviderPreset {
   manualModelAllowed: boolean
   supportsCatalogRefresh: boolean
   connectionHint: string
+  browserOAuthSupported?: boolean
+  deviceCodeSupported?: boolean
 }
 
 const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
@@ -99,6 +107,62 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
     connectionHint: 'Uses the built-in Anthropic endpoint preset.',
+  },
+  {
+    providerId: 'deepseek',
+    runtimeKind: 'deepseek',
+    label: 'DeepSeek',
+    description: 'Use DeepSeek-hosted V4 models with a saved app-local API key and live model discovery.',
+    defaultProfileId: 'deepseek-default',
+    defaultProfileLabel: 'DeepSeek',
+    defaultModelId: 'deepseek-v4-pro',
+    presetId: 'deepseek',
+    authMode: 'api_key',
+    baseUrlMode: 'none',
+    apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
+    manualModelAllowed: true,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Uses the built-in DeepSeek endpoint preset.',
+  },
+  {
+    providerId: 'xai',
+    runtimeKind: 'xai',
+    label: 'xAI / Grok',
+    description: "Use xAI-hosted Grok models through Xero's native Responses API adapter.",
+    defaultProfileId: 'xai-default',
+    defaultProfileLabel: 'xAI / Grok',
+    defaultModelId: 'grok-4.3',
+    presetId: 'xai',
+    authMode: 'api_key',
+    baseUrlMode: 'none',
+    apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
+    manualModelAllowed: true,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Use browser sign-in, device code, or an app-local xAI API key.',
+    browserOAuthSupported: true,
+    deviceCodeSupported: true,
+  },
+  {
+    providerId: 'external_cursor_sdk',
+    runtimeKind: 'cursor_sdk',
+    label: 'Cursor',
+    description: "Use Cursor's SDK-backed agent through Xero's local harness with a saved app-local API key.",
+    defaultProfileId: 'external_cursor_sdk-default',
+    defaultProfileLabel: 'Cursor',
+    defaultModelId: 'composer-latest',
+    presetId: 'external_cursor_sdk',
+    authMode: 'api_key',
+    baseUrlMode: 'none',
+    apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
+    manualModelAllowed: false,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Uses the local Cursor SDK bridge and Xero tool-registry MCP harness.',
   },
   {
     providerId: 'github_models',

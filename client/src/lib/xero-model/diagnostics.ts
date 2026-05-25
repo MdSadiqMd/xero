@@ -1,7 +1,5 @@
 import { z } from 'zod'
-import { isoTimestampSchema, nonEmptyOptionalTextSchema } from './shared'
-import { providerModelCatalogSchema, providerPreflightSnapshotSchema } from './provider-models'
-import { runtimeProviderIdSchema } from './runtime'
+import { isoTimestampSchema, nonEmptyOptionalTextSchema } from '@xero/ui/model/shared'
 
 export const XERO_DIAGNOSTIC_CONTRACT_VERSION = 1
 export const XERO_DOCTOR_REPORT_CONTRACT_VERSION = 1
@@ -185,66 +183,6 @@ export const runDoctorReportRequestSchema = z
   })
   .strict()
 
-export const checkProviderProfileRequestSchema = z
-  .object({
-    profileId: z.string().trim().min(1),
-    includeNetwork: z.boolean().default(false),
-    modelId: z.string().trim().min(1).nullable().optional(),
-  })
-  .strict()
-
-export const providerProfileDiagnosticsSchema = z
-  .object({
-    checkedAt: isoTimestampSchema,
-    profileId: z.string().trim().min(1),
-    providerId: runtimeProviderIdSchema,
-    validationChecks: z.array(xeroDiagnosticCheckSchema).default([]),
-    reachabilityChecks: z.array(xeroDiagnosticCheckSchema).default([]),
-    capabilityChecks: z.array(xeroDiagnosticCheckSchema).default([]),
-    modelCatalog: providerModelCatalogSchema.nullable().optional(),
-    preflight: providerPreflightSnapshotSchema.nullable().optional(),
-  })
-  .strict()
-  .superRefine((diagnostics, ctx) => {
-    for (const [index, check] of diagnostics.validationChecks.entries()) {
-      if (check.affectedProfileId && check.affectedProfileId !== diagnostics.profileId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['validationChecks', index, 'affectedProfileId'],
-          message: 'Provider diagnostics must not include validation checks for another provider connection.',
-        })
-      }
-    }
-
-    for (const [index, check] of diagnostics.reachabilityChecks.entries()) {
-      if (check.affectedProfileId && check.affectedProfileId !== diagnostics.profileId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['reachabilityChecks', index, 'affectedProfileId'],
-          message: 'Provider diagnostics must not include reachability checks for another provider connection.',
-        })
-      }
-    }
-
-    for (const [index, check] of diagnostics.capabilityChecks.entries()) {
-      if (check.affectedProfileId && check.affectedProfileId !== diagnostics.profileId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['capabilityChecks', index, 'affectedProfileId'],
-          message: 'Provider diagnostics must not include capability checks for another provider connection.',
-        })
-      }
-    }
-
-    if (diagnostics.modelCatalog && diagnostics.modelCatalog.profileId !== diagnostics.profileId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['modelCatalog', 'profileId'],
-        message: 'Provider diagnostics model catalog must belong to the checked provider connection.',
-      })
-    }
-  })
-
 export type XeroDiagnosticSubjectDto = z.infer<typeof xeroDiagnosticSubjectSchema>
 export type XeroDiagnosticStatusDto = z.infer<typeof xeroDiagnosticStatusSchema>
 export type XeroDiagnosticSeverityDto = z.infer<typeof xeroDiagnosticSeveritySchema>
@@ -257,8 +195,6 @@ export type XeroDoctorVersionInfoDto = z.infer<typeof xeroDoctorVersionInfoSchem
 export type XeroDoctorReportSummaryDto = z.infer<typeof xeroDoctorReportSummarySchema>
 export type XeroDoctorReportDto = z.infer<typeof xeroDoctorReportSchema>
 export type RunDoctorReportRequestDto = z.infer<typeof runDoctorReportRequestSchema>
-export type CheckProviderProfileRequestDto = z.infer<typeof checkProviderProfileRequestSchema>
-export type ProviderProfileDiagnosticsDto = z.infer<typeof providerProfileDiagnosticsSchema>
 
 export interface XeroDiagnosticCheckInput {
   subject: XeroDiagnosticSubjectDto

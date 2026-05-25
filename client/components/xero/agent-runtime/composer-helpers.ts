@@ -72,6 +72,11 @@ function formatComposerRevision(value: number | null | undefined): string {
   return Number.isFinite(value) && typeof value === 'number' && value > 0 ? `revision ${value}` : 'revision unavailable'
 }
 
+function getComposerModelDisplayLabel(model: AgentPaneView['providerModelCatalog']['models'][number]): string {
+  const displayName = model.displayName.trim()
+  return displayName.length > 0 ? displayName : model.label
+}
+
 export function getComposerModelGroups(
   models: AgentPaneView['providerModelCatalog']['models'],
   currentSelectionKey: string | null | undefined = null,
@@ -85,9 +90,10 @@ export function getComposerModelGroups(
 
   for (const model of visibleModels) {
     const existingGroup = groups.get(model.groupId)
+    const modelLabel = getComposerModelDisplayLabel(model)
     const nextItem: ComposerModelOption = {
       value: model.selectionKey,
-      label: model.availability === 'orphaned' ? `${model.label} · unavailable` : model.label,
+      label: model.availability === 'orphaned' ? `${modelLabel} · unavailable` : modelLabel,
     }
 
     if (existingGroup) {
@@ -160,6 +166,8 @@ export function runtimeAgentIdForCustomBaseCapability(
   profile: AgentDefinitionBaseCapabilityProfileDto,
 ): RuntimeAgentIdDto {
   switch (profile) {
+    case 'planning':
+      return 'plan'
     case 'engineering':
       return 'engineer'
     case 'debugging':
@@ -168,8 +176,8 @@ export function runtimeAgentIdForCustomBaseCapability(
       return 'crawl'
     case 'agent_builder':
       return 'agent_create'
-    case 'harness_test':
-      return 'test'
+    case 'computer_use':
+      return 'computer_use'
     case 'observe_only':
       return 'ask'
   }
@@ -266,6 +274,7 @@ export function getComposerControlInput(options: {
   selectionKey: string | null | undefined
   thinkingEffort: ProviderModelThinkingEffortDto | null | undefined
   approvalMode: RuntimeRunApprovalModeDto
+  autoCompactEnabled: boolean
 }): RuntimeRunControlInputDto | null {
   const model = getComposerModelOption(options.models, options.selectionKey)
   if (!model) {
@@ -281,6 +290,7 @@ export function getComposerControlInput(options: {
     thinkingEffort: resolveComposerThinkingSelection(model, options.thinkingEffort),
     approvalMode: resolveRuntimeAgentApprovalMode(options.runtimeAgentId, options.approvalMode),
     planModeRequired: false,
+    autoCompactEnabled: options.autoCompactEnabled,
   }
 }
 
@@ -300,7 +310,7 @@ export function getComposerCatalogStatusCopy(
     return {
       catalogLabel: catalog.stateLabel,
       catalogDetail: catalog.detail,
-      thinkingDetail: `${selectedModel.label} is not present in the latest ${catalog.providerLabel} catalog, so thinking options stay unavailable until discovery confirms it.`,
+      thinkingDetail: `${getComposerModelDisplayLabel(selectedModel)} is not present in the latest ${catalog.providerLabel} catalog, so thinking options stay unavailable until discovery confirms it.`,
     }
   }
 
@@ -308,7 +318,7 @@ export function getComposerCatalogStatusCopy(
     return {
       catalogLabel: catalog.stateLabel,
       catalogDetail: catalog.detail,
-      thinkingDetail: `${selectedModel.label} does not expose configurable thinking for this provider catalog.`,
+      thinkingDetail: `${getComposerModelDisplayLabel(selectedModel)} does not expose configurable thinking for this provider catalog.`,
     }
   }
 
@@ -434,6 +444,7 @@ export function getComposerPlaceholder(
   options: {
     selectedProviderId: string
     agentRuntimeBlocked: boolean
+    selectedRuntimeAgentId?: RuntimeAgentIdDto | null
   },
 ): string {
   const providerLabel = getCloudProviderLabel(options.selectedProviderId)
@@ -443,6 +454,12 @@ export function getComposerPlaceholder(
   }
 
   if (!runtimeSession) {
+    if (options.selectedRuntimeAgentId === 'computer_use') {
+      return `Tell Xero what to do on this computer with ${providerLabel}.`
+    }
+    if (options.selectedRuntimeAgentId === 'plan') {
+      return `Describe what you want planned with ${providerLabel}.`
+    }
     return `Ask anything to get started with ${providerLabel}.`
   }
 
@@ -450,10 +467,22 @@ export function getComposerPlaceholder(
     if (runtimeSession.isLoginInProgress) {
       return `Finish signing in with ${providerLabel} to continue.`
     }
+    if (options.selectedRuntimeAgentId === 'computer_use') {
+      return `Tell Xero what to do on this computer with ${providerLabel}.`
+    }
+    if (options.selectedRuntimeAgentId === 'plan') {
+      return `Describe what you want planned with ${providerLabel}.`
+    }
     return `Ask anything to get started with ${providerLabel}.`
   }
 
   if (!hasUsableRuntimeRunId(runtimeRun)) {
+    if (options.selectedRuntimeAgentId === 'computer_use') {
+      return 'Tell Xero what to do on this computer.'
+    }
+    if (options.selectedRuntimeAgentId === 'plan') {
+      return 'Describe the goal, constraints, and what "done" should mean.'
+    }
     return 'Prompt the agent'
   }
 
@@ -475,6 +504,12 @@ export function getComposerPlaceholder(
     case 'complete':
     case 'idle':
     case 'live':
+      if (options.selectedRuntimeAgentId === 'computer_use') {
+        return 'Give the next computer instruction...'
+      }
+      if (options.selectedRuntimeAgentId === 'plan') {
+        return 'Answer the next planning question or revise the plan…'
+      }
       return 'Ask the agent anything…'
   }
 }

@@ -9,9 +9,9 @@ use xero_agent_core::{
     PermissionProfileSandbox, ProjectTrustState, SandboxApprovalSource, SandboxExecutionContext,
     SandboxPlatform, ToolBatchDispatchReport, ToolBudget, ToolCallInput, ToolDescriptorV2,
     ToolDispatchConfig, ToolDispatchFailure, ToolDispatchOutcome, ToolDispatchSuccess,
-    ToolErrorCategory, ToolExecutionContext, ToolExecutionError, ToolGroupExecutionMode,
-    ToolHandler, ToolHandlerOutput, ToolPolicy, ToolPolicyDecision, ToolRegistryResult,
-    ToolRegistryV2, ToolRollback, ToolSandbox, ToolSandboxResult,
+    ToolErrorCategory, ToolExecutionContext, ToolExecutionControl, ToolExecutionError,
+    ToolGroupExecutionMode, ToolHandler, ToolHandlerOutput, ToolPolicy, ToolPolicyDecision,
+    ToolRegistryResult, ToolRegistryV2, ToolRollback, ToolSandbox, ToolSandboxResult,
 };
 
 #[derive(Debug, Default)]
@@ -77,6 +77,119 @@ pub(crate) fn dispatch_tool_call_with_write_approval(
             "agent_tool_result_missing",
             "Xero dispatched a tool call but did not receive a tool result.",
         )
+    })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ToolDryRunReport {
+    pub(crate) tool_call_id: String,
+    pub(crate) tool_name: String,
+    pub(crate) decoded: bool,
+    pub(crate) policy_decision: AutonomousSafetyPolicyDecision,
+    pub(crate) sandbox_decision: serde_json::Value,
+    pub(crate) sandbox_denied: bool,
+}
+
+pub(crate) fn dry_run_tool_call(
+    tool_registry: &ToolRegistry,
+    tool_runtime: &AutonomousToolRuntime,
+    repo_root: &Path,
+    project_id: &str,
+    tool_call: AgentToolCall,
+    operator_approved: bool,
+) -> CommandResult<ToolDryRunReport> {
+    let _ = project_id;
+    let descriptor = tool_registry
+        .descriptor(&tool_call.tool_name)
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "agent_tool_call_unknown",
+                format!(
+                    "The owned-agent model requested unregistered tool `{}`.",
+                    tool_call.tool_name
+                ),
+            )
+        })?;
+    let descriptor_v2 = descriptor.to_core_descriptor_v2(true);
+    let request = match tool_registry.decode_call(&tool_call) {
+        Ok(request) => request,
+        Err(error) => {
+            // Synthesize a deny decision so callers can see the validation failure
+            // without needing a separate error path.
+            return Ok(ToolDryRunReport {
+                tool_call_id: tool_call.tool_call_id,
+                tool_name: tool_call.tool_name,
+                decoded: false,
+                policy_decision: AutonomousSafetyPolicyDecision {
+                    action: AutonomousSafetyPolicyAction::Deny,
+                    code: error.code,
+                    explanation: error.message,
+                    tool_name: descriptor_v2.name.clone(),
+                    risk_class: "invalid_tool_call".into(),
+                    approval_mode: None,
+                    project_trust: "imported_project".into(),
+                    network_intent: "unknown".into(),
+                    credential_sensitivity: "unknown".into(),
+                    os_target: None,
+                    prior_observation_required: false,
+                    approval_grant: None,
+                },
+                sandbox_decision: serde_json::json!({ "skipped": "policy_failed_to_decode" }),
+                sandbox_denied: false,
+            });
+        }
+    };
+    let input_sha256 = sha256_json(&tool_call.input)?;
+    let policy_decision = tool_runtime.evaluate_safety_policy(
+        &descriptor_v2.name,
+        &tool_call.input,
+        &request,
+        operator_approved,
+        &input_sha256,
+    )?;
+
+    let sandbox = ProductionToolSandbox::new(repo_root, tool_runtime);
+    let context = ToolExecutionContext {
+        project_id: project_id.into(),
+        run_id: "developer-tool-harness-dry-run".into(),
+        turn_index: 0,
+        context_epoch: "developer-tool-harness".into(),
+        telemetry_attributes: BTreeMap::from([
+            ("xero.dispatch.path".into(), "developer_tool_dry_run".into()),
+            ("xero.dispatch.registry".into(), "tool_registry_v2".into()),
+        ]),
+    };
+    let call_input = ToolCallInput {
+        tool_call_id: tool_call.tool_call_id.clone(),
+        tool_name: tool_call.tool_name.clone(),
+        input: tool_call.input.clone(),
+    };
+    let sandbox_result = sandbox.evaluate(&descriptor_v2, &call_input, &context);
+    let (sandbox_decision, sandbox_denied) = match sandbox_result {
+        Ok(metadata) => (
+            serde_json::json!({
+                "outcome": "allow",
+                "metadata": metadata,
+            }),
+            false,
+        ),
+        Err(denied) => (
+            serde_json::json!({
+                "outcome": "deny",
+                "error": denied.error,
+                "metadata": denied.metadata,
+            }),
+            true,
+        ),
+    };
+
+    Ok(ToolDryRunReport {
+        tool_call_id: tool_call.tool_call_id,
+        tool_name: tool_call.tool_name,
+        decoded: true,
+        policy_decision,
+        sandbox_decision,
+        sandbox_denied,
     })
 }
 
@@ -178,13 +291,16 @@ fn dispatch_tool_batch_with_options(
         });
     }
 
+    let run_record = project_store::load_agent_run_record(repo_root, project_id, run_id)?;
     let shared = Arc::new(AutonomousToolHandlerShared {
         legacy_registry: tool_registry.clone(),
         tool_runtime: tool_runtime.clone(),
         repo_root: repo_root.to_path_buf(),
         project_id: project_id.to_owned(),
         run_id: run_id.to_owned(),
+        agent_session_id: run_record.agent_session_id,
         workspace_guard: Arc::new(Mutex::new(std::mem::take(workspace_guard))),
+        write_preflight: Arc::new(Mutex::new(BTreeMap::new())),
         approved_existing_write_call_ids: options.approved_existing_write_call_ids,
         operator_approved_call_ids: options.operator_approved_call_ids,
     });
@@ -305,13 +421,63 @@ struct AutonomousToolHandlerShared {
     repo_root: PathBuf,
     project_id: String,
     run_id: String,
+    agent_session_id: String,
     workspace_guard: Arc<Mutex<AgentWorkspaceGuard>>,
+    write_preflight: Arc<Mutex<BTreeMap<String, AgentToolWritePreflight>>>,
     approved_existing_write_call_ids: BTreeSet<String>,
     operator_approved_call_ids: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct AgentToolWritePreflight {
+    request: AutonomousToolRequest,
+    write_observations: Vec<AgentWorkspaceWriteObservation>,
+    rollback_checkpoints: Vec<AgentRollbackCheckpoint>,
+    code_capture: Option<AgentCodeCapturePreflight>,
+    auto_file_reservations: Vec<project_store::AgentFileReservationRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentCodeCapturePreflight {
+    mode: AgentCodeCaptureMode,
+    handle: project_store::CodeRollbackCaptureHandle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentCodeCaptureMode {
+    ExactPath,
+    BroadAction,
+    RecoveredMutation,
+}
+
+impl AgentCodeCaptureMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExactPath => "exact_path",
+            Self::BroadAction => "broad_action",
+            Self::RecoveredMutation => "recovered_mutation",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum AgentCodeCapturePlan {
+    ExactPath {
+        targets: Vec<project_store::CodeRollbackCaptureTarget>,
+    },
+    BroadAction {
+        mode: AgentCodeCaptureMode,
+        change_kind: project_store::CodeChangeKind,
+        restore_state: project_store::CodeChangeRestoreState,
+    },
+}
+
 impl AutonomousToolHandlerShared {
-    fn execute_tool_call(&self, call: &ToolCallInput) -> ToolRegistryResult<ToolHandlerOutput> {
+    fn execute_tool_call(
+        &self,
+        call: &ToolCallInput,
+        control: Option<&ToolExecutionControl>,
+    ) -> ToolRegistryResult<ToolHandlerOutput> {
         let tool_call = AgentToolCall {
             tool_call_id: call.tool_call_id.clone(),
             tool_name: call.tool_name.clone(),
@@ -330,34 +496,48 @@ impl AutonomousToolHandlerShared {
                 );
                 command_error_to_tool_execution_error(error)
             })?;
+        if let AutonomousToolRequest::HarnessRunner(request) = &request {
+            let (summary, output) = harness_runner_tool_output(&self.legacy_registry, request)
+                .map_err(command_error_to_tool_execution_error)?;
+            let mut handler_output = ToolHandlerOutput::new(summary, output);
+            handler_output
+                .telemetry_attributes
+                .insert("xero.tool.handler".into(), "harness_runner".into());
+            return Ok(handler_output);
+        }
         let operator_approved = self
             .operator_approved_call_ids
             .contains(&tool_call.tool_call_id);
-        let approved_existing_write = self
-            .approved_existing_write_call_ids
-            .contains(&tool_call.tool_call_id);
-
-        let write_observations = {
-            let guard = self.workspace_guard.lock().map_err(|_| {
-                ToolExecutionError::retryable(
-                    "agent_workspace_guard_lock_failed",
-                    "Xero could not lock owned-agent workspace observation state.",
-                )
-            })?;
-            guard
-                .validate_write_intent(&self.repo_root, &request, approved_existing_write)
-                .map_err(command_error_to_tool_execution_error)?
-        };
-        let rollback_checkpoints =
-            rollback_checkpoints_for_request(&self.repo_root, &request, &write_observations)
+        let mut write_preflight = self
+            .get_write_preflight(&tool_call.tool_call_id)
+            .map_err(command_error_to_tool_execution_error)?;
+        let mut fallback_preflight_created = false;
+        if write_preflight.is_none()
+            && code_capture_plan_for_request(&tool_call.tool_name, &request).is_some()
+        {
+            self.prepare_write_preflight(call, request.clone())
                 .map_err(command_error_to_tool_execution_error)?;
-        let auto_file_reservations = claim_file_reservations_for_request(
-            &self.repo_root,
-            &self.project_id,
-            &self.run_id,
-            &request,
-        )
-        .map_err(command_error_to_tool_execution_error)?;
+            write_preflight = self
+                .get_write_preflight(&tool_call.tool_call_id)
+                .map_err(command_error_to_tool_execution_error)?;
+            fallback_preflight_created = write_preflight.is_some();
+        }
+        if let Some(preflight) = write_preflight.as_ref() {
+            if std::mem::discriminant(&preflight.request) != std::mem::discriminant(&request) {
+                return Err(ToolExecutionError::retryable(
+                    "agent_tool_write_preflight_mismatch",
+                    "Xero prepared write preflight metadata for a different tool action.",
+                ));
+            }
+        }
+        let tool_runtime = control
+            .cloned()
+            .map(|control| {
+                self.tool_runtime
+                    .clone()
+                    .with_tool_execution_cancellation(Arc::new(move || control.is_cancelled()))
+            })
+            .unwrap_or_else(|| self.tool_runtime.clone());
 
         let tool_execution = match request {
             AutonomousToolRequest::Command(command_request) => {
@@ -372,43 +552,84 @@ impl AutonomousToolHandlerShared {
                     );
                 };
                 if operator_approved {
-                    self.tool_runtime
-                        .command_with_operator_approval_and_output_callback(
-                            command_request,
-                            &mut emit_chunk,
-                        )
+                    tool_runtime.command_with_approval_and_output_callback_for_tool(
+                        &tool_call.tool_name,
+                        command_request,
+                        true,
+                        &mut emit_chunk,
+                    )
                 } else {
-                    self.tool_runtime
-                        .command_with_output_callback(command_request, &mut emit_chunk)
+                    tool_runtime.command_with_approval_and_output_callback_for_tool(
+                        &tool_call.tool_name,
+                        command_request,
+                        false,
+                        &mut emit_chunk,
+                    )
                 }
             }
-            request if operator_approved => self.tool_runtime.execute_approved(request),
-            request => self.tool_runtime.execute(request),
+            request if operator_approved => tool_runtime.execute_approved(request),
+            request => tool_runtime.execute(request),
         };
 
         let tool_result = match tool_execution {
             Ok(tool_result) => tool_result,
             Err(error) => {
-                release_auto_file_reservations(
-                    &self.repo_root,
-                    &self.project_id,
-                    &self.run_id,
-                    &auto_file_reservations,
-                    "tool_failed",
-                )
-                .map_err(command_error_to_tool_execution_error)?;
-                return Err(command_error_to_tool_execution_error(error));
+                let tool_error = command_error_to_tool_execution_error(error);
+                if fallback_preflight_created {
+                    if let Some(preflight) = write_preflight.as_ref() {
+                        if let Some(code_capture) = preflight.code_capture.as_ref() {
+                            let command_error =
+                                tool_execution_error_ref_to_command_error(&tool_error);
+                            let _ = self.fail_code_capture(code_capture, &command_error);
+                        }
+                    }
+                    let _ = self.release_write_preflight(
+                        &tool_call.tool_call_id,
+                        "tool_failed_fallback_preflight",
+                    );
+                }
+                return Err(tool_error);
             }
         };
 
+        let completed_code_change = match write_preflight
+            .as_ref()
+            .and_then(|preflight| preflight.code_capture.as_ref())
+        {
+            Some(code_capture) => match self.complete_code_capture(code_capture) {
+                Ok(completed) => Some(completed),
+                Err(error) => return Err(command_error_to_tool_execution_error(error)),
+            },
+            None => None,
+        };
+        let write_observations = write_preflight
+            .as_ref()
+            .map(|preflight| preflight.write_observations.as_slice())
+            .unwrap_or(&[]);
         record_file_change_event(
             &self.repo_root,
             &self.project_id,
             &self.run_id,
-            &write_observations,
+            &tool_call.tool_call_id,
+            &tool_call.tool_name,
+            write_observations,
             &tool_result.output,
+            completed_code_change.as_ref(),
         )
         .map_err(command_error_to_tool_execution_error)?;
+        if let Some(completed) = completed_code_change.as_ref() {
+            if !output_records_own_file_change_event(&tool_result.output) {
+                record_code_change_group_file_change_events(
+                    &self.repo_root,
+                    &self.project_id,
+                    &self.run_id,
+                    &tool_call.tool_call_id,
+                    &tool_call.tool_name,
+                    completed,
+                )
+                .map_err(command_error_to_tool_execution_error)?;
+            }
+        }
         record_command_output_event(
             &self.repo_root,
             &self.project_id,
@@ -423,17 +644,14 @@ impl AutonomousToolHandlerShared {
             &self.project_id,
             &self.run_id,
             &tool_call.tool_call_id,
-            &rollback_checkpoints,
+            write_preflight
+                .as_ref()
+                .map(|preflight| preflight.rollback_checkpoints.as_slice())
+                .unwrap_or(&[]),
         )
         .map_err(command_error_to_tool_execution_error)?;
-        release_auto_file_reservations(
-            &self.repo_root,
-            &self.project_id,
-            &self.run_id,
-            &auto_file_reservations,
-            "tool_completed",
-        )
-        .map_err(command_error_to_tool_execution_error)?;
+        self.release_write_preflight(&tool_call.tool_call_id, "tool_completed")
+            .map_err(command_error_to_tool_execution_error)?;
         {
             let mut guard = self.workspace_guard.lock().map_err(|_| {
                 ToolExecutionError::retryable(
@@ -444,6 +662,13 @@ impl AutonomousToolHandlerShared {
             guard
                 .record_tool_output(&self.repo_root, &tool_result.output)
                 .map_err(command_error_to_tool_execution_error)?;
+            if let Some(workspace_epoch) = completed_code_change
+                .as_ref()
+                .and_then(|completed| completed.history_metadata.as_ref())
+                .and_then(|metadata| metadata.workspace_epoch)
+            {
+                guard.record_code_workspace_epoch(workspace_epoch);
+            }
         }
 
         let summary = tool_result.summary.clone();
@@ -457,7 +682,392 @@ impl AutonomousToolHandlerShared {
         handler_output
             .telemetry_attributes
             .insert("xero.tool.handler".into(), "autonomous_tool_runtime".into());
+        if let Some(completed) = completed_code_change {
+            handler_output.telemetry_attributes.insert(
+                "xero.code_change_group_id".into(),
+                completed.change_group_id.clone(),
+            );
+            handler_output.telemetry_attributes.insert(
+                "xero.code_change_file_version_count".into(),
+                completed.file_version_count.to_string(),
+            );
+            if let Some(metadata) = completed.history_metadata.as_ref() {
+                if let Some(commit_id) = metadata.commit_id.as_ref() {
+                    handler_output
+                        .telemetry_attributes
+                        .insert("xero.code_commit_id".into(), commit_id.clone());
+                }
+                if let Some(workspace_epoch) = metadata.workspace_epoch {
+                    handler_output.telemetry_attributes.insert(
+                        "xero.code_workspace_epoch".into(),
+                        workspace_epoch.to_string(),
+                    );
+                }
+                handler_output.telemetry_attributes.insert(
+                    "xero.code_patch_available".into(),
+                    metadata.patch_availability.available.to_string(),
+                );
+                handler_output.telemetry_attributes.insert(
+                    "xero.code_patch_affected_paths".into(),
+                    serde_json::to_string(&metadata.patch_availability.affected_paths)
+                        .unwrap_or_else(|_| "[]".into()),
+                );
+                handler_output.telemetry_attributes.insert(
+                    "xero.code_patch_file_change_count".into(),
+                    metadata.patch_availability.file_change_count.to_string(),
+                );
+                handler_output.telemetry_attributes.insert(
+                    "xero.code_patch_text_hunk_count".into(),
+                    metadata.patch_availability.text_hunk_count.to_string(),
+                );
+                if let Some(reason) = metadata.patch_availability.unavailable_reason.as_ref() {
+                    handler_output
+                        .telemetry_attributes
+                        .insert("xero.code_patch_unavailable_reason".into(), reason.clone());
+                }
+            }
+        }
         Ok(handler_output)
+    }
+
+    fn prepare_write_preflight(
+        &self,
+        call: &ToolCallInput,
+        request: AutonomousToolRequest,
+    ) -> CommandResult<Option<JsonValue>> {
+        let planned = planned_file_reservation_operations(&request)?;
+        let code_capture_plan = code_capture_plan_for_request(&call.tool_name, &request);
+        if planned.is_empty() && code_capture_plan.is_none() {
+            return Ok(None);
+        }
+        let approved_existing_write = self
+            .approved_existing_write_call_ids
+            .contains(&call.tool_call_id);
+        let write_observations = {
+            let guard = self.workspace_guard.lock().map_err(|_| {
+                CommandError::system_fault(
+                    "agent_workspace_guard_lock_failed",
+                    "Xero could not lock owned-agent workspace observation state.",
+                )
+            })?;
+            guard.validate_code_workspace_epoch_intent(
+                &self.repo_root,
+                &self.project_id,
+                &request,
+            )?;
+            if planned.is_empty() {
+                Vec::new()
+            } else {
+                guard.validate_write_intent(&self.repo_root, &request, approved_existing_write)?
+            }
+        };
+        let rollback_checkpoints =
+            rollback_checkpoints_for_request(&self.repo_root, &request, &write_observations)?;
+        let auto_file_reservations = claim_file_reservations_for_request(
+            &self.repo_root,
+            &self.project_id,
+            &self.run_id,
+            &request,
+        )?;
+        let code_capture = match code_capture_plan {
+            Some(plan) => match self.begin_code_capture(call, &request, plan) {
+                Ok(capture) => Some(capture),
+                Err(error) => {
+                    let _ = release_auto_file_reservations(
+                        &self.repo_root,
+                        &self.project_id,
+                        &self.run_id,
+                        &auto_file_reservations,
+                        "code_capture_preflight_failed",
+                    );
+                    return Err(error);
+                }
+            },
+            None => None,
+        };
+        let reservation_ids = auto_file_reservations
+            .iter()
+            .map(|reservation| reservation.reservation_id.clone())
+            .collect::<Vec<_>>();
+        let checkpoint_count = rollback_checkpoints.len();
+        let reservation_count = auto_file_reservations.len();
+        let code_capture_payload = code_capture.as_ref().map(|capture| {
+            json!({
+                "mode": capture.mode.as_str(),
+                "changeGroupId": capture.handle.change_group_id,
+                "beforeSnapshotId": capture.handle.before_snapshot_id,
+            })
+        });
+        self.write_preflight
+            .lock()
+            .map_err(|_| {
+                CommandError::system_fault(
+                    "agent_write_preflight_lock_failed",
+                    "Xero could not lock owned-agent write preflight state.",
+                )
+            })?
+            .insert(
+                call.tool_call_id.clone(),
+                AgentToolWritePreflight {
+                    request,
+                    write_observations,
+                    rollback_checkpoints,
+                    code_capture,
+                    auto_file_reservations,
+                },
+            );
+        Ok(Some(json!({
+            "kind": "agent_tool_write_preflight",
+            "toolCallId": call.tool_call_id,
+            "toolName": call.tool_name,
+            "projectId": self.project_id,
+            "runId": self.run_id,
+            "checkpointCount": checkpoint_count,
+            "codeCapture": code_capture_payload,
+            "reservationCount": reservation_count,
+            "reservationIds": reservation_ids,
+            "checkpointedAt": now_timestamp(),
+        })))
+    }
+
+    fn begin_code_capture(
+        &self,
+        call: &ToolCallInput,
+        request: &AutonomousToolRequest,
+        plan: AgentCodeCapturePlan,
+    ) -> CommandResult<AgentCodeCapturePreflight> {
+        let summary_label = code_capture_summary_label(&call.tool_name, request);
+        match plan {
+            AgentCodeCapturePlan::ExactPath { targets } => {
+                let input = self.code_change_group_input(
+                    call,
+                    project_store::CodeChangeKind::FileTool,
+                    project_store::CodeChangeRestoreState::SnapshotAvailable,
+                    summary_label,
+                );
+                let handle =
+                    project_store::begin_exact_path_capture(&self.repo_root, input, targets)?;
+                Ok(AgentCodeCapturePreflight {
+                    mode: AgentCodeCaptureMode::ExactPath,
+                    handle,
+                })
+            }
+            AgentCodeCapturePlan::BroadAction {
+                mode,
+                change_kind,
+                restore_state,
+            } => {
+                let input =
+                    self.code_change_group_input(call, change_kind, restore_state, summary_label);
+                let handle = project_store::begin_broad_capture(&self.repo_root, input)?;
+                Ok(AgentCodeCapturePreflight { mode, handle })
+            }
+        }
+    }
+
+    fn complete_code_capture(
+        &self,
+        preflight: &AgentCodeCapturePreflight,
+    ) -> CommandResult<project_store::CompletedCodeChangeGroup> {
+        match preflight.mode {
+            AgentCodeCaptureMode::ExactPath => project_store::complete_exact_path_capture(
+                &self.repo_root,
+                preflight.handle.clone(),
+            ),
+            AgentCodeCaptureMode::BroadAction | AgentCodeCaptureMode::RecoveredMutation => {
+                project_store::complete_broad_capture(&self.repo_root, preflight.handle.clone())
+            }
+        }
+    }
+
+    fn fail_code_capture(
+        &self,
+        preflight: &AgentCodeCapturePreflight,
+        error: &CommandError,
+    ) -> CommandResult<()> {
+        project_store::fail_code_change_capture(&self.repo_root, &preflight.handle, error)
+    }
+
+    fn code_change_group_input(
+        &self,
+        call: &ToolCallInput,
+        change_kind: project_store::CodeChangeKind,
+        restore_state: project_store::CodeChangeRestoreState,
+        summary_label: String,
+    ) -> project_store::CodeChangeGroupInput {
+        project_store::CodeChangeGroupInput {
+            project_id: self.project_id.clone(),
+            agent_session_id: self.agent_session_id.clone(),
+            run_id: self.run_id.clone(),
+            change_group_id: None,
+            parent_change_group_id: None,
+            tool_call_id: Some(call.tool_call_id.clone()),
+            runtime_event_id: None,
+            conversation_sequence: None,
+            change_kind,
+            summary_label,
+            restore_state,
+        }
+    }
+
+    fn get_write_preflight(
+        &self,
+        tool_call_id: &str,
+    ) -> CommandResult<Option<AgentToolWritePreflight>> {
+        self.write_preflight
+            .lock()
+            .map_err(|_| {
+                CommandError::system_fault(
+                    "agent_write_preflight_lock_failed",
+                    "Xero could not lock owned-agent write preflight state.",
+                )
+            })
+            .map(|preflight| preflight.get(tool_call_id).cloned())
+    }
+
+    fn take_write_preflight(
+        &self,
+        tool_call_id: &str,
+    ) -> CommandResult<Option<AgentToolWritePreflight>> {
+        self.write_preflight
+            .lock()
+            .map_err(|_| {
+                CommandError::system_fault(
+                    "agent_write_preflight_lock_failed",
+                    "Xero could not lock owned-agent write preflight state.",
+                )
+            })
+            .map(|mut preflight| preflight.remove(tool_call_id))
+    }
+
+    fn release_write_preflight(&self, tool_call_id: &str, reason: &str) -> CommandResult<()> {
+        let preflight = self.get_write_preflight(tool_call_id)?;
+        if let Some(preflight) = preflight {
+            release_auto_file_reservations(
+                &self.repo_root,
+                &self.project_id,
+                &self.run_id,
+                &preflight.auto_file_reservations,
+                reason,
+            )?;
+            let _ = self.take_write_preflight(tool_call_id)?;
+        }
+        Ok(())
+    }
+}
+
+fn code_capture_plan_for_request(
+    tool_name: &str,
+    request: &AutonomousToolRequest,
+) -> Option<AgentCodeCapturePlan> {
+    match request {
+        AutonomousToolRequest::Edit(request) => Some(exact_code_capture(vec![same_path_target(
+            request.path.as_str(),
+        )])),
+        AutonomousToolRequest::Write(request) => Some(exact_code_capture(vec![same_path_target(
+            request.path.as_str(),
+        )])),
+        AutonomousToolRequest::Patch(request) => {
+            let mut targets = request
+                .operations
+                .iter()
+                .map(|operation| same_path_target(operation.path.as_str()))
+                .collect::<Vec<_>>();
+            if let Some(path) = request.path.as_deref() {
+                targets.push(same_path_target(path));
+            }
+            (!targets.is_empty()).then(|| exact_code_capture(targets))
+        }
+        AutonomousToolRequest::Delete(request) => Some(exact_code_capture(vec![
+            project_store::CodeRollbackCaptureTarget::delete(request.path.as_str()),
+        ])),
+        AutonomousToolRequest::Rename(request) => Some(exact_code_capture(vec![
+            project_store::CodeRollbackCaptureTarget::rename(
+                request.from_path.as_str(),
+                request.to_path.as_str(),
+            ),
+        ])),
+        AutonomousToolRequest::Mkdir(request) => Some(exact_code_capture(vec![
+            project_store::CodeRollbackCaptureTarget::create(request.path.as_str()),
+        ])),
+        AutonomousToolRequest::NotebookEdit(request) => {
+            Some(exact_code_capture(vec![same_path_target(
+                request.path.as_str(),
+            )]))
+        }
+        AutonomousToolRequest::Command(_)
+        | AutonomousToolRequest::CommandSessionStart(_)
+        | AutonomousToolRequest::PowerShell(_) => {
+            let mode = if matches!(
+                tool_name,
+                AUTONOMOUS_TOOL_COMMAND_PROBE | AUTONOMOUS_TOOL_COMMAND_VERIFY
+            ) {
+                AgentCodeCaptureMode::RecoveredMutation
+            } else {
+                AgentCodeCaptureMode::BroadAction
+            };
+            let change_kind = if mode == AgentCodeCaptureMode::RecoveredMutation {
+                project_store::CodeChangeKind::RecoveredMutation
+            } else {
+                project_store::CodeChangeKind::Command
+            };
+            Some(AgentCodeCapturePlan::BroadAction {
+                mode,
+                change_kind,
+                restore_state: project_store::CodeChangeRestoreState::SnapshotAvailable,
+            })
+        }
+        AutonomousToolRequest::Mcp(request)
+            if !matches!(
+                request.action,
+                AutonomousMcpAction::ListServers
+                    | AutonomousMcpAction::ListTools
+                    | AutonomousMcpAction::ListResources
+                    | AutonomousMcpAction::ListPrompts
+                    | AutonomousMcpAction::ReadResource
+                    | AutonomousMcpAction::GetPrompt
+            ) =>
+        {
+            Some(AgentCodeCapturePlan::BroadAction {
+                mode: AgentCodeCaptureMode::BroadAction,
+                change_kind: project_store::CodeChangeKind::Mcp,
+                restore_state: project_store::CodeChangeRestoreState::ExternalEffectsUntracked,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn exact_code_capture(
+    targets: Vec<project_store::CodeRollbackCaptureTarget>,
+) -> AgentCodeCapturePlan {
+    AgentCodeCapturePlan::ExactPath { targets }
+}
+
+fn same_path_target(path: &str) -> project_store::CodeRollbackCaptureTarget {
+    project_store::CodeRollbackCaptureTarget {
+        path_before: Some(path.to_owned()),
+        path_after: Some(path.to_owned()),
+        operation: None,
+        explicitly_edited: true,
+    }
+}
+
+fn code_capture_summary_label(tool_name: &str, request: &AutonomousToolRequest) -> String {
+    match request {
+        AutonomousToolRequest::Command(request) => {
+            format!("Command: {}", request.argv.join(" "))
+        }
+        AutonomousToolRequest::CommandSessionStart(request) => {
+            format!("Command session: {}", request.argv.join(" "))
+        }
+        AutonomousToolRequest::PowerShell(_) => "PowerShell command".into(),
+        AutonomousToolRequest::Mcp(request) => request
+            .name
+            .as_deref()
+            .map(|name| format!("MCP tool: {name}"))
+            .unwrap_or_else(|| "MCP mutation".into()),
+        _ => format!("Tool `{tool_name}`"),
     }
 }
 
@@ -476,19 +1086,27 @@ impl ToolHandler for AutonomousToolHandler {
         _context: &ToolExecutionContext,
         call: &ToolCallInput,
     ) -> ToolRegistryResult<ToolHandlerOutput> {
-        self.shared.execute_tool_call(call)
+        self.shared.execute_tool_call(call, None)
     }
 
     fn execute_with_control(
         &self,
         _context: &ToolExecutionContext,
         call: &ToolCallInput,
-        control: &xero_agent_core::ToolExecutionControl,
+        control: &ToolExecutionControl,
     ) -> ToolRegistryResult<ToolHandlerOutput> {
         control.ensure_not_cancelled(&call.tool_name)?;
-        let output = self.shared.execute_tool_call(call)?;
-        control.ensure_not_cancelled(&call.tool_name)?;
-        Ok(output)
+        match self.shared.execute_tool_call(call, Some(control)) {
+            Ok(output) => {
+                control.ensure_not_cancelled(&call.tool_name)?;
+                Ok(output)
+            }
+            Err(error) if control.is_cancelled() => {
+                control.ensure_not_cancelled(&call.tool_name)?;
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -511,6 +1129,11 @@ impl AutonomousPolicyAdapter {
             tool_name: call.tool_name.clone(),
             input: call.input.clone(),
         };
+        ensure_tool_capabilities_not_revoked(
+            &self.shared.repo_root,
+            &self.shared.project_id,
+            &tool_call.tool_name,
+        )?;
         let request = self.shared.legacy_registry.decode_call(&tool_call)?;
         let input_sha256 = sha256_json(&tool_call.input)?;
         let operator_approved = self
@@ -578,6 +1201,59 @@ impl ToolPolicy for AutonomousPolicyAdapter {
     }
 }
 
+fn ensure_tool_capabilities_not_revoked(
+    repo_root: &Path,
+    project_id: &str,
+    tool_name: &str,
+) -> CommandResult<()> {
+    for (subject_kind, subject_id) in tool_revocation_subjects(tool_name) {
+        project_store::ensure_agent_capability_not_revoked(
+            repo_root,
+            project_id,
+            subject_kind,
+            &subject_id,
+        )?;
+    }
+    Ok(())
+}
+
+fn tool_revocation_subjects(tool_name: &str) -> Vec<(&'static str, String)> {
+    let mut subjects = Vec::new();
+    for pack_id in xero_agent_core::domain_tool_pack_ids_for_tool(tool_name) {
+        push_tool_revocation_subject(&mut subjects, "tool_pack", pack_id);
+    }
+    match tool_effect_class(tool_name) {
+        AutonomousToolEffectClass::BrowserControl => {
+            push_tool_revocation_subject(&mut subjects, "browser_control", "browser_control");
+            push_tool_revocation_subject(&mut subjects, "browser_control", tool_name);
+        }
+        AutonomousToolEffectClass::ExternalService => {
+            push_tool_revocation_subject(&mut subjects, "external_integration", "external_service");
+            push_tool_revocation_subject(&mut subjects, "external_integration", tool_name);
+        }
+        AutonomousToolEffectClass::DestructiveWrite => {
+            push_tool_revocation_subject(&mut subjects, "destructive_write", "destructive_write");
+            push_tool_revocation_subject(&mut subjects, "destructive_write", tool_name);
+        }
+        _ => {}
+    }
+    subjects
+}
+
+fn push_tool_revocation_subject(
+    subjects: &mut Vec<(&'static str, String)>,
+    subject_kind: &'static str,
+    subject_id: impl Into<String>,
+) {
+    let subject_id = subject_id.into();
+    if !subjects
+        .iter()
+        .any(|(kind, id)| *kind == subject_kind && id == &subject_id)
+    {
+        subjects.push((subject_kind, subject_id));
+    }
+}
+
 #[derive(Debug)]
 struct ProductionToolSandbox {
     inner: PermissionProfileSandbox,
@@ -642,14 +1318,19 @@ impl ToolRollback for AgentToolRollback {
         if descriptor.mutability.is_read_only() {
             return Ok(None);
         }
-        Ok(Some(json!({
-            "kind": "agent_tool_dispatch_checkpoint",
-            "toolCallId": call.tool_call_id,
-            "toolName": call.tool_name,
-            "projectId": self.shared.project_id,
-            "runId": self.shared.run_id,
-            "checkpointedAt": now_timestamp(),
-        })))
+        let tool_call = AgentToolCall {
+            tool_call_id: call.tool_call_id.clone(),
+            tool_name: call.tool_name.clone(),
+            input: call.input.clone(),
+        };
+        let request = self
+            .shared
+            .legacy_registry
+            .decode_call(&tool_call)
+            .map_err(command_error_to_tool_execution_error)?;
+        self.shared
+            .prepare_write_preflight(call, request)
+            .map_err(command_error_to_tool_execution_error)
     }
 
     fn rollback_after_failure(
@@ -659,13 +1340,75 @@ impl ToolRollback for AgentToolRollback {
         checkpoint: &JsonValue,
         error: &ToolExecutionError,
     ) -> ToolRegistryResult<JsonValue> {
+        let preflight = self
+            .shared
+            .take_write_preflight(&call.tool_call_id)
+            .map_err(command_error_to_tool_execution_error)?;
+        let Some(preflight) = preflight else {
+            return Ok(json!({
+                "kind": "agent_tool_dispatch_failure_checkpoint",
+                "toolCallId": call.tool_call_id,
+                "toolName": call.tool_name,
+                "checkpoint": checkpoint,
+                "failure": tool_execution_error_json(error),
+                "workspaceRollback": "not_applicable",
+            }));
+        };
+        let code_capture_record = if let Some(code_capture) = preflight.code_capture.as_ref() {
+            let command_error = tool_execution_error_ref_to_command_error(error);
+            self.shared
+                .fail_code_capture(code_capture, &command_error)
+                .map(|()| {
+                    json!({
+                        "recorded": true,
+                        "changeGroupId": code_capture.handle.change_group_id,
+                    })
+                })
+                .unwrap_or_else(|error| {
+                    json!({
+                        "recorded": false,
+                        "code": error.code,
+                        "message": error.message,
+                    })
+                })
+        } else {
+            json!({ "recorded": false, "reason": "not_applicable" })
+        };
+        let checkpoint_record = record_rollback_checkpoints(
+            &self.shared.repo_root,
+            &self.shared.project_id,
+            &self.shared.run_id,
+            &call.tool_call_id,
+            &preflight.rollback_checkpoints,
+        )
+        .map(|()| json!({ "recorded": true }))
+        .unwrap_or_else(|error| {
+            json!({
+                "recorded": false,
+                "code": error.code,
+                "message": error.message,
+            })
+        });
+        let rollback_outcome =
+            restore_rollback_checkpoints(&self.shared.repo_root, &preflight.rollback_checkpoints);
+        let release_outcome = release_auto_file_reservations(
+            &self.shared.repo_root,
+            &self.shared.project_id,
+            &self.shared.run_id,
+            &preflight.auto_file_reservations,
+            "tool_failed_rollback",
+        );
+        let rollback_outcome = rollback_outcome.map_err(command_error_to_tool_execution_error)?;
+        release_outcome.map_err(command_error_to_tool_execution_error)?;
         Ok(json!({
             "kind": "agent_tool_dispatch_failure_checkpoint",
             "toolCallId": call.tool_call_id,
             "toolName": call.tool_name,
             "checkpoint": checkpoint,
             "failure": tool_execution_error_json(error),
-            "workspaceRollback": "not_applied_before_handler_success",
+            "codeCapture": code_capture_record,
+            "checkpointRecord": checkpoint_record,
+            "workspaceRollback": rollback_outcome,
         }))
     }
 }
@@ -779,19 +1522,35 @@ fn persist_tool_dispatch_success(
         timeout_error,
         budget,
     );
+    let mut payload = json!({
+            "toolCallId": success.tool_call_id.clone(),
+            "toolName": success.tool_name.clone(),
+            "ok": true,
+            "summary": success.summary.clone(),
+            "output": success.output.clone(),
+            "dispatch": dispatch,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        insert_code_history_payload_from_telemetry(
+            object,
+            project_id,
+            &success.telemetry_attributes,
+        );
+    }
     append_event(
         repo_root,
         project_id,
         run_id,
         AgentRunEventKind::ToolCompleted,
-        json!({
-            "toolCallId": success.tool_call_id,
-            "toolName": success.tool_name,
-            "ok": true,
-            "summary": success.summary,
-            "output": success.output,
-            "dispatch": dispatch,
-        }),
+        payload,
+    )?;
+    record_command_output_event_from_dispatch_success(
+        repo_root,
+        project_id,
+        run_id,
+        &success.tool_call_id,
+        &success.tool_name,
+        &success.output,
     )?;
 
     Ok(AgentToolResult {
@@ -800,8 +1559,59 @@ fn persist_tool_dispatch_success(
         ok: true,
         summary: success.summary,
         output: success.output,
+        persistence: Some(AgentToolResultPersistenceMetadata {
+            persisted_full: !success.truncation.was_truncated,
+            persisted_artifact: None,
+            registry_truncated: success.truncation.was_truncated,
+            original_bytes: success.truncation.original_bytes,
+            persisted_bytes: success.truncation.returned_bytes,
+            omitted_bytes: success.truncation.omitted_bytes,
+        }),
         parent_assistant_message_id: None,
     })
+}
+
+fn record_command_output_event_from_dispatch_success(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    output: &JsonValue,
+) -> CommandResult<()> {
+    if command_output_final_event_exists(repo_root, project_id, run_id, tool_call_id)? {
+        return Ok(());
+    }
+    let Ok(tool_result) = serde_json::from_value::<AutonomousToolResult>(output.clone()) else {
+        return Ok(());
+    };
+    record_command_output_event(
+        repo_root,
+        project_id,
+        run_id,
+        tool_call_id,
+        tool_name,
+        &tool_result.output,
+    )
+}
+
+fn command_output_final_event_exists(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    tool_call_id: &str,
+) -> CommandResult<bool> {
+    let events = project_store::read_all_agent_events(repo_root, project_id, run_id)?;
+    Ok(events.iter().any(|event| {
+        if event.event_kind != AgentRunEventKind::CommandOutput {
+            return false;
+        }
+        let Ok(payload) = serde_json::from_str::<JsonValue>(&event.payload_json) else {
+            return false;
+        };
+        payload.get("toolCallId").and_then(JsonValue::as_str) == Some(tool_call_id)
+            && payload.get("partial").and_then(JsonValue::as_bool) != Some(true)
+    }))
 }
 
 #[expect(
@@ -861,6 +1671,83 @@ fn dispatch_success_metadata_json(
         "postHook": success.post_hook_payload,
         "timeout": timeout_error.map(tool_execution_error_json),
     })
+}
+
+fn insert_code_history_payload_from_telemetry(
+    payload: &mut JsonMap<String, JsonValue>,
+    project_id: &str,
+    telemetry: &BTreeMap<String, String>,
+) {
+    let Some(change_group_id) = telemetry_text(telemetry, "xero.code_change_group_id") else {
+        return;
+    };
+    payload.insert("codeChangeGroupId".into(), json!(change_group_id));
+    if let Some(commit_id) = telemetry_text(telemetry, "xero.code_commit_id") {
+        payload.insert("codeCommitId".into(), json!(commit_id));
+    }
+    if let Some(workspace_epoch) = telemetry_u64(telemetry, "xero.code_workspace_epoch") {
+        payload.insert("codeWorkspaceEpoch".into(), json!(workspace_epoch));
+    }
+    if let Some(availability) =
+        code_patch_availability_payload_from_telemetry(project_id, change_group_id, telemetry)
+    {
+        payload.insert("codePatchAvailability".into(), availability);
+    }
+}
+
+fn code_patch_availability_payload_from_telemetry(
+    project_id: &str,
+    change_group_id: &str,
+    telemetry: &BTreeMap<String, String>,
+) -> Option<JsonValue> {
+    let available = telemetry_bool(telemetry, "xero.code_patch_available")?;
+    let affected_paths = telemetry_text(telemetry, "xero.code_patch_affected_paths")
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    let file_change_count = telemetry_u32(telemetry, "xero.code_patch_file_change_count")
+        .unwrap_or_else(|| affected_paths.len().try_into().unwrap_or(u32::MAX));
+    let text_hunk_count = telemetry_u32(telemetry, "xero.code_patch_text_hunk_count").unwrap_or(0);
+    let unavailable_reason =
+        telemetry_text(telemetry, "xero.code_patch_unavailable_reason").map(ToOwned::to_owned);
+
+    Some(json!({
+        "projectId": project_id,
+        "targetChangeGroupId": change_group_id,
+        "available": available,
+        "affectedPaths": affected_paths,
+        "fileChangeCount": file_change_count,
+        "textHunkCount": text_hunk_count,
+        "textHunks": [],
+        "unavailableReason": unavailable_reason,
+    }))
+}
+
+fn telemetry_text<'a>(telemetry: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    telemetry
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn telemetry_bool(telemetry: &BTreeMap<String, String>, key: &str) -> Option<bool> {
+    match telemetry_text(telemetry, key)? {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn telemetry_u64(telemetry: &BTreeMap<String, String>, key: &str) -> Option<u64> {
+    telemetry_text(telemetry, key).and_then(|value| value.parse::<u64>().ok())
+}
+
+fn telemetry_u32(telemetry: &BTreeMap<String, String>, key: &str) -> Option<u32> {
+    telemetry_text(telemetry, key).and_then(|value| value.parse::<u32>().ok())
 }
 
 fn dispatch_failure_metadata_json(
@@ -1203,4 +2090,184 @@ fn finish_failed_tool_call_with_dispatch(
         payload,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::{fs, path::Path};
+
+    use rusqlite::{params, Connection};
+
+    use crate::db::{
+        configure_connection, migrations::migrations, register_project_database_path_for_tests,
+    };
+
+    #[test]
+    fn tool_completed_payload_uses_canonical_code_history_fields() {
+        let mut payload = JsonMap::new();
+        let telemetry = BTreeMap::from([
+            ("xero.code_change_group_id".into(), "code-change-1".into()),
+            ("xero.code_commit_id".into(), "code-commit-1".into()),
+            ("xero.code_workspace_epoch".into(), "7".into()),
+            ("xero.code_patch_available".into(), "true".into()),
+            (
+                "xero.code_patch_affected_paths".into(),
+                r#"["src/app.ts"]"#.into(),
+            ),
+            ("xero.code_patch_file_change_count".into(), "1".into()),
+            ("xero.code_patch_text_hunk_count".into(), "2".into()),
+        ]);
+
+        insert_code_history_payload_from_telemetry(&mut payload, "project-1", &telemetry);
+
+        assert_eq!(
+            payload.get("codeChangeGroupId"),
+            Some(&json!("code-change-1"))
+        );
+        assert_eq!(payload.get("codeCommitId"), Some(&json!("code-commit-1")));
+        assert_eq!(payload.get("codeWorkspaceEpoch"), Some(&json!(7)));
+        let availability = payload
+            .get("codePatchAvailability")
+            .expect("code patch availability");
+        assert_eq!(availability["projectId"], json!("project-1"));
+        assert_eq!(availability["targetChangeGroupId"], json!("code-change-1"));
+        assert_eq!(availability["available"], json!(true));
+        assert_eq!(availability["affectedPaths"], json!(["src/app.ts"]));
+        assert_eq!(availability["fileChangeCount"], json!(1));
+        assert_eq!(availability["textHunkCount"], json!(2));
+    }
+
+    fn create_project_database(repo_root: &Path, project_id: &str) {
+        let database_path = repo_root
+            .parent()
+            .expect("repo parent")
+            .join("app-data")
+            .join("projects")
+            .join(project_id)
+            .join("state.db");
+        fs::create_dir_all(database_path.parent().expect("database parent"))
+            .expect("create database dir");
+        let mut connection = Connection::open(&database_path).expect("open database");
+        configure_connection(&connection).expect("configure database");
+        migrations()
+            .to_latest(&mut connection)
+            .expect("migrate database");
+        connection
+            .execute(
+                "INSERT INTO projects (id, name, description, milestone) VALUES (?1, 'Project', '', '')",
+                params![project_id],
+            )
+            .expect("insert project");
+        connection
+            .execute(
+                r#"
+                INSERT INTO repositories (id, project_id, root_path, display_name, branch, head_sha, is_git_repo)
+                VALUES ('repo-1', ?1, ?2, 'Project', 'main', 'abc123', 1)
+                "#,
+                params![project_id, repo_root.to_string_lossy().as_ref()],
+            )
+            .expect("insert repository");
+        register_project_database_path_for_tests(repo_root, database_path);
+    }
+
+    #[test]
+    fn s53_runtime_dispatch_revocations_block_non_custom_capability_subjects() {
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let revoked_subjects = [
+            ("tool_pack", "browser", AUTONOMOUS_TOOL_BROWSER_OBSERVE),
+            (
+                "browser_control",
+                "browser_control",
+                AUTONOMOUS_TOOL_BROWSER_CONTROL,
+            ),
+            (
+                "external_integration",
+                "external_service",
+                AUTONOMOUS_TOOL_WEB_FETCH,
+            ),
+            (
+                "destructive_write",
+                "destructive_write",
+                AUTONOMOUS_TOOL_DELETE,
+            ),
+        ];
+
+        for (index, (subject_kind, subject_id, tool_name)) in revoked_subjects.iter().enumerate() {
+            let repo_root = tempdir.path().join(format!("repo-{index}"));
+            fs::create_dir_all(&repo_root).expect("create repo root");
+            let project_id = format!("project-runtime-capability-revocation-{index}");
+            create_project_database(&repo_root, &project_id);
+            project_store::revoke_agent_capability(
+                &repo_root,
+                &project_store::NewAgentCapabilityRevocationRecord {
+                    revocation_id: project_store::agent_capability_revocation_id(
+                        &project_id,
+                        subject_kind,
+                        subject_id,
+                    ),
+                    project_id: project_id.clone(),
+                    subject_kind: (*subject_kind).into(),
+                    subject_id: (*subject_id).into(),
+                    scope: json!({ "testIndex": index }),
+                    reason: format!("Disable {subject_kind}:{subject_id} during dispatch."),
+                    created_by: "test-user".into(),
+                    created_at: format!("2026-05-09T00:{index:02}:00Z"),
+                },
+            )
+            .expect("revoke capability");
+            let error = ensure_tool_capabilities_not_revoked(&repo_root, &project_id, tool_name)
+                .expect_err("revoked capability blocks dispatch subject");
+            assert_eq!(error.code, "agent_capability_revoked");
+            assert!(error.message.contains(subject_kind));
+            assert!(error.message.contains(subject_id));
+            let audit_events = project_store::list_agent_runtime_audit_events_for_subject(
+                &repo_root,
+                &project_id,
+                subject_kind,
+                subject_id,
+            )
+            .expect("list revocation audit events");
+            assert!(audit_events.iter().any(|event| {
+                event.action_kind == "capability_revoked"
+                    && event.payload["permission"]["schema"]
+                        == json!("xero.capability_permission_explanation.v1")
+            }));
+
+            if *subject_kind == "external_integration" {
+                let external_revocation_id = project_store::agent_capability_revocation_id(
+                    &project_id,
+                    "external_integration",
+                    "external_service",
+                );
+                project_store::clear_agent_capability_revocation(
+                    &repo_root,
+                    &project_id,
+                    &external_revocation_id,
+                    "2026-05-09T00:10:00Z",
+                )
+                .expect("clear external revocation");
+                ensure_tool_capabilities_not_revoked(
+                    &repo_root,
+                    &project_id,
+                    AUTONOMOUS_TOOL_WEB_FETCH,
+                )
+                .expect("cleared revocation allows new external integration calls");
+                let external_audit = project_store::list_agent_runtime_audit_events_for_subject(
+                    &repo_root,
+                    &project_id,
+                    "external_integration",
+                    "external_service",
+                )
+                .expect("list cleared revocation audit events");
+                assert!(external_audit
+                    .iter()
+                    .any(|event| event.action_kind == "capability_revoked"));
+                assert!(external_audit
+                    .iter()
+                    .any(|event| event.action_kind == "capability_revocation_cleared"));
+            }
+        }
+    }
 }

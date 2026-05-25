@@ -17,14 +17,16 @@ use crate::{
     registry::read_registry,
     runtime::{
         subscribe_agent_events, AgentAutoCompactPreference, AgentEventSubscription,
-        AutonomousToolRuntime, ContinueOwnedAgentRunRequest, DesktopAgentCoreRuntime,
-        DesktopRunDriveMode, OwnedAgentRunRequest,
+        AgentProviderConfig, AutonomousToolRuntime, ContinueOwnedAgentRunRequest,
+        DesktopAgentCoreRuntime, DesktopRunDriveMode, OwnedAgentRunRequest,
     },
     state::DesktopState,
 };
 
 use super::runtime_support::{
+    agent_provider_config_identity, ensure_owned_runtime_provider_turn_capabilities,
     generate_runtime_run_id, resolve_owned_agent_provider_config, resolve_project_root,
+    staged_attachment_dto_to_message_attachment,
 };
 
 #[tauri::command]
@@ -33,28 +35,58 @@ pub fn start_agent_task<R: Runtime + 'static>(
     state: State<'_, DesktopState>,
     request: StartAgentTaskRequestDto,
 ) -> CommandResult<AgentRunDto> {
+    start_agent_task_blocking(&app, state.inner(), request)
+}
+
+pub fn start_agent_task_blocking<R: Runtime + 'static>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    request: StartAgentTaskRequestDto,
+) -> CommandResult<AgentRunDto> {
     validate_non_empty(&request.project_id, "projectId")?;
     validate_non_empty(&request.agent_session_id, "agentSessionId")?;
     validate_non_empty(&request.prompt, "prompt")?;
+    let run_id = match request.run_id.clone() {
+        Some(run_id) => {
+            validate_non_empty(&run_id, "runId")?;
+            run_id
+        }
+        None => generate_runtime_run_id(),
+    };
 
-    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
-    let tool_runtime =
-        AutonomousToolRuntime::for_project(&app, state.inner(), &request.project_id)?;
+    let repo_root = resolve_project_root(app, state, &request.project_id)?;
     let provider_config =
-        resolve_owned_agent_provider_config(&app, state.inner(), request.controls.as_ref())?;
+        resolve_owned_agent_provider_config(app, state, request.controls.as_ref())?;
+    let (provider_id, model_id) = agent_provider_config_identity(&provider_config);
+    let profile_id = provider_profile_id_for_controls(request.controls.as_ref(), &provider_id);
+    let provider_preflight = ensure_owned_runtime_provider_turn_capabilities(
+        app,
+        state,
+        state.owned_agent_provider_config_override().is_none(),
+        &profile_id,
+        &provider_id,
+        &model_id,
+        &request.attachments,
+    )?;
+    let tool_runtime =
+        tool_runtime_for_provider(app, state, &request.project_id, &provider_config)?;
     let owned_request = OwnedAgentRunRequest {
         repo_root,
         project_id: request.project_id,
         agent_session_id: request.agent_session_id,
-        run_id: generate_runtime_run_id(),
+        run_id,
         prompt: request.prompt,
-        attachments: Vec::new(),
+        attachments: request
+            .attachments
+            .iter()
+            .map(staged_attachment_dto_to_message_attachment)
+            .collect(),
         controls: request.controls,
         tool_runtime,
         provider_config,
-        provider_preflight: None,
+        provider_preflight: Some(provider_preflight),
     };
-    let runtime = DesktopAgentCoreRuntime::new(state.inner().agent_run_supervisor().clone());
+    let runtime = DesktopAgentCoreRuntime::new(state.agent_run_supervisor().clone());
     let snapshot = runtime.start_run(owned_request, DesktopRunDriveMode::Background)?;
 
     Ok(agent_run_dto(snapshot))
@@ -74,18 +106,37 @@ pub fn send_agent_message<R: Runtime + 'static>(
         ..
     } = locate_agent_run(&app, state.inner(), &request.run_id)?;
     ensure_agent_run_not_active(state.inner(), &request.run_id)?;
-    let tool_runtime = AutonomousToolRuntime::for_project(&app, state.inner(), &project_id)?;
     let provider_config = resolve_owned_agent_provider_config(&app, state.inner(), None)?;
+    let (provider_id, model_id) = agent_provider_config_identity(&provider_config);
+    let profile_id = provider_profile_id_for_controls(None, &provider_id);
+    let provider_preflight = ensure_owned_runtime_provider_turn_capabilities(
+        &app,
+        state.inner(),
+        state
+            .inner()
+            .owned_agent_provider_config_override()
+            .is_none(),
+        &profile_id,
+        &provider_id,
+        &model_id,
+        &request.attachments,
+    )?;
+    let tool_runtime =
+        tool_runtime_for_provider(&app, state.inner(), &project_id, &provider_config)?;
     let continuation = ContinueOwnedAgentRunRequest {
         repo_root,
         project_id: project_id.clone(),
         run_id: request.run_id,
         prompt: request.prompt,
-        attachments: Vec::new(),
+        attachments: request
+            .attachments
+            .iter()
+            .map(staged_attachment_dto_to_message_attachment)
+            .collect(),
         controls: None,
         tool_runtime,
         provider_config,
-        provider_preflight: None,
+        provider_preflight: Some(provider_preflight),
         answer_pending_actions: false,
         auto_compact: auto_compact_preference(request.auto_compact)?,
     };
@@ -129,8 +180,9 @@ pub fn resume_agent_run<R: Runtime + 'static>(
         ..
     } = locate_agent_run(&app, state.inner(), &request.run_id)?;
     ensure_agent_run_not_active(state.inner(), &request.run_id)?;
-    let tool_runtime = AutonomousToolRuntime::for_project(&app, state.inner(), &project_id)?;
     let provider_config = resolve_owned_agent_provider_config(&app, state.inner(), None)?;
+    let tool_runtime =
+        tool_runtime_for_provider(&app, state.inner(), &project_id, &provider_config)?;
     let continuation = ContinueOwnedAgentRunRequest {
         repo_root,
         project_id: project_id.clone(),
@@ -148,6 +200,35 @@ pub fn resume_agent_run<R: Runtime + 'static>(
     let prepared = runtime.continue_run(continuation, DesktopRunDriveMode::Background)?;
     let snapshot = prepared.snapshot.clone();
     Ok(agent_run_dto(snapshot))
+}
+
+fn tool_runtime_for_provider<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    project_id: &str,
+    provider_config: &AgentProviderConfig,
+) -> CommandResult<AutonomousToolRuntime> {
+    let (provider_id, model_id) = agent_provider_config_identity(provider_config);
+    let policy = super::agent_tooling_settings::resolve_agent_tool_application_style(
+        app,
+        state,
+        &provider_id,
+        &model_id,
+    )?;
+    Ok(AutonomousToolRuntime::for_project(app, state, project_id)?
+        .with_tool_application_policy(policy))
+}
+
+fn provider_profile_id_for_controls(
+    controls: Option<&crate::commands::RuntimeRunControlInputDto>,
+    provider_id: &str,
+) -> String {
+    controls
+        .and_then(|controls| controls.provider_profile_id.as_deref())
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty())
+        .unwrap_or(provider_id)
+        .to_string()
 }
 
 #[tauri::command]

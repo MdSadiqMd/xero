@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use std::{
     fs,
     io::Cursor,
@@ -6,19 +7,25 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "macos")]
 use image::{ImageFormat, RgbaImage};
 
+#[cfg(target_os = "macos")]
 use super::{
-    AutonomousMacosApp, AutonomousMacosAutomationAction, AutonomousMacosAutomationOutput,
+    AutonomousMacosApp, AutonomousMacosScreenshot, AutonomousMacosScreenshotTarget,
+    AutonomousMacosWindow, AutonomousMacosWindowBounds,
+};
+use super::{
+    AutonomousMacosAutomationAction, AutonomousMacosAutomationOutput,
     AutonomousMacosAutomationPolicyTrace, AutonomousMacosAutomationRequest,
-    AutonomousMacosPermission, AutonomousMacosPermissionStatus, AutonomousMacosScreenshot,
-    AutonomousMacosScreenshotTarget, AutonomousMacosWindow, AutonomousMacosWindowBounds,
-    AutonomousProcessActionRiskLevel, AutonomousToolOutput, AutonomousToolResult,
-    AutonomousToolRuntime, AUTONOMOUS_TOOL_MACOS_AUTOMATION,
+    AutonomousMacosPermission, AutonomousMacosPermissionStatus, AutonomousProcessActionRiskLevel,
+    AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime,
+    AUTONOMOUS_TOOL_MACOS_AUTOMATION,
 };
 use crate::commands::{validate_non_empty, CommandError, CommandResult};
 
 const MACOS_AUTOMATION_PHASE: &str = "phase_7_macos_app_system_automation";
+#[cfg(target_os = "macos")]
 const SCREENSHOT_ARTIFACT_DIR: &str = "xero-macos-screenshots";
 
 impl AutonomousToolRuntime {
@@ -219,6 +226,7 @@ fn macos_action_label(action: AutonomousMacosAutomationAction) -> &'static str {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn screenshot_artifact_path(prefix: &str) -> CommandResult<PathBuf> {
     let root = std::env::temp_dir().join(SCREENSHOT_ARTIFACT_DIR);
     fs::create_dir_all(&root).map_err(|error| {
@@ -239,6 +247,7 @@ fn screenshot_artifact_path(prefix: &str) -> CommandResult<PathBuf> {
     Ok(root.join(format!("{prefix}-{millis}.png")))
 }
 
+#[cfg(target_os = "macos")]
 fn write_screenshot_artifact(
     prefix: &str,
     image: RgbaImage,

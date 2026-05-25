@@ -1,4 +1,4 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
+import { startTransition, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { XeroDesktopError, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import { applyRuntimeRun, applyRuntimeSession, type ProjectDetailView } from '@/src/lib/xero-model'
 import {
@@ -12,16 +12,19 @@ import {
 import {
   mapRuntimeRun,
   mergeRuntimeUpdated,
+  type RuntimeRunUpdatedPayloadDto,
   type RuntimeRunView,
   type RuntimeSessionView,
 } from '@/src/lib/xero-model/runtime'
 import {
   applyRuntimeStreamIssue,
   createRuntimeStreamFromSubscription,
+  createRuntimeStreamViewFromSnapshot,
   createRuntimeStreamView,
   mergeRuntimeStreamEvent,
   type RuntimeStreamEventDto,
   type RuntimeStreamItemKindDto,
+  type RuntimeStreamPatchDto,
   type RuntimeStreamView,
 } from '@/src/lib/xero-model/runtime-stream'
 
@@ -41,6 +44,7 @@ import type { RefreshSource } from './types'
 
 export const RUNTIME_STREAM_BATCH_WINDOW_MS = 6
 export const REPOSITORY_STATUS_BATCH_WINDOW_MS = 6
+export const RUNTIME_RUN_UPDATE_BATCH_WINDOW_MS = 24
 const INCREMENTAL_RUNTIME_STREAM_REPLAY_LIMIT = 200
 
 export const ACTIVE_RUNTIME_STREAM_ITEM_KINDS: RuntimeStreamItemKindDto[] = [
@@ -59,6 +63,7 @@ type RuntimeStreamUpdater = (current: RuntimeStreamView | null) => RuntimeStream
 type RuntimeSessionRecords = Record<string, RuntimeSessionView>
 type RuntimeLoadErrorRecords = Record<string, string | null>
 type RuntimeStreamRecords = Record<string, RuntimeStreamView>
+type RuntimeStreamChannelPayload = RuntimeStreamEventDto | RuntimeStreamPatchDto
 
 type UpdateRuntimeStream = (
   projectId: string,
@@ -123,10 +128,12 @@ interface AttachRuntimeStreamSubscriptionArgs {
   agentSessionId: string | null
   runtimeSession: RuntimeSessionView | null
   runId: string | null
+  forceFullReplay?: boolean
   adapter: XeroDesktopAdapter
   runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>
   updateRuntimeStream: UpdateRuntimeStream
   scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void
+  recordRuntimeSessionCompletion?: RuntimeStreamEventBufferArgs['onRuntimeSessionCompleted']
 }
 
 type ScheduledFlushCancel = () => void
@@ -143,12 +150,37 @@ interface RuntimeStreamEventBufferArgs {
   runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>
   updateRuntimeStream: UpdateRuntimeStream
   scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void
+  onRuntimeSessionCompleted?: (completion: {
+    projectId: string
+    agentSessionId: string
+    runId: string
+    completedAt: string
+  }) => void
   scheduleFlush?: FlushScheduler
 }
 
+interface RuntimeRunUpdateBufferArgs {
+  activeProjectIdRef: MutableRefObject<string | null>
+  applyRuntimeRunUpdate: (
+    projectId: string,
+    runtimeRun: RuntimeRunView | null,
+    options?: { clearGlobalError?: boolean; loadError?: string | null },
+  ) => RuntimeRunView | null
+  setRefreshSource: SetState<RefreshSource>
+  setErrorMessage: SetState<string | null>
+  scheduleFlush?: FlushScheduler
+}
+
+export interface RuntimeRunUpdateBuffer {
+  enqueue: (payload: RuntimeRunUpdatedPayloadDto) => void
+  flush: () => void
+  dispose: () => void
+}
+
 export interface RuntimeStreamEventBuffer {
-  enqueue: (payload: RuntimeStreamEventDto) => void
+  enqueue: (payload: RuntimeStreamChannelPayload) => void
   reportIssue: (issue: { code: string; message: string; retryable: boolean }) => void
+  enableCompletionNotifications: () => void
   flush: () => void
   dispose: () => void
 }
@@ -228,11 +260,25 @@ function scheduleRepositoryStatusFlush(callback: () => void): ScheduledFlushCanc
   return scheduleFrameOrTimeout(callback, REPOSITORY_STATUS_BATCH_WINDOW_MS)
 }
 
-export function isUrgentRuntimeStreamEvent(event: RuntimeStreamEventDto): boolean {
+function scheduleRuntimeRunUpdateFlush(callback: () => void): ScheduledFlushCancel {
+  const timeoutId = setTimeout(callback, RUNTIME_RUN_UPDATE_BATCH_WINDOW_MS)
+  return () => clearTimeout(timeoutId)
+}
+
+function isRuntimeStreamPatch(payload: RuntimeStreamChannelPayload): payload is RuntimeStreamPatchDto {
+  return 'schema' in payload && payload.schema === 'xero.runtime_stream_patch.v1'
+}
+
+function getRuntimeStreamPayloadItem(payload: RuntimeStreamChannelPayload) {
+  return payload.item
+}
+
+export function isUrgentRuntimeStreamEvent(event: RuntimeStreamChannelPayload): boolean {
+  const item = getRuntimeStreamPayloadItem(event)
   return (
-    event.item.kind === 'action_required' ||
-    event.item.kind === 'complete' ||
-    event.item.kind === 'failure'
+    item.kind === 'action_required' ||
+    item.kind === 'complete' ||
+    item.kind === 'failure'
   )
 }
 
@@ -257,13 +303,15 @@ function applyRuntimeStreamEventIssue(
 
 export function mergeRuntimeStreamEvents(
   currentStream: RuntimeStreamView | null,
-  events: RuntimeStreamEventDto[],
+  events: RuntimeStreamChannelPayload[],
 ): RuntimeStreamView | null {
   let nextStream = currentStream
 
   for (const event of events) {
     try {
-      nextStream = mergeRuntimeStreamEvent(nextStream, event)
+      nextStream = isRuntimeStreamPatch(event)
+        ? createRuntimeStreamViewFromSnapshot(event.snapshot)
+        : mergeRuntimeStreamEvent(nextStream, event)
     } catch (error) {
       const issue = getRuntimeStreamIssue(error, {
         code: 'runtime_stream_contract_mismatch',
@@ -271,7 +319,20 @@ export function mergeRuntimeStreamEvents(
         retryable: false,
       })
 
-      nextStream = applyRuntimeStreamEventIssue(nextStream, event, issue)
+      nextStream = isRuntimeStreamPatch(event)
+        ? applyRuntimeStreamIssue(nextStream, {
+            projectId: event.snapshot.projectId,
+            agentSessionId: event.snapshot.agentSessionId,
+            runtimeKind: event.snapshot.runtimeKind,
+            runId: event.snapshot.runId,
+            sessionId: event.snapshot.sessionId,
+            flowId: event.snapshot.flowId,
+            subscribedItemKinds: event.snapshot.subscribedItemKinds,
+            code: issue.code,
+            message: issue.message,
+            retryable: issue.retryable,
+          })
+        : applyRuntimeStreamEventIssue(nextStream, event, issue)
     }
   }
 
@@ -280,21 +341,26 @@ export function mergeRuntimeStreamEvents(
 
 function scheduleRuntimeActionRefreshes(
   projectId: string,
-  events: RuntimeStreamEventDto[],
+  events: RuntimeStreamChannelPayload[],
   runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>,
   scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void,
 ) {
   for (const event of events) {
-    if (event.item.kind !== 'action_required') {
+    const item = getRuntimeStreamPayloadItem(event)
+    if (item.kind !== 'action_required') {
       continue
     }
 
-    const actionId = event.item.actionId?.trim()
+    const actionId = item.actionId?.trim()
     if (!actionId) {
       continue
     }
 
-    const refreshKey = `${event.agentSessionId}:${event.runId}:${actionId}`
+    const agentSessionId = isRuntimeStreamPatch(event)
+      ? event.snapshot.agentSessionId
+      : event.agentSessionId
+    const runId = isRuntimeStreamPatch(event) ? event.snapshot.runId : event.runId
+    const refreshKey = `${agentSessionId}:${runId}:${actionId}`
     const knownKeys = runtimeActionRefreshKeysRef.current[projectId] ?? new Set<string>()
     runtimeActionRefreshKeysRef.current[projectId] = knownKeys
 
@@ -302,6 +368,123 @@ function scheduleRuntimeActionRefreshes(
       knownKeys.add(refreshKey)
       scheduleRuntimeMetadataRefresh(projectId, 'runtime_stream:action_required')
     }
+  }
+}
+
+function notifyRuntimeStreamCompletions(
+  events: RuntimeStreamChannelPayload[],
+  onRuntimeSessionCompleted?: RuntimeStreamEventBufferArgs['onRuntimeSessionCompleted'],
+) {
+  if (!onRuntimeSessionCompleted) {
+    return
+  }
+
+  const notifiedRunIds = new Set<string>()
+  for (const event of events) {
+    const item = getRuntimeStreamPayloadItem(event)
+    const completionItem = isRuntimeStreamPatch(event)
+      ? item.kind === 'complete'
+        ? item
+        : event.snapshot.completion
+      : item.kind === 'complete'
+        ? item
+        : null
+    if (!completionItem) {
+      continue
+    }
+
+    const projectId = isRuntimeStreamPatch(event) ? event.snapshot.projectId : event.projectId
+    const agentSessionId = isRuntimeStreamPatch(event) ? event.snapshot.agentSessionId : event.agentSessionId
+    const runId = completionItem.runId?.trim()
+    const completedAt = completionItem.createdAt?.trim()
+    if (!projectId || !agentSessionId || !runId || !completedAt || notifiedRunIds.has(runId)) {
+      continue
+    }
+
+    notifiedRunIds.add(runId)
+    onRuntimeSessionCompleted({
+      projectId,
+      agentSessionId,
+      runId,
+      completedAt,
+    })
+  }
+}
+
+export function createRuntimeRunUpdateBuffer({
+  activeProjectIdRef,
+  applyRuntimeRunUpdate,
+  setRefreshSource,
+  setErrorMessage,
+  scheduleFlush = scheduleRuntimeRunUpdateFlush,
+}: RuntimeRunUpdateBufferArgs): RuntimeRunUpdateBuffer {
+  const pendingUpdates = new Map<string, {
+    projectId: string
+    agentSessionId: string
+    runtimeRun: RuntimeRunView | null
+  }>()
+  let cancelScheduledFlush: ScheduledFlushCancel | null = null
+  let disposed = false
+
+  const cancelFlush = () => {
+    if (!cancelScheduledFlush) {
+      return
+    }
+
+    const cancel = cancelScheduledFlush
+    cancelScheduledFlush = null
+    cancel()
+  }
+
+  const flush = () => {
+    if (disposed) {
+      return
+    }
+
+    cancelFlush()
+    if (pendingUpdates.size === 0) {
+      return
+    }
+
+    const updates = Array.from(pendingUpdates.values())
+    pendingUpdates.clear()
+    const activeProjectId = activeProjectIdRef.current
+    const touchesActiveProject = updates.some((update) => update.projectId === activeProjectId)
+
+    startTransition(() => {
+      for (const update of updates) {
+        applyRuntimeRunUpdate(update.projectId, update.runtimeRun)
+      }
+
+      if (touchesActiveProject) {
+        setRefreshSource('runtime_run:updated')
+        setErrorMessage(null)
+      }
+    })
+  }
+
+  return {
+    enqueue(payload) {
+      if (disposed) {
+        return
+      }
+
+      pendingUpdates.set(`${payload.projectId}:${payload.agentSessionId}`, {
+        projectId: payload.projectId,
+        agentSessionId: payload.agentSessionId,
+        runtimeRun: payload.run ? mapRuntimeRun(payload.run) : null,
+      })
+
+      if (!cancelScheduledFlush) {
+        cancelScheduledFlush = scheduleFlush(flush)
+      }
+    },
+    flush,
+    dispose() {
+      disposed = true
+      pendingUpdates.clear()
+      cancelFlush()
+    },
   }
 }
 
@@ -316,11 +499,13 @@ export function createRuntimeStreamEventBuffer({
   runtimeActionRefreshKeysRef,
   updateRuntimeStream,
   scheduleRuntimeMetadataRefresh,
+  onRuntimeSessionCompleted,
   scheduleFlush = scheduleRuntimeStreamFlush,
 }: RuntimeStreamEventBufferArgs): RuntimeStreamEventBuffer {
-  const pendingEvents: RuntimeStreamEventDto[] = []
+  const pendingEvents: RuntimeStreamChannelPayload[] = []
   let cancelScheduledFlush: ScheduledFlushCancel | null = null
   let disposed = false
+  let completionNotificationsEnabled = false
 
   const cancelFlush = () => {
     if (!cancelScheduledFlush) {
@@ -344,6 +529,9 @@ export function createRuntimeStreamEventBuffer({
 
     const events = pendingEvents.splice(0, pendingEvents.length)
     updateRuntimeStream(projectId, agentSessionId, (currentStream) => mergeRuntimeStreamEvents(currentStream, events))
+    if (completionNotificationsEnabled) {
+      notifyRuntimeStreamCompletions(events, onRuntimeSessionCompleted)
+    }
     scheduleRuntimeActionRefreshes(
       projectId,
       events,
@@ -384,15 +572,21 @@ export function createRuntimeStreamEventBuffer({
         return
       }
 
-      if (payload.projectId !== projectId) {
+      const payloadProjectId = isRuntimeStreamPatch(payload)
+        ? payload.snapshot.projectId
+        : payload.projectId
+      if (payloadProjectId !== projectId) {
         reportIssue({
           code: 'runtime_stream_project_mismatch',
-          message: `Xero received a runtime stream item for ${payload.projectId} while ${projectId} is active.`,
+          message: `Xero received a runtime stream item for ${payloadProjectId} while ${projectId} is active.`,
           retryable: false,
         })
         return
       }
 
+      if (isRuntimeStreamPatch(payload)) {
+        pendingEvents.length = 0
+      }
       pendingEvents.push(payload)
       if (isUrgentRuntimeStreamEvent(payload)) {
         flush()
@@ -402,6 +596,9 @@ export function createRuntimeStreamEventBuffer({
       schedule()
     },
     reportIssue,
+    enableCompletionNotifications: () => {
+      completionNotificationsEnabled = true
+    },
     flush,
     dispose: () => {
       disposed = true
@@ -524,6 +721,12 @@ export async function attachDesktopRuntimeListeners({
   const pendingRepositoryStatuses = new Map<string, RepositoryStatusView>()
   const pendingRepositoryStatusKeys = new Map<string, string>()
   let cancelRepositoryStatusFlush: ScheduledFlushCancel | null = null
+  const runtimeRunUpdateBuffer = createRuntimeRunUpdateBuffer({
+    activeProjectIdRef: refs.activeProjectIdRef,
+    applyRuntimeRunUpdate,
+    setRefreshSource: setters.setRefreshSource,
+    setErrorMessage: setters.setErrorMessage,
+  })
   let disposed = false
 
   const applyRepositoryStatusUpdate = (nextStatus: RepositoryStatusView) => {
@@ -707,15 +910,7 @@ export async function attachDesktopRuntimeListeners({
         return
       }
 
-      const nextRuntimeRun = payload.run ? mapRuntimeRun(payload.run) : null
-      applyRuntimeRunUpdate(payload.projectId, nextRuntimeRun)
-
-      if (refs.activeProjectIdRef.current !== payload.projectId) {
-        return
-      }
-
-      setters.setRefreshSource('runtime_run:updated')
-      setters.setErrorMessage(null)
+      runtimeRunUpdateBuffer.enqueue(payload)
     },
     handleAdapterEventError,
   )
@@ -726,6 +921,7 @@ export async function attachDesktopRuntimeListeners({
     pendingRepositoryStatusKeys.clear()
     cancelRepositoryStatusFlush?.()
     cancelRepositoryStatusFlush = null
+    runtimeRunUpdateBuffer.dispose()
     projectUnlisten?.()
     repositoryUnlisten?.()
     runtimeUnlisten?.()
@@ -738,10 +934,12 @@ export function attachRuntimeStreamSubscription({
   agentSessionId,
   runtimeSession,
   runId,
+  forceFullReplay = false,
   adapter,
   runtimeActionRefreshKeysRef,
   updateRuntimeStream,
   scheduleRuntimeMetadataRefresh,
+  recordRuntimeSessionCompletion,
 }: AttachRuntimeStreamSubscriptionArgs): () => void {
   if (!projectId || !agentSessionId) {
     return () => undefined
@@ -789,7 +987,11 @@ export function attachRuntimeStreamSubscription({
   }
 
   updateRuntimeStream(projectId, agentSessionId, (currentStream) => {
-    if (currentStream?.runId === runId && currentStream.agentSessionId === agentSessionId) {
+    if (
+      !forceFullReplay &&
+      currentStream?.runId === runId &&
+      currentStream.agentSessionId === agentSessionId
+    ) {
       replayAfterSequence = currentStream.lastSequence ?? null
       return {
         ...currentStream,
@@ -826,6 +1028,7 @@ export function attachRuntimeStreamSubscription({
     runtimeActionRefreshKeysRef,
     updateRuntimeStream,
     scheduleRuntimeMetadataRefresh,
+    onRuntimeSessionCompleted: recordRuntimeSessionCompletion,
   })
 
   void adapter
@@ -865,6 +1068,7 @@ export function attachRuntimeStreamSubscription({
         return
       }
 
+      streamEventBuffer.enableCompletionNotifications()
       unsubscribe = subscription.unsubscribe
       updateRuntimeStream(projectId, agentSessionId, (currentStream) => {
         if (
@@ -917,4 +1121,11 @@ export function attachRuntimeStreamSubscription({
     streamEventBuffer?.dispose()
     unsubscribe()
   }
+}
+
+export function shouldForceFullRuntimeStreamReplay(
+  previousProjectId: string | null,
+  activeProjectId: string | null,
+): boolean {
+  return Boolean(activeProjectId && previousProjectId !== activeProjectId)
 }

@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 
 import { AgentContextMeter } from '@/components/xero/agent-runtime/agent-context-meter'
 import {
@@ -115,11 +115,60 @@ describe('AgentContextMeter', () => {
     expect(
       screen.getByRole('button', { name: 'Context meter: 58 percent context remaining for gpt-5.4' }),
     ).toBeVisible()
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
-    expect(screen.getByRole('progressbar')).toHaveAttribute(
+    const progress = screen.getByRole('progressbar')
+    const progressRing = progress.querySelector('circle:last-child')
+    expect(progress).toHaveAttribute('aria-valuenow', '42')
+    expect(progress).toHaveAttribute(
       'aria-valuetext',
       '58 percent context remaining for gpt-5.4',
     )
+    expect(progressRing?.getAttribute('style')).toContain('var(--primary) 61%')
+    expect(progressRing?.getAttribute('style')).toContain('var(--destructive) 39%')
+  })
+
+  it('uses the theme primary color for tiny context usage', () => {
+    const nearlyFullBudget: SessionContextBudgetDto = {
+      ...baseBudget,
+      remainingTokens: 99_000,
+      pressurePercent: 1,
+      estimatedTokens: 1_000,
+      pressure: 'low',
+    }
+
+    render(
+      <AgentContextMeter
+        status="ready"
+        snapshot={makeSnapshot({ budget: nearlyFullBudget })}
+      />,
+    )
+
+    const progress = screen.getByRole('progressbar')
+    const progressRing = progress.querySelector('circle:last-child')
+
+    expect(
+      screen.getByRole('button', { name: 'Context meter: 99 percent context remaining for gpt-5.4' }),
+    ).toBeVisible()
+    expect(progress).toHaveAttribute('aria-valuenow', '1')
+    expect(progressRing?.getAttribute('style')).toContain('stroke: var(--primary)')
+    expect(progressRing?.getAttribute('style')).not.toContain('var(--destructive)')
+  })
+
+  it('keeps a stale known budget as a static progress ring while refresh is deferred', () => {
+    render(
+      <AgentContextMeter
+        status="stale"
+        snapshot={makeSnapshot()}
+      />,
+    )
+
+    const progress = screen.getByRole('progressbar')
+    const progressRing = progress.querySelector('circle:last-child')
+
+    expect(
+      screen.getByRole('button', { name: 'Context meter: 58 percent context remaining for gpt-5.4' }),
+    ).toBeVisible()
+    expect(progress).toHaveAttribute('aria-valuenow', '42')
+    expect(progressRing).not.toHaveClass('motion-safe:animate-spin')
   })
 
   it('masks known system prompt usage until the first user message is sent', () => {
@@ -195,6 +244,45 @@ describe('AgentContextMeter', () => {
       '0 percent context remaining for gpt-5.4',
     )
     expect(progress.querySelector('circle:last-child')).toHaveClass('stroke-destructive')
+  })
+
+  it('explains undo context when undo state is model-visible', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const snapshot = makeSnapshot()
+    snapshot.contributors = [
+      ...snapshot.contributors,
+      {
+        ...snapshot.contributors[0],
+        contributorId: 'code_history_operation:undo-1',
+        kind: 'code_history_operation',
+        label: 'Code undo applied',
+        sourceId: 'undo-1',
+        sequence: 2,
+        text: 'Code undo applied on top of the current workspace.',
+      },
+    ]
+    render(
+      <AgentContextMeter
+        status="ready"
+        snapshot={snapshot}
+      />,
+    )
+
+    fireEvent.focus(screen.getByRole('button', { name: /context meter:/i }))
+
+    const tooltipText = await screen.findAllByText(
+      'Code undo is in context; current files are authoritative and history stayed visible.',
+    )
+    expect(
+      tooltipText.some((element) => element.getAttribute('data-slot') === 'tooltip-content'),
+    ).toBe(true)
   })
 
   it('renders an unavailable state when refresh fails before a snapshot exists', () => {

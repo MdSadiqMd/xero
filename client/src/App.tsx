@@ -15,6 +15,10 @@ import { AgentWorkspace } from '@/components/xero/agent-workspace'
 import { AgentSessionsSidebar } from '@/components/xero/agent-sessions-sidebar'
 import { AgentWorkspaceDndProvider } from '@/components/xero/agent-runtime/agent-workspace-dnd-provider'
 import { AgentCommandPalette } from '@/components/xero/agent-runtime/agent-command-palette'
+import {
+  buildComposerAgentSelectionKey,
+  runtimeAgentIdForCustomBaseCapability,
+} from '@/components/xero/agent-runtime/composer-helpers'
 import { type View } from '@/components/xero/data'
 import { LoadingScreen } from '@/components/xero/loading-screen'
 import { NoProjectEmptyState } from '@/components/xero/no-project-empty-state'
@@ -23,10 +27,23 @@ import { ProjectLoadErrorState } from '@/components/xero/project-load-error-stat
 import { PhaseView } from '@/components/xero/phase-view'
 import { ProjectAddDialog } from '@/components/xero/project-add-dialog'
 import { ProjectRail } from '@/components/xero/project-rail'
-import { XeroShell, type PlatformVariant, type SurfacePreloadTarget } from '@/components/xero/shell'
+import { UpdateScreen } from '@/components/xero/update-screen'
+import {
+  XeroShell,
+  detectPlatform,
+  type PlatformVariant,
+  type SurfacePreloadTarget,
+} from '@/components/xero/shell'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { StatusFooterProps } from '@/components/xero/status-footer'
 import type { SettingsSection } from '@/components/xero/settings-dialog'
+import type { TerminalSidebarHandle } from '@/components/xero/terminal-sidebar'
 import type { VcsCommitMessageModel } from '@/components/xero/vcs-sidebar'
+import type { EditorTerminalTaskRequest } from '@/components/xero/execution-view/editor-tasks'
+import {
+  buildEditorAgentActivities,
+  type EditorAgentContextRequest,
+} from '@/components/xero/execution-view/agent-aware-editor-hooks'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,8 +55,61 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { XeroDesktopAdapter as DefaultXeroDesktopAdapter, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
-import { mapAgentSession, type RuntimeRunControlInputDto } from '@/src/lib/xero-model/runtime'
-import type { AgentDefinitionSummaryDto } from '@/src/lib/xero-model/agent-definition'
+import {
+  applyRuntimeRun,
+  applyRuntimeSession,
+  mapProjectSnapshot,
+  mapRuntimeRun,
+  mapRuntimeSession,
+  type ProjectDetailView,
+  type RuntimeRunView,
+  type RuntimeSessionView,
+  type RuntimeStreamView,
+} from '@/src/lib/xero-model'
+import {
+  mapAgentSession,
+  type RuntimeAgentIdDto,
+  type RuntimeRunControlInputDto,
+  type StagedAgentAttachmentDto,
+} from '@/src/lib/xero-model/runtime'
+import {
+  canonicalCustomAgentDefinitionSchema,
+  type AgentDefaultModelDto,
+  type AgentDefinitionWriteResponseDto,
+  type AgentDefinitionSummaryDto,
+} from '@/src/lib/xero-model/agent-definition'
+import type {
+  AgentAuthoringCatalogDto,
+  AgentAuthoringAttachableSkillDto,
+  AgentAuthoringSkillSearchResultDto,
+  AgentToolPackCatalogDto,
+  SearchAgentAuthoringSkillsResponseDto,
+  AgentRefDto,
+  WorkflowAgentDetailDto,
+  WorkflowAgentSummaryDto,
+} from '@/src/lib/xero-model/workflow-agents'
+import type {
+  WorkflowDefinitionDto,
+  WorkflowDefinitionSummaryDto,
+} from '@/src/lib/xero-model/workflow-definition'
+import type {
+  WorkflowRunBlockerResponseDto,
+  WorkflowRunBundleResponseDto,
+  WorkflowRunDto,
+} from '@/src/lib/xero-model/workflow-run'
+import {
+  instantiateBlankWorkflow,
+  instantiateWorkflowTemplate,
+  type WorkflowTemplateIdDto,
+} from '@/src/lib/xero-model/workflow-templates'
+import { useWorkflowAgentInspector } from '@/src/features/xero/use-workflow-agent-inspector'
+import {
+  persistToolCallGroupingPreference,
+  readStoredToolCallGroupingPreference,
+  readToolCallGroupingPreference,
+  writeStoredToolCallGroupingPreference,
+  type ToolCallGroupingPreference,
+} from '@/src/features/xero/tool-call-grouping-preference'
 import type {
   SessionTranscriptSearchResultSnippetDto,
 } from '@/src/lib/xero-model/session-context'
@@ -55,12 +125,36 @@ import type {
 import {
   useXeroDesktopState,
   type AgentPaneView,
+  type OperatorActionErrorView,
   type RefreshSource,
+  type RuntimeRunActionKind,
+  type RuntimeRunActionStatus,
 } from '@/src/features/xero/use-xero-desktop-state'
+import {
+  buildAgentView,
+} from '@/src/features/xero/use-xero-desktop-state/view-builders'
+import {
+  createRuntimeStreamStoreKey,
+  removeRuntimeStreamForSession,
+} from '@/src/features/xero/use-xero-desktop-state/high-churn-store'
+import {
+  attachRuntimeStreamSubscription,
+  type RuntimeMetadataRefreshSource,
+} from '@/src/features/xero/use-xero-desktop-state/runtime-stream'
+import { getOperatorActionError } from '@/src/features/xero/use-xero-desktop-state/mutation-support'
+import { useForcedAppUpdate } from '@/src/features/updates/use-forced-app-update'
+import {
+  clearProjectSelectionPreview,
+  previewProjectSelection,
+} from '@/src/features/xero/project-selection-preview'
 import { useGitHubAuth } from '@/src/lib/github-auth'
 import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
+import { SHORTCUT_DEFINITIONS, type ShortcutId } from '@/src/features/shortcuts/shortcuts-definitions'
+import { useShortcutListener } from '@/src/features/shortcuts/use-shortcut-listener'
 import { startLayoutShiftGuard } from '@/lib/layout-shift-guard'
+import { useSidebarOpenMotion, useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import { cn } from '@/lib/utils'
+import { FloatingRightSidebarFrame } from '@/components/xero/floating-right-sidebar-frame'
 
 export interface XeroAppProps {
   adapter?: XeroDesktopAdapter
@@ -76,34 +170,115 @@ const loadUsageStatsSidebar = () => import('@/components/xero/usage-stats-sideba
 const loadVcsSidebar = () => import('@/components/xero/vcs-sidebar')
 const loadWorkflowsSidebar = () => import('@/components/xero/workflows-sidebar')
 const loadAgentDockSidebar = () => import('@/components/xero/agent-dock-sidebar')
+const loadTerminalSidebar = () => import('@/components/xero/terminal-sidebar')
+const loadStartTargetsDialog = () => import('@/components/xero/start-targets-dialog')
+const ACTIVE_VIEW_APP_STATE_KEY = 'app.activeView.v1'
+const GLOBAL_COMPUTER_USE_PROJECT_ID = 'global-computer-use'
+const GLOBAL_COMPUTER_USE_AGENT_SESSION_ID = 'agent-session-global-computer-use'
+
+interface ComputerUseLoadResult {
+  project: ProjectDetailView
+  runtimeSession: RuntimeSessionView | null
+  runtimeRun: RuntimeRunView | null
+}
+
+function normalizePersistedActiveView(value: unknown): View | null {
+  if (value === 'workflow') {
+    return 'phases'
+  }
+
+  if (value === 'agent') {
+    return 'agent'
+  }
+
+  if (value === 'editor') {
+    return 'execution'
+  }
+
+  return null
+}
+
+function persistedActiveViewValue(view: View): 'workflow' | 'agent' | 'editor' {
+  if (view === 'agent') {
+    return 'agent'
+  }
+
+  if (view === 'execution') {
+    return 'editor'
+  }
+
+  return 'workflow'
+}
+
+async function readPersistedActiveView(adapter: XeroDesktopAdapter): Promise<View | null> {
+  if (!adapter.readAppUiState) {
+    return null
+  }
+
+  try {
+    const response = await adapter.readAppUiState({
+      key: ACTIVE_VIEW_APP_STATE_KEY,
+    })
+    return normalizePersistedActiveView(response.value)
+  } catch {
+    return null
+  }
+}
+
+async function persistActiveView(adapter: XeroDesktopAdapter, view: View): Promise<void> {
+  if (!adapter.writeAppUiState) {
+    return
+  }
+
+  await adapter.writeAppUiState({
+    key: ACTIVE_VIEW_APP_STATE_KEY,
+    value: persistedActiveViewValue(view),
+  })
+}
 
 const warmedSurfaceChunks = new Set<SurfacePreloadTarget>()
 
-const IDLE_SURFACE_PRELOAD_SEQUENCE: SurfacePreloadTarget[] = [
+const BASE_IDLE_SURFACE_PRELOAD_SEQUENCE: SurfacePreloadTarget[] = [
+  'agent-dock',
+  'terminal',
   'solana',
   'workflows',
   'vcs',
   'browser',
   'settings',
   'usage',
-  'ios',
 ]
 
 const SOLANA_WORKBENCH_WIDTH_STORAGE_KEY = 'xero.solana.workbench.width'
 const SOLANA_WORKBENCH_MIN_WIDTH = 360
 const SOLANA_WORKBENCH_DEFAULT_WIDTH = 440
 const SOLANA_WORKBENCH_MAX_WIDTH = 900
-const SIDEBAR_WIDTH_DURATION_MS = 200
+const AGENT_DOCK_WIDTH_STORAGE_KEY = 'xero.agentDock.width'
+const AGENT_DOCK_MIN_WIDTH = 320
+const AGENT_DOCK_DEFAULT_WIDTH = 560
+const AGENT_DOCK_MAX_WIDTH = 720
 const STARTUP_SURFACE_PREWARM_SETTLE_MS = 320
-const STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = [
+const HEAVY_SURFACE_MOUNT_AFTER_REVEAL_MS = 180
+const BASE_STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = [
+  'agent-dock',
   'browser',
-  'ios',
   'solana',
   'settings',
+  'terminal',
   'usage',
   'vcs',
   'workflows',
 ]
+
+function shouldIncludeIosSurface(): boolean {
+  return detectPlatform() === 'macos'
+}
+
+function withPlatformSurfacePreloads(
+  targets: readonly SurfacePreloadTarget[],
+): SurfacePreloadTarget[] {
+  return shouldIncludeIosSurface() ? [...targets, 'ios'] : [...targets]
+}
 
 function readPersistedSolanaWorkbenchWidth(): number {
   if (typeof window === 'undefined') {
@@ -128,15 +303,32 @@ function readPersistedSolanaWorkbenchWidth(): number {
   }
 }
 
+function readPersistedAgentDockWidth(): number {
+  if (typeof window === 'undefined') {
+    return AGENT_DOCK_DEFAULT_WIDTH
+  }
+
+  try {
+    const raw = window.localStorage?.getItem?.(AGENT_DOCK_WIDTH_STORAGE_KEY)
+    if (!raw) {
+      return AGENT_DOCK_DEFAULT_WIDTH
+    }
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed)) {
+      return AGENT_DOCK_DEFAULT_WIDTH
+    }
+    return Math.max(AGENT_DOCK_MIN_WIDTH, Math.min(AGENT_DOCK_MAX_WIDTH, parsed))
+  } catch {
+    return AGENT_DOCK_DEFAULT_WIDTH
+  }
+}
+
 function preloadSurfaceChunk(target: SurfacePreloadTarget): void {
   if (import.meta.env.MODE === 'test') {
     return
   }
 
-  if (target === 'tools') {
-    preloadSurfaceChunk('browser')
-    preloadSurfaceChunk('solana')
-    preloadSurfaceChunk('ios')
+  if (target === 'ios' && !shouldIncludeIosSurface()) {
     return
   }
 
@@ -154,7 +346,11 @@ function preloadSurfaceChunk(target: SurfacePreloadTarget): void {
     return
   }
   if (target === 'solana') {
-    void loadSolanaWorkbenchSidebar().then((module) => module.preloadSolanaWorkbenchPanels())
+    void loadSolanaWorkbenchSidebar()
+    return
+  }
+  if (target === 'terminal') {
+    void loadTerminalSidebar()
     return
   }
   if (target === 'settings') {
@@ -173,6 +369,10 @@ function preloadSurfaceChunk(target: SurfacePreloadTarget): void {
   }
   if (target === 'workflows') {
     void loadWorkflowsSidebar()
+    return
+  }
+  if (target === 'agent-dock') {
+    void loadAgentDockSidebar()
   }
 }
 
@@ -255,20 +455,29 @@ async function waitForStartupPreloadSettle(): Promise<void> {
 }
 
 async function preloadStartupSurfaceChunks(): Promise<void> {
-  await Promise.all([
+  const preloads: Array<Promise<unknown>> = [
     loadAgentRuntime(),
     loadExecutionView(),
     loadBrowserSidebar(),
-    loadIosEmulatorSidebar(),
-    loadSolanaWorkbenchSidebar().then((module) => module.preloadSolanaWorkbenchPanels()),
+    loadSolanaWorkbenchSidebar(),
     loadSettingsDialog().then((module) => {
       void module.preloadSettingsSectionChunks().catch(() => undefined)
     }),
+    loadTerminalSidebar(),
     loadUsageStatsSidebar(),
     loadVcsSidebar(),
     loadWorkflowsSidebar(),
-  ])
-  STARTUP_SURFACE_PRELOAD_TARGETS.forEach((target) => warmedSurfaceChunks.add(target))
+    loadAgentDockSidebar(),
+  ]
+
+  if (shouldIncludeIosSurface()) {
+    preloads.push(loadIosEmulatorSidebar())
+  }
+
+  await Promise.all(preloads)
+  withPlatformSurfacePreloads(BASE_STARTUP_SURFACE_PRELOAD_TARGETS).forEach((target) =>
+    warmedSurfaceChunks.add(target),
+  )
 }
 
 function useStartupSurfacePrewarm(enabled: boolean): {
@@ -333,7 +542,7 @@ function useIdleSurfacePreloads(enabled: boolean): void {
 
     let cancelled = false
     let cancelScheduled: (() => void) | null = null
-    const queue = [...IDLE_SURFACE_PRELOAD_SEQUENCE]
+    const queue = withPlatformSurfacePreloads(BASE_IDLE_SURFACE_PRELOAD_SEQUENCE)
 
     const warmNext = () => {
       if (cancelled) {
@@ -383,6 +592,12 @@ const LazyWorkflowsSidebar = lazy(() =>
 )
 const LazyAgentDockSidebar = lazy(() =>
   loadAgentDockSidebar().then((module) => ({ default: module.AgentDockSidebar })),
+)
+const LazyTerminalSidebar = lazy(() =>
+  loadTerminalSidebar().then((module) => ({ default: module.TerminalSidebar })),
+)
+const LazyStartTargetsDialog = lazy(() =>
+  loadStartTargetsDialog().then((module) => ({ default: module.StartTargetsDialog })),
 )
 
 function preloadViewChunk(view: View): void {
@@ -449,8 +664,167 @@ function sameRuntimeRunControlInput(
     left.modelId === right.modelId &&
     (left.thinkingEffort ?? null) === (right.thinkingEffort ?? null) &&
     left.approvalMode === right.approvalMode &&
-    Boolean(left.planModeRequired) === Boolean(right.planModeRequired)
+    Boolean(left.planModeRequired) === Boolean(right.planModeRequired) &&
+    left.autoCompactEnabled === right.autoCompactEnabled
   )
+}
+
+const COMPOSER_SETTINGS_APP_STATE_KEY = 'xero.agent.composer.settings.v1'
+const COMPOSER_SETTINGS_UPDATED_EVENT = 'agent:composer_settings_updated'
+const COMPOSER_SETTINGS_VERSION = 1
+const COMPOSER_THINKING_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'x_high'] as const
+const COMPOSER_APPROVAL_MODES = ['suggest', 'auto_edit', 'yolo'] as const
+const COMPOSER_RUNTIME_AGENT_IDS: readonly RuntimeAgentIdDto[] = [
+  'generalist',
+  'ask',
+  'computer_use',
+  'plan',
+  'engineer',
+  'debug',
+  'crawl',
+  'agent_create',
+]
+
+function isComposerSettingsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeComposerSettingsText(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function isComposerRuntimeAgentId(value: unknown): value is RuntimeAgentIdDto {
+  return (
+    typeof value === 'string' &&
+    COMPOSER_RUNTIME_AGENT_IDS.includes(value as RuntimeAgentIdDto)
+  )
+}
+
+function isComposerThinkingEffort(
+  value: unknown,
+): value is NonNullable<RuntimeRunControlInputDto['thinkingEffort']> {
+  return (
+    typeof value === 'string' &&
+    COMPOSER_THINKING_LEVELS.includes(
+      value as NonNullable<RuntimeRunControlInputDto['thinkingEffort']>,
+    )
+  )
+}
+
+function isComposerApprovalMode(
+  value: unknown,
+): value is RuntimeRunControlInputDto['approvalMode'] {
+  return (
+    typeof value === 'string' &&
+    COMPOSER_APPROVAL_MODES.includes(value as RuntimeRunControlInputDto['approvalMode'])
+  )
+}
+
+function composerSettingsValueFromControls(
+  controls: RuntimeRunControlInputDto | null,
+): Record<string, unknown> | null {
+  const modelId = normalizeComposerSettingsText(controls?.modelId)
+  if (!controls || !modelId) return null
+
+  return {
+    version: COMPOSER_SETTINGS_VERSION,
+    modelId,
+    providerProfileId: normalizeComposerSettingsText(controls.providerProfileId),
+    runtimeAgentId: controls.runtimeAgentId,
+    agentDefinitionId: normalizeComposerSettingsText(controls.agentDefinitionId),
+    thinkingEffort: controls.thinkingEffort ?? null,
+    approvalMode: controls.approvalMode,
+    autoCompactEnabled: controls.autoCompactEnabled,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function runtimeControlsFromComposerSettingsValue(
+  value: unknown,
+): RuntimeRunControlInputDto | null {
+  if (!isComposerSettingsRecord(value) || value.version !== COMPOSER_SETTINGS_VERSION) {
+    return null
+  }
+  const modelId = normalizeComposerSettingsText(value.modelId)
+  if (!modelId || !isComposerRuntimeAgentId(value.runtimeAgentId)) {
+    return null
+  }
+
+  return {
+    runtimeAgentId: value.runtimeAgentId,
+    agentDefinitionId: normalizeComposerSettingsText(value.agentDefinitionId),
+    providerProfileId: normalizeComposerSettingsText(value.providerProfileId),
+    modelId,
+    thinkingEffort: isComposerThinkingEffort(value.thinkingEffort)
+      ? value.thinkingEffort
+      : null,
+    approvalMode: isComposerApprovalMode(value.approvalMode)
+      ? value.approvalMode
+      : 'suggest',
+    planModeRequired: false,
+    autoCompactEnabled:
+      typeof value.autoCompactEnabled === 'boolean' ? value.autoCompactEnabled : true,
+  }
+}
+
+function mirrorComposerSettingsToLocalStorage(value: unknown): void {
+  if (!isComposerSettingsRecord(value) || value.version !== COMPOSER_SETTINGS_VERSION) {
+    return
+  }
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage?.setItem?.(
+      COMPOSER_SETTINGS_APP_STATE_KEY,
+      JSON.stringify(value),
+    )
+    if (typeof value.autoCompactEnabled === 'boolean') {
+      window.localStorage?.setItem?.(
+        'xero.agent.autoCompact.enabled',
+        value.autoCompactEnabled ? '1' : '0',
+      )
+    }
+  } catch {
+    /* Keep the in-memory selection when localStorage is unavailable. */
+  }
+}
+
+interface PendingInitialAgentSelection {
+  agentSessionId: string
+  runtimeAgentId: RuntimeAgentIdDto
+  agentDefinitionId: string | null
+}
+
+type RuntimeAgentSelection = Omit<PendingInitialAgentSelection, 'agentSessionId'>
+
+function runtimeAgentSelectionFromRef(
+  ref: AgentRefDto,
+  customDefinitions: readonly AgentDefinitionSummaryDto[],
+  workflowAgents: readonly WorkflowAgentSummaryDto[],
+): RuntimeAgentSelection | null {
+  if (ref.kind === 'built_in') {
+    return {
+      runtimeAgentId: ref.runtimeAgentId,
+      agentDefinitionId: null,
+    }
+  }
+
+  const customDefinition = customDefinitions.find(
+    (definition) => definition.definitionId === ref.definitionId,
+  )
+  const workflowAgent = workflowAgents.find(
+    (agent) => agent.ref.kind === 'custom' && agent.ref.definitionId === ref.definitionId,
+  )
+  const baseCapabilityProfile =
+    customDefinition?.baseCapabilityProfile ?? workflowAgent?.baseCapabilityProfile
+  if (!baseCapabilityProfile) return null
+
+  return {
+    runtimeAgentId: runtimeAgentIdForCustomBaseCapability(baseCapabilityProfile),
+    agentDefinitionId: ref.definitionId,
+  }
 }
 
 function shouldConfirmPaneClose(state: AgentPaneCloseState | null | undefined): state is AgentPaneCloseState {
@@ -482,12 +856,41 @@ export function useActivatedSurface(active: boolean, prewarm = false) {
   return active || prewarm || activated
 }
 
+export function useStickyPrewarmedSurface(active: boolean, prewarm = false) {
+  const [activated, setActivated] = useState(active || prewarm)
+
+  useEffect(() => {
+    if (active || prewarm) {
+      setActivated(true)
+    }
+  }, [active, prewarm])
+
+  return active || prewarm || activated
+}
+
 interface LazyActivityPaneProps {
   active: boolean
   children: ReactNode
   className?: string
   name: string
   prewarm?: boolean
+}
+
+function useFrozenSurfaceChildren(
+  children: ReactNode,
+  options: { active: boolean; prewarm?: boolean },
+): ReactNode {
+  const { active, prewarm = false } = options
+  const previousActiveRef = useRef(active)
+  const renderedChildrenRef = useRef(children)
+  const activeChanged = previousActiveRef.current !== active
+
+  if (active || prewarm || activeChanged) {
+    renderedChildrenRef.current = children
+  }
+  previousActiveRef.current = active
+
+  return renderedChildrenRef.current
 }
 
 function LazyActivityPane({
@@ -498,6 +901,10 @@ function LazyActivityPane({
   prewarm = false,
 }: LazyActivityPaneProps) {
   const shouldMount = useActivatedSurface(active, prewarm)
+  const renderedChildren = useFrozenSurfaceChildren(children, {
+    active,
+    prewarm,
+  })
 
   if (!shouldMount) {
     return null
@@ -509,7 +916,7 @@ function LazyActivityPane({
       className={className}
       inert={!active ? true : undefined}
     >
-      {children}
+      {renderedChildren}
     </div>
   )
 
@@ -527,6 +934,10 @@ function LazyMountedPane({
   prewarm = false,
 }: Omit<LazyActivityPaneProps, 'name'>) {
   const shouldMount = useActivatedSurface(active, prewarm)
+  const renderedChildren = useFrozenSurfaceChildren(children, {
+    active,
+    prewarm,
+  })
 
   if (!shouldMount) {
     return null
@@ -538,7 +949,7 @@ function LazyMountedPane({
       className={className}
       inert={!active ? true : undefined}
     >
-      {children}
+      {renderedChildren}
     </div>
   )
 }
@@ -555,17 +966,29 @@ function LazyPrerenderedSurface({
   prewarm = false,
 }: LazyPrerenderedSurfaceProps) {
   const shouldMount = useActivatedSurface(open, prewarm)
+  const renderedChildren = useFrozenSurfaceChildren(children, {
+    active: open,
+    prewarm,
+  })
 
   if (!shouldMount) {
     return null
   }
 
-  return <>{children}</>
+  return <>{renderedChildren}</>
 }
 
-function SolanaWorkbenchOpeningShell({ open }: { open: boolean }) {
+function SolanaWorkbenchOpeningShell({
+  instantOpen = false,
+  open,
+}: {
+  instantOpen?: boolean
+  open: boolean
+}) {
   const [width] = useState(readPersistedSolanaWorkbenchWidth)
-  const targetWidth = open ? width : 0
+  const motionOpen = useSidebarOpenMotion(open, { instantOpen })
+  const targetWidth = motionOpen ? width : 0
+  const widthMotion = useSidebarWidthMotion(targetWidth)
 
   return (
     <aside
@@ -573,11 +996,12 @@ function SolanaWorkbenchOpeningShell({ open }: { open: boolean }) {
       aria-hidden={!open}
       aria-label="Loading Solana Workbench"
       className={cn(
-        'sidebar-layout-island relative flex shrink-0 flex-col overflow-hidden bg-sidebar',
+        widthMotion.islandClassName,
+        'relative flex shrink-0 flex-col overflow-hidden bg-sidebar',
         open ? 'border-l border-border/80' : 'border-l-0',
       )}
       inert={!open ? true : undefined}
-      style={{ width: targetWidth }}
+      style={widthMotion.style}
     >
       <div className="flex h-full min-w-0 shrink-0 flex-col" style={{ width }}>
         <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/70 pl-3 pr-2">
@@ -615,15 +1039,19 @@ function isForegroundProjectLoad(source: RefreshSource): boolean {
 }
 
 function InlineSidebarLoadingShell({
+  instantOpen = false,
   label,
   open,
   width = 420,
 }: {
+  instantOpen?: boolean
   label: string
   open: boolean
   width?: number
 }) {
-  const targetWidth = open ? width : 0
+  const motionOpen = useSidebarOpenMotion(open, { instantOpen })
+  const targetWidth = motionOpen ? width : 0
+  const widthMotion = useSidebarWidthMotion(targetWidth)
 
   return (
     <aside
@@ -631,11 +1059,12 @@ function InlineSidebarLoadingShell({
       aria-hidden={!open}
       aria-label={`Loading ${label}`}
       className={cn(
-        'sidebar-layout-island relative flex shrink-0 flex-col overflow-hidden bg-sidebar',
+        widthMotion.islandClassName,
+        'relative flex shrink-0 flex-col overflow-hidden bg-sidebar',
         open ? 'border-l border-border/80' : 'border-l-0',
       )}
       inert={!open ? true : undefined}
-      style={{ width: targetWidth }}
+      style={widthMotion.style}
     >
       <div className="flex h-full min-w-0 shrink-0 flex-col" style={{ width }}>
         <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/70 pl-3 pr-2">
@@ -666,37 +1095,30 @@ function OverlaySidebarLoadingShell({
   open: boolean
   width?: number
 }) {
-  if (!open) {
-    return null
-  }
-
   return (
-    <>
-      <div className="fixed inset-0 z-40 bg-black/30" />
-      <aside
-        aria-busy="true"
-        aria-label={`Loading ${label}`}
-        className="fixed inset-y-0 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl"
-        style={{ width }}
-      >
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/70 pl-3 pr-2">
-            <div className="min-w-0 truncate text-[11px] font-semibold text-foreground">
-              {label}
-            </div>
-            <div className="h-3 w-3 shrink-0 animate-spin rounded-full border border-primary/30 border-t-primary" />
+    <FloatingRightSidebarFrame
+      ariaBusy={open}
+      label={`Loading ${label}`}
+      open={open}
+      width={width}
+    >
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/70 pl-3 pr-2">
+          <div className="min-w-0 truncate text-[11px] font-semibold text-foreground">
+            {label}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3">
-            <div className="h-7 w-40 max-w-[70%] rounded-md bg-secondary/50" />
-            <div className="h-24 rounded-md border border-border/60 bg-background/35" />
-            <div className="space-y-2">
-              <div className="h-3 w-3/4 rounded bg-secondary/45" />
-              <div className="h-3 w-1/2 rounded bg-secondary/35" />
-            </div>
+          <div className="h-3 w-3 shrink-0 animate-spin rounded-full border border-primary/30 border-t-primary" />
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3">
+          <div className="h-7 w-40 max-w-[70%] rounded-md bg-secondary/50" />
+          <div className="h-24 rounded-md border border-border/60 bg-background/35" />
+          <div className="space-y-2">
+            <div className="h-3 w-3/4 rounded bg-secondary/45" />
+            <div className="h-3 w-1/2 rounded bg-secondary/35" />
           </div>
         </div>
-      </aside>
-    </>
+      </div>
+    </FloatingRightSidebarFrame>
   )
 }
 
@@ -712,7 +1134,7 @@ function ModalLoadingShell({ open }: { open: boolean }) {
   )
 }
 
-function useSolanaWorkbenchActivation(open: boolean, prewarm: boolean): boolean {
+function useDeferredSurfaceActivation(open: boolean, prewarm: boolean): boolean {
   const [active, setActive] = useState(prewarm)
 
   useEffect(() => {
@@ -725,31 +1147,80 @@ function useSolanaWorkbenchActivation(open: boolean, prewarm: boolean): boolean 
       return
     }
 
-    return scheduleAfterNextPaint(() => setActive(true))
+    let cancelAfterPaint: (() => void) | null = null
+    let timeout: number | null = null
+
+    cancelAfterPaint = scheduleAfterNextPaint(() => {
+      if (typeof window === 'undefined') {
+        setActive(true)
+        return
+      }
+
+      timeout = window.setTimeout(() => {
+        setActive(true)
+      }, HEAVY_SURFACE_MOUNT_AFTER_REVEAL_MS)
+    })
+
+    return () => {
+      cancelAfterPaint?.()
+      if (timeout !== null) {
+        window.clearTimeout(timeout)
+      }
+    }
   }, [active, open, prewarm])
 
   return active
 }
 
-function SolanaWorkbenchSurface({ open, prewarm = false }: { open: boolean; prewarm?: boolean }) {
-  const shouldMount = useActivatedSurface(open, prewarm)
-  const active = useSolanaWorkbenchActivation(open, prewarm)
+function IosEmulatorSurface({ open, prewarm = false }: { open: boolean; prewarm?: boolean }) {
+  const shouldMount = useStickyPrewarmedSurface(open, prewarm)
+  const readyForSidebar = useDeferredSurfaceActivation(open, prewarm)
 
   if (!shouldMount) {
     return null
   }
 
+  if (!readyForSidebar) {
+    return <InlineSidebarLoadingShell label="iOS Simulator" open={open} width={640} />
+  }
+
   return (
-    <div
-      aria-hidden={!open}
-      className="relative flex shrink-0 overflow-hidden"
-      inert={!open ? true : undefined}
-      style={{ width: open ? undefined : 0 }}
+    <Suspense
+      fallback={
+        <InlineSidebarLoadingShell
+          instantOpen={open}
+          label="iOS Simulator"
+          open={open}
+          width={640}
+        />
+      }
     >
-      <Suspense fallback={<SolanaWorkbenchOpeningShell open={open} />}>
-        <LazySolanaWorkbenchSidebar active={active} open prewarm={prewarm} />
-      </Suspense>
-    </div>
+      <LazyIosEmulatorSidebar open={open} openImmediately={open} />
+    </Suspense>
+  )
+}
+
+function SolanaWorkbenchSurface({ open, prewarm = false }: { open: boolean; prewarm?: boolean }) {
+  const shouldMount = useStickyPrewarmedSurface(open, prewarm)
+  const active = useDeferredSurfaceActivation(open, prewarm)
+
+  if (!shouldMount) {
+    return null
+  }
+
+  if (!active) {
+    return <SolanaWorkbenchOpeningShell open={open} />
+  }
+
+  return (
+    <Suspense fallback={<SolanaWorkbenchOpeningShell instantOpen={open} open={open} />}>
+      <LazySolanaWorkbenchSidebar
+        active={active}
+        open={open}
+        openImmediately={open}
+        prewarm={prewarm}
+      />
+    </Suspense>
   )
 }
 
@@ -770,6 +1241,7 @@ function AppBootLoadingOverlay({ active }: { active: boolean }) {
 export function XeroApp({ adapter }: XeroAppProps) {
   const resolvedAdapter = adapter ?? DefaultXeroDesktopAdapter
   const [activeView, setActiveViewRaw] = useState<View>('phases')
+  const [activeViewHydrated, setActiveViewHydrated] = useState(() => !resolvedAdapter.readAppUiState)
 
   // Tab switches simultaneously trigger the cross-fade of view panes AND the
   // auto-collapse of the project rail / sessions sidebar (both via useEffect
@@ -794,12 +1266,62 @@ export function XeroApp({ adapter }: XeroAppProps) {
     cancelLayoutShiftGuardRef.current = startLayoutShiftGuard()
     setActiveViewRaw(view)
   }, [])
+
+  useEffect(() => {
+    if (!resolvedAdapter.readAppUiState) {
+      setActiveViewHydrated(true)
+      return
+    }
+
+    let disposed = false
+    setActiveViewHydrated(false)
+    void readPersistedActiveView(resolvedAdapter)
+      .then((view) => {
+        if (disposed || !view) {
+          return
+        }
+        setActiveView(view)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (disposed) {
+          return
+        }
+        setActiveViewHydrated(true)
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [resolvedAdapter, setActiveView])
+
+  useEffect(() => {
+    if (!activeViewHydrated) {
+      return
+    }
+
+    void persistActiveView(resolvedAdapter, activeView).catch(() => undefined)
+  }, [activeView, activeViewHydrated, resolvedAdapter])
+
   useEffect(() => {
     return () => {
       cancelLayoutShiftGuardRef.current?.()
       cancelLayoutShiftGuardRef.current = null
     }
   }, [])
+
+  useShortcutListener(
+    useCallback(
+      (id: ShortcutId) => {
+        const def = SHORTCUT_DEFINITIONS.find((entry) => entry.id === id)
+        if (def?.view) {
+          setActiveView(def.view)
+        }
+      },
+      [setActiveView],
+    ),
+  )
+
   const {
     highChurnStore,
     projects,
@@ -824,6 +1346,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
     providerCredentialsLoadError,
     providerCredentialsSaveStatus,
     providerCredentialsSaveError,
+    providerModelCatalogs,
+    providerModelCatalogLoadStatuses,
+    providerModelCatalogLoadErrors,
     doctorReport,
     doctorReportStatus,
     doctorReportError,
@@ -841,7 +1366,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
     pendingSkillSourceId,
     skillRegistryMutationError,
     isDesktopRuntime,
+    activeProjectUnreadCompletedSessionCount,
     selectProject,
+    prefetchProject,
     importProject,
     createProject,
     removeProject,
@@ -869,12 +1396,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
     logoutRuntimeSession,
     resolveOperatorAction,
     resumeOperatorRun,
-    checkProviderProfile,
     runDoctorReport,
     refreshProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,
     startOAuthLogin,
+    startXaiDeviceCodeLogin,
+    pollXaiDeviceCodeLogin,
     refreshMcpRegistry,
     upsertMcpServer,
     removeMcpServer,
@@ -907,6 +1435,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     reorderPanes,
     openSessionInNewPane,
     setSplitterRatios,
+    acknowledgeCompletedAgentSessions,
   } = useXeroDesktopState({ adapter, subscribeRuntimeStreams: false })
 
   const {
@@ -919,11 +1448,77 @@ export function XeroApp({ adapter }: XeroAppProps) {
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('providers')
+  const [toolCallGroupingPreference, setToolCallGroupingPreference] =
+    useState<ToolCallGroupingPreference>(() => readStoredToolCallGroupingPreference())
   const [pendingAgentSessionId, setPendingAgentSessionId] = useState<string | null>(null)
   const [paneCloseStates, setPaneCloseStates] = useState<Record<string, AgentPaneCloseState>>({})
   const [pendingPaneCloseId, setPendingPaneCloseId] = useState<string | null>(null)
   const [agentComposerControls, setAgentComposerControls] =
     useState<RuntimeRunControlInputDto | null>(null)
+  const persistComposerSettings = useCallback(
+    (controls: RuntimeRunControlInputDto | null) => {
+      const value = composerSettingsValueFromControls(controls)
+      if (!value) return
+      mirrorComposerSettingsToLocalStorage(value)
+      void resolvedAdapter.writeAppUiState?.({
+        key: COMPOSER_SETTINGS_APP_STATE_KEY,
+        value,
+      }).catch(() => undefined)
+    },
+    [resolvedAdapter],
+  )
+  useEffect(() => {
+    let disposed = false
+    void resolvedAdapter.readAppUiState?.({ key: COMPOSER_SETTINGS_APP_STATE_KEY })
+      .then((response) => {
+        if (disposed) return
+        const value = response.value ?? null
+        mirrorComposerSettingsToLocalStorage(value)
+        const controls = runtimeControlsFromComposerSettingsValue(value)
+        if (controls?.runtimeAgentId && controls.runtimeAgentId !== 'computer_use') {
+          setAgentComposerControls((current) =>
+            sameRuntimeRunControlInput(current, controls) ? current : controls,
+          )
+        }
+      })
+      .catch(() => undefined)
+
+    return () => {
+      disposed = true
+    }
+  }, [resolvedAdapter])
+  useEffect(() => {
+    if (!isTauri()) return
+    let disposed = false
+    let unlisten: (() => void) | null = null
+
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<unknown>(COMPOSER_SETTINGS_UPDATED_EVENT, (event) => {
+          const value = event.payload
+          mirrorComposerSettingsToLocalStorage(value)
+          const controls = runtimeControlsFromComposerSettingsValue(value)
+          if (controls?.runtimeAgentId && controls.runtimeAgentId !== 'computer_use') {
+            setAgentComposerControls((current) =>
+              sameRuntimeRunControlInput(current, controls) ? current : controls,
+            )
+          }
+        }),
+      )
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten()
+          return
+        }
+        unlisten = nextUnlisten
+      })
+      .catch(() => undefined)
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [projectAddOpen, setProjectAddOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
@@ -931,8 +1526,54 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [solanaOpen, setSolanaOpen] = useState(false)
   const [vcsOpen, setVcsOpen] = useState(false)
   const [workflowsOpen, setWorkflowsOpen] = useState(false)
+  const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinitionSummaryDto[]>([])
+  const [workflowDefinitionsStatus, setWorkflowDefinitionsStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<Error | null>(null)
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunDto[]>([])
+  const [workflowRunsStatus, setWorkflowRunsStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [selectedWorkflowDefinition, setSelectedWorkflowDefinition] =
+    useState<WorkflowDefinitionDto | null>(null)
+  const [selectedWorkflowRun, setSelectedWorkflowRun] = useState<WorkflowRunDto | null>(null)
+  const [selectedWorkflowIsDraft, setSelectedWorkflowIsDraft] = useState(false)
+  const [selectedWorkflowTemplatePreviewId, setSelectedWorkflowTemplatePreviewId] =
+    useState<WorkflowTemplateIdDto | null>(null)
+  const [workflowActionRunning, setWorkflowActionRunning] = useState(false)
+  const workflowAgentInspector = useWorkflowAgentInspector({
+    adapter: resolvedAdapter,
+    projectId: activeProjectId,
+  })
   const [usageOpen, setUsageOpen] = useState(false)
   const [agentDockOpen, setAgentDockOpen] = useState(false)
+  const [computerUseOpen, setComputerUseOpen] = useState(false)
+  const [computerUseProject, setComputerUseProject] = useState<ProjectDetailView | null>(null)
+  const [computerUseRuntimeSession, setComputerUseRuntimeSession] =
+    useState<RuntimeSessionView | null>(null)
+  const [computerUseRuntimeRun, setComputerUseRuntimeRun] = useState<RuntimeRunView | null>(null)
+  const [computerUseRuntimeRunActionStatus, setComputerUseRuntimeRunActionStatus] =
+    useState<RuntimeRunActionStatus>('idle')
+  const [computerUsePendingRuntimeRunAction, setComputerUsePendingRuntimeRunAction] =
+    useState<RuntimeRunActionKind | null>(null)
+  const [computerUseRuntimeRunActionError, setComputerUseRuntimeRunActionError] =
+    useState<OperatorActionErrorView | null>(null)
+  const computerUseRuntimeActionRefreshKeysRef = useRef<Record<string, Set<string>>>({})
+  const computerUseRuntimeMetadataRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  )
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [startTargetsDialogOpen, setStartTargetsDialogOpen] = useState(false)
+  const [pendingInitialRuntimeAgent, setPendingInitialRuntimeAgent] =
+    useState<PendingInitialAgentSelection | null>(null)
+  const [agentAuthoringSession, setAgentAuthoringSession] = useState<{
+    mode: 'create' | 'edit' | 'duplicate'
+    initialDetail: WorkflowAgentDetailDto | null
+  } | null>(null)
+  const [agentAuthoringLoading, setAgentAuthoringLoading] = useState(false)
+  const [agentAuthoringCatalog, setAgentAuthoringCatalog] =
+    useState<AgentAuthoringCatalogDto | null>(null)
+  const [agentToolPackCatalog, setAgentToolPackCatalog] =
+    useState<AgentToolPackCatalogDto | null>(null)
   const [environmentDiscoveryStatus, setEnvironmentDiscoveryStatus] =
     useState<EnvironmentDiscoveryStatusDto | null>(null)
   const [environmentProfileSummary, setEnvironmentProfileSummary] =
@@ -945,68 +1586,119 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const refreshCustomAgentDefinitions = useCallback(() => {
     setCustomAgentDefinitionsRevision((current) => current + 1)
   }, [])
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [projectRailSnapWidth, setProjectRailSnapWidth] = useState(false)
-  const projectRailSnapWidthTimerRef = useRef<number | null>(null)
-  const shouldRestoreSidebarFromAutoCollapseRef = useRef(false)
-  const shouldRestoreExplorerFromAutoCollapseRef = useRef(false)
-  const previousViewRef = useRef<View>(activeView)
-  const previousBrowserOpenRef = useRef<boolean>(browserOpen)
-  const shouldRestoreSidebarFromRightSidebarRef = useRef(false)
-  const previousNonFloatingRightSidebarOpenRef = useRef(false)
-  const projectRailViewAutoCollapseActive = activeView === 'execution' || activeView === 'agent'
-  const nonFloatingRightSidebarOpen =
-    browserOpen ||
-    iosOpen ||
-    solanaOpen ||
-    workflowsOpen ||
-    agentDockOpen
-  const snapProjectRailWidthForRightSidebar = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    if (projectRailSnapWidthTimerRef.current !== null) {
-      window.clearTimeout(projectRailSnapWidthTimerRef.current)
-    }
-
-    setProjectRailSnapWidth(true)
-    projectRailSnapWidthTimerRef.current = window.setTimeout(() => {
-      projectRailSnapWidthTimerRef.current = null
-      setProjectRailSnapWidth(false)
-    }, SIDEBAR_WIDTH_DURATION_MS + 40)
-  }, [])
-  const restoreProjectRailForRightSidebarClose = useCallback(() => {
-    if (projectRailViewAutoCollapseActive) {
-      return
-    }
-
-    const shouldRestoreSidebar =
-      shouldRestoreSidebarFromRightSidebarRef.current ||
-      shouldRestoreSidebarFromAutoCollapseRef.current
-    shouldRestoreSidebarFromRightSidebarRef.current = false
-    shouldRestoreSidebarFromAutoCollapseRef.current = false
-
-    if (shouldRestoreSidebar && sidebarCollapsed) {
-      snapProjectRailWidthForRightSidebar()
-      setSidebarCollapsed(false)
-    }
-  }, [projectRailViewAutoCollapseActive, sidebarCollapsed, snapProjectRailWidthForRightSidebar])
-  const toggleSidebarCollapsed = useCallback(() => {
-    setSidebarCollapsed((current) => {
-      if (nonFloatingRightSidebarOpen) {
-        shouldRestoreSidebarFromRightSidebarRef.current = false
+  const editorAgentActivities = useMemo(
+    () =>
+      buildEditorAgentActivities(
+        agentWorkspacePanes.map((pane) => ({
+          paneId: pane.paneId,
+          sessionTitle: pane.agent.project.selectedAgentSession?.title ?? null,
+          runtimeStreamItems: pane.agent.runtimeStreamItems ?? [],
+        })),
+      ),
+    [agentWorkspacePanes],
+  )
+  const agentDefaultModels = useMemo(() => {
+    const defaults: Record<string, AgentDefaultModelDto | null> = {}
+    for (const agent of workflowAgentInspector.agents) {
+      if (agent.ref.kind === 'built_in') {
+        defaults[buildComposerAgentSelectionKey(agent.ref.runtimeAgentId, null)] =
+          agent.defaultModel ?? null
+      } else {
+        defaults[
+          buildComposerAgentSelectionKey(
+            runtimeAgentIdForCustomBaseCapability(agent.baseCapabilityProfile),
+            agent.ref.definitionId,
+          )
+        ] = agent.defaultModel ?? null
       }
-      return !current
-    })
-  }, [nonFloatingRightSidebarOpen])
+    }
+    for (const definition of customAgentDefinitions) {
+      defaults[
+        buildComposerAgentSelectionKey(
+          runtimeAgentIdForCustomBaseCapability(definition.baseCapabilityProfile),
+          definition.definitionId,
+        )
+      ] = definition.defaultModel ?? null
+    }
+    return defaults
+  }, [customAgentDefinitions, workflowAgentInspector.agents])
+  const refreshWorkflowDefinitions = useCallback(async () => {
+    if (!activeProjectId || !resolvedAdapter.listWorkflowDefinitions) {
+      setWorkflowDefinitions([])
+      setWorkflowDefinitionsStatus('idle')
+      setWorkflowDefinitionsError(null)
+      return
+    }
+    setWorkflowDefinitionsStatus('loading')
+    setWorkflowDefinitionsError(null)
+    try {
+      const response = await resolvedAdapter.listWorkflowDefinitions({ projectId: activeProjectId })
+      setWorkflowDefinitions(response.definitions)
+      setWorkflowDefinitionsStatus('ready')
+    } catch (error) {
+      setWorkflowDefinitionsError(error instanceof Error ? error : new Error(String(error)))
+      setWorkflowDefinitionsStatus('error')
+    }
+  }, [activeProjectId, resolvedAdapter])
+
+  const refreshWorkflowRuns = useCallback(async () => {
+    if (!activeProjectId || !resolvedAdapter.listWorkflowRuns) {
+      setWorkflowRuns([])
+      setWorkflowRunsStatus('idle')
+      return
+    }
+    setWorkflowRunsStatus('loading')
+    try {
+      const response = await resolvedAdapter.listWorkflowRuns({ projectId: activeProjectId })
+      setWorkflowRuns(response.runs)
+      setWorkflowRunsStatus('ready')
+      setSelectedWorkflowRun((current) =>
+        current ? response.runs.find((run) => run.id === current.id) ?? current : current,
+      )
+    } catch {
+      setWorkflowRunsStatus('error')
+    }
+  }, [activeProjectId, resolvedAdapter])
+
   useEffect(() => {
+    setSelectedWorkflowDefinition(null)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(false)
+    setSelectedWorkflowTemplatePreviewId(null)
+    void refreshWorkflowDefinitions()
+    void refreshWorkflowRuns()
+  }, [activeProjectId, refreshWorkflowDefinitions, refreshWorkflowRuns])
+  const shouldRestoreExplorerFromAutoCollapseRef = useRef(false)
+  const previousBrowserOpenRef = useRef<boolean>(browserOpen)
+
+  useEffect(() => {
+    let cancelled = false
+    void readToolCallGroupingPreference(resolvedAdapter)
+      .then((preference) => {
+        if (cancelled) return
+        setToolCallGroupingPreference(preference)
+      })
+      .catch(() => undefined)
+
     return () => {
-      if (projectRailSnapWidthTimerRef.current !== null) {
-        window.clearTimeout(projectRailSnapWidthTimerRef.current)
-      }
+      cancelled = true
     }
-  }, [])
+  }, [resolvedAdapter])
+
+  const handleToolCallGroupingPreferenceChange = useCallback(
+    async (preference: ToolCallGroupingPreference) => {
+      const previousPreference = toolCallGroupingPreference
+      setToolCallGroupingPreference(preference)
+      try {
+        await persistToolCallGroupingPreference(resolvedAdapter, preference)
+      } catch (error) {
+        setToolCallGroupingPreference(previousPreference)
+        writeStoredToolCallGroupingPreference(previousPreference)
+        throw error
+      }
+    },
+    [resolvedAdapter, toolCallGroupingPreference],
+  )
 
   useEffect(() => {
     setAgentComposerControls(null)
@@ -1138,7 +1830,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
 
   const toggleBrowser = useCallback(() => {
     if (browserOpen) {
-      restoreProjectRailForRightSidebarClose()
       setBrowserOpen(false)
       return
     }
@@ -1147,12 +1838,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setVcsOpen(false)
     setWorkflowsOpen(false)
     setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(false)
     setBrowserOpen(true)
-  }, [browserOpen, restoreProjectRailForRightSidebarClose])
+  }, [browserOpen])
 
   const toggleIos = useCallback(() => {
     if (iosOpen) {
-      restoreProjectRailForRightSidebarClose()
       setIosOpen(false)
       return
     }
@@ -1161,12 +1853,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setVcsOpen(false)
     setWorkflowsOpen(false)
     setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(false)
     setIosOpen(true)
-  }, [iosOpen, restoreProjectRailForRightSidebarClose])
+  }, [iosOpen])
 
   const toggleSolana = useCallback(() => {
     if (solanaOpen) {
-      restoreProjectRailForRightSidebarClose()
       setSolanaOpen(false)
       return
     }
@@ -1175,12 +1868,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setVcsOpen(false)
     setWorkflowsOpen(false)
     setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(false)
     setSolanaOpen(true)
-  }, [restoreProjectRailForRightSidebarClose, solanaOpen])
+  }, [solanaOpen])
 
   const toggleVcs = useCallback(() => {
     if (vcsOpen) {
-      restoreProjectRailForRightSidebarClose()
       setVcsOpen(false)
       return
     }
@@ -1189,12 +1883,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSolanaOpen(false)
     setWorkflowsOpen(false)
     setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(false)
     setVcsOpen(true)
-  }, [restoreProjectRailForRightSidebarClose, vcsOpen])
+  }, [vcsOpen])
 
   const toggleWorkflows = useCallback(() => {
     if (workflowsOpen) {
-      restoreProjectRailForRightSidebarClose()
       setWorkflowsOpen(false)
       return
     }
@@ -1203,13 +1898,266 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSolanaOpen(false)
     setVcsOpen(false)
     setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(false)
     setWorkflowsOpen(true)
-  }, [restoreProjectRailForRightSidebarClose, workflowsOpen])
+  }, [workflowsOpen])
 
   const toggleAgentDock = useCallback(() => {
     if (agentDockOpen) {
-      restoreProjectRailForRightSidebarClose()
       setAgentDockOpen(false)
+      return
+    }
+    if (activeView === 'phases' && activeProject?.selectedAgentSessionId) {
+      setPendingInitialRuntimeAgent({
+        agentSessionId: activeProject.selectedAgentSessionId,
+        runtimeAgentId: 'agent_create',
+        agentDefinitionId: null,
+      })
+    }
+    setBrowserOpen(false)
+    setIosOpen(false)
+    setSolanaOpen(false)
+    setVcsOpen(false)
+    setWorkflowsOpen(false)
+    setUsageOpen(false)
+    setTerminalOpen(false)
+    setComputerUseOpen(false)
+    setAgentDockOpen(true)
+  }, [activeProject?.selectedAgentSessionId, activeView, agentDockOpen])
+
+  const loadComputerUseProject = useCallback(async (): Promise<ComputerUseLoadResult> => {
+    await resolvedAdapter.ensureGlobalComputerUseSession?.()
+
+    const bundle = resolvedAdapter.getProjectLoadBundle
+      ? await resolvedAdapter.getProjectLoadBundle({
+          projectId: GLOBAL_COMPUTER_USE_PROJECT_ID,
+          includeNotificationRoutes: false,
+        })
+      : null
+    const snapshot = bundle
+      ? bundle.projectSnapshot
+      : await resolvedAdapter.getProjectSnapshot(GLOBAL_COMPUTER_USE_PROJECT_ID)
+    const runtimeSession = bundle?.runtimeSession
+      ? mapRuntimeSession(bundle.runtimeSession)
+      : await resolvedAdapter
+          .getRuntimeSession(GLOBAL_COMPUTER_USE_PROJECT_ID)
+          .then(mapRuntimeSession)
+          .catch(() => null)
+    const runtimeRun = bundle?.runtimeRun
+      ? mapRuntimeRun(bundle.runtimeRun)
+      : await resolvedAdapter
+          .getRuntimeRun(GLOBAL_COMPUTER_USE_PROJECT_ID, GLOBAL_COMPUTER_USE_AGENT_SESSION_ID)
+          .then((run) => (run ? mapRuntimeRun(run) : null))
+          .catch(() => null)
+    const project = applyRuntimeRun(
+      applyRuntimeSession(
+        mapProjectSnapshot(snapshot, {
+          notificationDispatches: bundle?.notificationDispatches ?? [],
+        }),
+        runtimeSession,
+      ),
+      runtimeRun,
+    )
+
+    setComputerUseProject(project)
+    setComputerUseRuntimeSession(runtimeSession)
+    setComputerUseRuntimeRun(runtimeRun)
+    return { project, runtimeSession, runtimeRun }
+  }, [resolvedAdapter])
+
+  const refreshComputerUseRuntimeMetadata = useCallback(async () => {
+    const [runtimeSession, runtimeRun] = await Promise.all([
+      resolvedAdapter
+        .getRuntimeSession(GLOBAL_COMPUTER_USE_PROJECT_ID)
+        .then(mapRuntimeSession)
+        .catch(() => null),
+      resolvedAdapter
+        .getRuntimeRun(GLOBAL_COMPUTER_USE_PROJECT_ID, GLOBAL_COMPUTER_USE_AGENT_SESSION_ID)
+        .then((run) => (run ? mapRuntimeRun(run) : null))
+        .catch(() => null),
+    ])
+    setComputerUseRuntimeSession(runtimeSession)
+    setComputerUseRuntimeRun(runtimeRun)
+    setComputerUseProject((current) =>
+      current ? applyRuntimeRun(applyRuntimeSession(current, runtimeSession), runtimeRun) : current,
+    )
+    return { runtimeSession, runtimeRun }
+  }, [resolvedAdapter])
+
+  const scheduleComputerUseRuntimeMetadataRefresh = useCallback(
+    (_projectId: string, _source: RuntimeMetadataRefreshSource) => {
+      if (computerUseRuntimeMetadataRefreshTimeoutRef.current) {
+        window.clearTimeout(computerUseRuntimeMetadataRefreshTimeoutRef.current)
+      }
+      computerUseRuntimeMetadataRefreshTimeoutRef.current = window.setTimeout(() => {
+        computerUseRuntimeMetadataRefreshTimeoutRef.current = null
+        void refreshComputerUseRuntimeMetadata()
+      }, 24)
+    },
+    [refreshComputerUseRuntimeMetadata],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (computerUseRuntimeMetadataRefreshTimeoutRef.current) {
+        window.clearTimeout(computerUseRuntimeMetadataRefreshTimeoutRef.current)
+        computerUseRuntimeMetadataRefreshTimeoutRef.current = null
+      }
+    }
+  }, [])
+
+  const updateComputerUseRuntimeStream = useCallback(
+    (
+      projectId: string,
+      agentSessionId: string,
+      updater: (current: RuntimeStreamView | null) => RuntimeStreamView | null,
+    ) => {
+      highChurnStore.setRuntimeStreams((currentStreams) => {
+        const sessionKey = createRuntimeStreamStoreKey(projectId, agentSessionId)
+        const currentStream = currentStreams[sessionKey] ?? currentStreams[projectId] ?? null
+        const nextStream = updater(currentStream)
+        if (!nextStream) {
+          return removeRuntimeStreamForSession(currentStreams, projectId, agentSessionId)
+        }
+        return {
+          ...currentStreams,
+          [sessionKey]: nextStream,
+          [projectId]: nextStream,
+        }
+      })
+    },
+    [highChurnStore],
+  )
+
+  useEffect(() => {
+    if (!computerUseOpen || !computerUseRuntimeSession || !computerUseRuntimeRun?.runId) {
+      return
+    }
+
+    return attachRuntimeStreamSubscription({
+      projectId: GLOBAL_COMPUTER_USE_PROJECT_ID,
+      agentSessionId: GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
+      runtimeSession: computerUseRuntimeSession,
+      runId: computerUseRuntimeRun.runId,
+      adapter: resolvedAdapter,
+      runtimeActionRefreshKeysRef: computerUseRuntimeActionRefreshKeysRef,
+      updateRuntimeStream: updateComputerUseRuntimeStream,
+      scheduleRuntimeMetadataRefresh: scheduleComputerUseRuntimeMetadataRefresh,
+    })
+  }, [
+    computerUseOpen,
+    computerUseRuntimeRun?.runId,
+    computerUseRuntimeSession,
+    resolvedAdapter,
+    scheduleComputerUseRuntimeMetadataRefresh,
+    updateComputerUseRuntimeStream,
+  ])
+
+  const computerUseProjectForView = useMemo(
+    () =>
+      computerUseProject
+        ? applyRuntimeRun(
+            applyRuntimeSession(computerUseProject, computerUseRuntimeSession),
+            computerUseRuntimeRun,
+          )
+        : null,
+    [computerUseProject, computerUseRuntimeRun, computerUseRuntimeSession],
+  )
+
+  const computerUseAgentView = useMemo(
+    () =>
+      buildAgentView({
+        project: computerUseProjectForView,
+        activePhase: null,
+        repositoryStatus: null,
+        fallbackRuntimeAgentId: 'computer_use',
+        providerCredentials,
+        runtimeSession: computerUseRuntimeSession,
+        providerModelCatalogs,
+        providerModelCatalogLoadStatuses,
+        providerModelCatalogLoadErrors,
+        runtimeRun: computerUseRuntimeRun,
+        autonomousRun: null,
+        runtimeErrorMessage: null,
+        runtimeRunErrorMessage: computerUseRuntimeRunActionError?.message ?? null,
+        autonomousRunErrorMessage: null,
+        runtimeStream: null,
+        notificationRoutes: [],
+        notificationRouteLoadStatus: 'ready',
+        notificationRouteError: null,
+        notificationSyncSummary: null,
+        notificationSyncError: null,
+        blockedNotificationSyncPollTarget: null,
+        notificationRouteMutationStatus: 'idle',
+        pendingNotificationRouteId: null,
+        notificationRouteMutationError: null,
+        previousTrustSnapshot: null,
+        operatorActionStatus: 'idle',
+        pendingOperatorActionId: null,
+        operatorActionError: null,
+        autonomousRunActionStatus: 'idle',
+        pendingAutonomousRunAction: null,
+        autonomousRunActionError: null,
+        runtimeRunActionStatus: computerUseRuntimeRunActionStatus,
+        pendingRuntimeRunAction: computerUsePendingRuntimeRunAction,
+        runtimeRunActionError: computerUseRuntimeRunActionError,
+      }).view,
+    [
+      computerUsePendingRuntimeRunAction,
+      computerUseProjectForView,
+      computerUseRuntimeRun,
+      computerUseRuntimeRunActionError,
+      computerUseRuntimeRunActionStatus,
+      computerUseRuntimeSession,
+      providerCredentials,
+      providerModelCatalogLoadErrors,
+      providerModelCatalogLoadStatuses,
+      providerModelCatalogs,
+    ],
+  )
+
+  const computerUseRunning = Boolean(
+    computerUseRuntimeRun?.isActive && !computerUseRuntimeRun.isTerminal,
+  )
+
+  const closeComputerUse = useCallback(() => {
+    setComputerUseOpen(false)
+  }, [])
+
+  const toggleComputerUse = useCallback(() => {
+    if (computerUseOpen) {
+      closeComputerUse()
+      return
+    }
+
+    preloadSurfaceChunk('agent-dock')
+    setSelectedWorkflowDefinition(null)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(false)
+    setSelectedWorkflowTemplatePreviewId(null)
+    setBrowserOpen(false)
+    setIosOpen(false)
+    setSolanaOpen(false)
+    setVcsOpen(false)
+    setWorkflowsOpen(false)
+    setUsageOpen(false)
+    setTerminalOpen(false)
+    setAgentDockOpen(false)
+    setIsCreatingAgentSession(true)
+    void (async () => {
+      await loadComputerUseProject()
+      setComputerUseOpen(true)
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        setIsCreatingAgentSession(false)
+      })
+  }, [closeComputerUse, computerUseOpen, loadComputerUseProject])
+
+  const toggleTerminal = useCallback(() => {
+    if (terminalOpen) {
+      setTerminalOpen(false)
       return
     }
     setBrowserOpen(false)
@@ -1218,13 +2166,316 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setVcsOpen(false)
     setWorkflowsOpen(false)
     setUsageOpen(false)
-    setAgentDockOpen(true)
-  }, [agentDockOpen, restoreProjectRailForRightSidebarClose])
+    setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(true)
+  }, [terminalOpen])
   useEffect(() => {
     if (activeView === 'agent' && agentDockOpen) {
       setAgentDockOpen(false)
     }
   }, [activeView, agentDockOpen])
+
+  // Imperative handle published by <TerminalSidebar>. We use it to spawn a
+  // tab and write the project's start_command when the user clicks Play.
+  const terminalSidebarHandleRef = useRef<TerminalSidebarHandle | null>(null)
+
+  // Stable array reference so the start-targets editor's sync effect doesn't
+  // clobber in-flight edits when App re-renders for unrelated reasons.
+  const activeProjectStartTargets = useMemo(
+    () => activeProject?.startTargets ?? [],
+    [activeProject?.startTargets],
+  )
+
+  const handleEditProjectStartTargets = useCallback(() => {
+    setStartTargetsDialogOpen(true)
+  }, [])
+
+  const revealTerminalSidebar = useCallback(() => {
+    setBrowserOpen(false)
+    setIosOpen(false)
+    setSolanaOpen(false)
+    setVcsOpen(false)
+    setWorkflowsOpen(false)
+    setUsageOpen(false)
+    setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(true)
+  }, [])
+
+  const waitForTerminalSidebarHandle = useCallback(async () => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (terminalSidebarHandleRef.current) return terminalSidebarHandleRef.current
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+    }
+    return terminalSidebarHandleRef.current
+  }, [])
+
+  const handleRunTarget = useCallback(
+    async (targetId: string) => {
+      if (!activeProjectId) return
+      const target = activeProjectStartTargets.find((entry) => entry.id === targetId)
+      if (!target) {
+        setStartTargetsDialogOpen(true)
+        return
+      }
+      revealTerminalSidebar()
+      const handle = await waitForTerminalSidebarHandle()
+      if (!handle) return
+      await handle.spawnTabWithCommand(target.command)
+    },
+    [activeProjectId, activeProjectStartTargets, revealTerminalSidebar, waitForTerminalSidebarHandle],
+  )
+
+  const handleRunAllTargets = useCallback(async () => {
+    if (!activeProjectId) return
+    const targets = activeProjectStartTargets
+    if (targets.length === 0) {
+      setStartTargetsDialogOpen(true)
+      return
+    }
+    revealTerminalSidebar()
+    const handle = await waitForTerminalSidebarHandle()
+    if (!handle) return
+    for (const target of targets) {
+      await handle.spawnTabWithCommand(target.command)
+    }
+  }, [activeProjectId, activeProjectStartTargets, revealTerminalSidebar, waitForTerminalSidebarHandle])
+
+  const handleRunEditorTerminalTask = useCallback(
+    async (request: EditorTerminalTaskRequest) => {
+      if (!activeProjectId) return null
+      revealTerminalSidebar()
+      const handle = await waitForTerminalSidebarHandle()
+      if (!handle) return null
+      return handle.spawnTabWithCommand(request.command, {
+        label: request.label,
+        exitWhenDone: request.exitWhenDone ?? true,
+        onData: request.onData,
+        onExit: request.onExit,
+      })
+    },
+    [activeProjectId, revealTerminalSidebar, waitForTerminalSidebarHandle],
+  )
+
+  const handleUpdateProjectStartTargets = useCallback(
+    async (targets: { id?: string | null; name: string; command: string }[]) => {
+      if (!activeProjectId) return
+      await resolvedAdapter.updateProjectStartTargets?.({
+        projectId: activeProjectId,
+        targets,
+      })
+      void prefetchProject?.(activeProjectId)
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleSuggestProjectStartTargets = useCallback(
+    async (request: {
+      modelId: string
+      providerProfileId: string | null
+      runtimeAgentId: RuntimeAgentIdDto | null
+      thinkingEffort:
+        | 'none'
+        | 'minimal'
+        | 'low'
+        | 'medium'
+        | 'high'
+        | 'x_high'
+        | null
+    }) => {
+      if (!activeProjectId) {
+        throw new Error('No active project.')
+      }
+      if (!resolvedAdapter.suggestProjectStartTargets) {
+        throw new Error('AI suggest is unavailable.')
+      }
+      const result = await resolvedAdapter.suggestProjectStartTargets({
+        projectId: activeProjectId,
+        modelId: request.modelId,
+        providerProfileId: request.providerProfileId,
+        runtimeAgentId: request.runtimeAgentId,
+        thinkingEffort: request.thinkingEffort,
+      })
+      return { targets: result.targets }
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  // Build the suggest request from the best available source. Priority:
+  //   1. Live composer controls (set after the agent pane runs at least once
+  //      this session).
+  //   2. localStorage composer settings from a previous session (key
+  //      `xero.agent.composer.settings.v1` — written by
+  //      use-agent-runtime-controller after every send).
+  //   3. Empty fallback — the Rust resolver picks the active provider
+  //      profile's default model when modelId is empty.
+  const resolveProjectRunnerSuggestRequest = useCallback(() => {
+    const controls = agentComposerControls
+    if (controls && controls.modelId) {
+      return {
+        modelId: controls.modelId,
+        providerProfileId: controls.providerProfileId ?? null,
+        runtimeAgentId: controls.runtimeAgentId,
+        thinkingEffort: controls.thinkingEffort ?? null,
+      }
+    }
+    // Fall back to persisted composer settings from prior sessions. Note
+    // that `modelSelectionKey` is `${providerId}:${modelId}` where
+    // `providerId` is the runtime provider *type* (e.g. `openai_codex`),
+    // NOT the user's configured `providerProfileId`. We extract only the
+    // model id from it and let the Rust resolver use the active provider
+    // profile.
+    let storedModelId: string | null = null
+    let storedRuntimeAgentId:
+      | RuntimeAgentIdDto
+      | null = null
+    let storedThinkingEffort:
+      | 'none'
+      | 'minimal'
+      | 'low'
+      | 'medium'
+      | 'high'
+      | 'x_high'
+      | null = null
+    try {
+      if (typeof window !== 'undefined') {
+        const raw = window.localStorage?.getItem?.('xero.agent.composer.settings.v1')
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>
+          const selectionKey =
+            typeof parsed.modelSelectionKey === 'string' ? parsed.modelSelectionKey.trim() : ''
+          if (selectionKey) {
+            const sep = selectionKey.indexOf(':')
+            storedModelId = sep > 0 ? selectionKey.slice(sep + 1) || null : selectionKey
+          }
+          if (typeof parsed.runtimeAgentId === 'string') {
+            const id = parsed.runtimeAgentId
+            if (
+              id === 'ask' ||
+              id === 'generalist' ||
+              id === 'plan' ||
+              id === 'engineer' ||
+              id === 'debug' ||
+              id === 'crawl' ||
+              id === 'agent_create'
+            ) {
+              storedRuntimeAgentId = id
+            }
+          }
+          if (typeof parsed.thinkingEffort === 'string') {
+            const eff = parsed.thinkingEffort
+            if (
+              eff === 'none' ||
+              eff === 'minimal' ||
+              eff === 'low' ||
+              eff === 'medium' ||
+              eff === 'high' ||
+              eff === 'x_high'
+            ) {
+              storedThinkingEffort = eff
+            }
+          }
+        }
+      }
+    } catch {
+      /* localStorage unavailable — fall through to empty defaults. */
+    }
+    return {
+      modelId: storedModelId ?? '',
+      providerProfileId: null,
+      runtimeAgentId: storedRuntimeAgentId,
+      thinkingEffort: storedThinkingEffort,
+    }
+  }, [agentComposerControls])
+
+  // ── Properties-panel ↔ sidebar coordination ──────────────────────────────
+  // The inline node properties / details panel sits over the canvas on the
+  // left. When it appears we collapse whichever right-side sidebar happens to
+  // be open (sidebars are mutually exclusive, so at most one) so the panel
+  // has a clean stage. We remember the collapsed one and reopen it when the
+  // panel goes away — unless the user has since opened a different sidebar
+  // themselves, in which case we leave their choice alone.
+  const [phaseNodePanelOpen, setPhaseNodePanelOpen] = useState(false)
+  const handlePhaseSelectedNodeChange = useCallback((hasSelection: boolean) => {
+    setPhaseNodePanelOpen(hasSelection)
+  }, [])
+  const phaseSidebarRestoreKeyRef = useRef<
+    'browser' | 'ios' | 'solana' | 'vcs' | 'workflows' | 'usage' | 'agentDock' | null
+  >(null)
+  const phaseSidebarStateRef = useRef({
+    browserOpen,
+    iosOpen,
+    solanaOpen,
+    vcsOpen,
+    workflowsOpen,
+    usageOpen,
+    agentDockOpen,
+  })
+  useEffect(() => {
+    phaseSidebarStateRef.current = {
+      browserOpen,
+      iosOpen,
+      solanaOpen,
+      vcsOpen,
+      workflowsOpen,
+      usageOpen,
+      agentDockOpen,
+    }
+  }, [browserOpen, iosOpen, solanaOpen, vcsOpen, workflowsOpen, usageOpen, agentDockOpen])
+  useEffect(() => {
+    if (phaseNodePanelOpen) {
+      // Don't double-collapse if we already stashed a sidebar for this open.
+      if (phaseSidebarRestoreKeyRef.current !== null) return
+      const snapshot = phaseSidebarStateRef.current
+      if (snapshot.browserOpen) {
+        phaseSidebarRestoreKeyRef.current = 'browser'
+        setBrowserOpen(false)
+      } else if (snapshot.iosOpen) {
+        phaseSidebarRestoreKeyRef.current = 'ios'
+        setIosOpen(false)
+      } else if (snapshot.solanaOpen) {
+        phaseSidebarRestoreKeyRef.current = 'solana'
+        setSolanaOpen(false)
+      } else if (snapshot.vcsOpen) {
+        phaseSidebarRestoreKeyRef.current = 'vcs'
+        setVcsOpen(false)
+      } else if (snapshot.workflowsOpen) {
+        phaseSidebarRestoreKeyRef.current = 'workflows'
+        setWorkflowsOpen(false)
+      } else if (snapshot.usageOpen) {
+        phaseSidebarRestoreKeyRef.current = 'usage'
+        setUsageOpen(false)
+      } else if (snapshot.agentDockOpen) {
+        phaseSidebarRestoreKeyRef.current = 'agentDock'
+        setAgentDockOpen(false)
+      }
+      return
+    }
+    const key = phaseSidebarRestoreKeyRef.current
+    phaseSidebarRestoreKeyRef.current = null
+    if (!key) return
+    const snapshot = phaseSidebarStateRef.current
+    const anySidebarOpen =
+      snapshot.browserOpen ||
+      snapshot.iosOpen ||
+      snapshot.solanaOpen ||
+      snapshot.vcsOpen ||
+      snapshot.workflowsOpen ||
+      snapshot.usageOpen ||
+      snapshot.agentDockOpen
+    // If the user has opened a different sidebar in the meantime, respect
+    // that and don't reintroduce the auto-collapsed one (would break the
+    // single-open invariant the toggle handlers maintain).
+    if (anySidebarOpen) return
+    if (key === 'browser') setBrowserOpen(true)
+    else if (key === 'ios') setIosOpen(true)
+    else if (key === 'solana') setSolanaOpen(true)
+    else if (key === 'vcs') setVcsOpen(true)
+    else if (key === 'workflows') setWorkflowsOpen(true)
+    else if (key === 'usage') setUsageOpen(true)
+    else if (key === 'agentDock') setAgentDockOpen(true)
+  }, [phaseNodePanelOpen])
   const [explorerMode, setExplorerMode] = useState<'pinned' | 'collapsed'>(() => {
     if (typeof window === 'undefined') return 'pinned'
     try {
@@ -1289,6 +2540,23 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [platformOverride, setPlatformOverride] = useState<PlatformVariant | null>(null)
   const [onboardingDismissed, setOnboardingDismissed] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [launchMode, setLaunchMode] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isTauri()) return
+    let cancelled = false
+    void invoke<string>('get_launch_mode')
+      .then((value) => {
+        if (!cancelled && typeof value === 'string' && value.length > 0) {
+          setLaunchMode(value)
+        }
+      })
+      .catch(() => {
+        // Command unavailable in older builds — leave launchMode null.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   useEffect(() => {
     const wasBrowserOpen = previousBrowserOpenRef.current
 
@@ -1339,6 +2607,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           totalCostMicros: footerSpend.totalCostMicros,
         }
       : null,
+    notifications: activeProjectUnreadCompletedSessionCount,
     spendActive: usageOpen,
     onSpendClick: activeProjectId
       ? () => {
@@ -1351,68 +2620,76 @@ export function XeroApp({ adapter }: XeroAppProps) {
     () => getVcsCommitMessageModel(agentView, agentComposerControls),
     [agentComposerControls, agentView],
   )
-
-  useEffect(() => {
-    const previousView = previousViewRef.current
-    const wasAutoCollapseView = previousView === 'execution' || previousView === 'agent'
-
-    if (projectRailViewAutoCollapseActive && !wasAutoCollapseView) {
-      shouldRestoreSidebarFromAutoCollapseRef.current = !sidebarCollapsed
-      if (!sidebarCollapsed) {
-        setSidebarCollapsed(true)
-      }
+  const memoryReviewAdapter = useMemo(() => {
+    if (
+      !resolvedAdapter.getSessionMemoryReviewQueue ||
+      !resolvedAdapter.updateSessionMemory ||
+      !resolvedAdapter.correctSessionMemory ||
+      !resolvedAdapter.deleteSessionMemory
+    ) {
+      return null
     }
-
-    if (!projectRailViewAutoCollapseActive && wasAutoCollapseView && !nonFloatingRightSidebarOpen) {
-      const shouldRestoreSidebar =
-        shouldRestoreSidebarFromAutoCollapseRef.current ||
-        shouldRestoreSidebarFromRightSidebarRef.current
-      shouldRestoreSidebarFromAutoCollapseRef.current = false
-      shouldRestoreSidebarFromRightSidebarRef.current = false
-      if (shouldRestoreSidebar && sidebarCollapsed) {
-        setSidebarCollapsed(false)
-      }
+    return {
+      getQueue: resolvedAdapter.getSessionMemoryReviewQueue.bind(resolvedAdapter),
+      updateMemory: resolvedAdapter.updateSessionMemory.bind(resolvedAdapter),
+      correctMemory: resolvedAdapter.correctSessionMemory.bind(resolvedAdapter),
+      deleteMemory: resolvedAdapter.deleteSessionMemory.bind(resolvedAdapter),
     }
-
-    if (!projectRailViewAutoCollapseActive && !wasAutoCollapseView) {
-      shouldRestoreSidebarFromAutoCollapseRef.current = false
+  }, [resolvedAdapter])
+  const projectStateAdapter = useMemo(() => {
+    if (
+      !resolvedAdapter.listProjectStateBackups ||
+      !resolvedAdapter.createProjectStateBackup ||
+      !resolvedAdapter.restoreProjectStateBackup ||
+      !resolvedAdapter.repairProjectState
+    ) {
+      return null
     }
-
-    previousViewRef.current = activeView
-  }, [activeView, nonFloatingRightSidebarOpen, projectRailViewAutoCollapseActive, sidebarCollapsed])
-
-  useEffect(() => {
-    const wasOpen = previousNonFloatingRightSidebarOpenRef.current
-
-    if (nonFloatingRightSidebarOpen && !wasOpen && !sidebarCollapsed) {
-      shouldRestoreSidebarFromRightSidebarRef.current = !sidebarCollapsed
-      snapProjectRailWidthForRightSidebar()
-      setSidebarCollapsed(true)
+    return {
+      listBackups: resolvedAdapter.listProjectStateBackups.bind(resolvedAdapter),
+      createBackup: resolvedAdapter.createProjectStateBackup.bind(resolvedAdapter),
+      restoreBackup: resolvedAdapter.restoreProjectStateBackup.bind(resolvedAdapter),
+      repairProjectState: resolvedAdapter.repairProjectState.bind(resolvedAdapter),
     }
-
-    if (!nonFloatingRightSidebarOpen && wasOpen && !projectRailViewAutoCollapseActive) {
-      const shouldRestoreSidebar =
-        shouldRestoreSidebarFromRightSidebarRef.current ||
-        shouldRestoreSidebarFromAutoCollapseRef.current
-      shouldRestoreSidebarFromRightSidebarRef.current = false
-      shouldRestoreSidebarFromAutoCollapseRef.current = false
-      if (shouldRestoreSidebar && sidebarCollapsed) {
-        snapProjectRailWidthForRightSidebar()
-        setSidebarCollapsed(false)
-      }
+  }, [resolvedAdapter])
+  const dangerAdapter = useMemo(() => {
+    if (!resolvedAdapter.wipeProjectData || !resolvedAdapter.wipeAllXeroData) {
+      return null
     }
-
-    if (!nonFloatingRightSidebarOpen && !wasOpen && !projectRailViewAutoCollapseActive) {
-      shouldRestoreSidebarFromRightSidebarRef.current = false
+    const wipeProject = resolvedAdapter.wipeProjectData.bind(resolvedAdapter)
+    const wipeAll = resolvedAdapter.wipeAllXeroData.bind(resolvedAdapter)
+    return {
+      wipeProject: async (projectId: string) => {
+        const response = await wipeProject({ projectId })
+        void retry()
+        return response
+      },
+      wipeAll: async () => {
+        const response = await wipeAll()
+        void retry()
+        return response
+      },
     }
-
-    previousNonFloatingRightSidebarOpenRef.current = nonFloatingRightSidebarOpen
-  }, [
-    nonFloatingRightSidebarOpen,
-    projectRailViewAutoCollapseActive,
-    sidebarCollapsed,
-    snapProjectRailWidthForRightSidebar,
-  ])
+  }, [resolvedAdapter, retry])
+  const workflowAgentCreateActive =
+    activeView === 'phases' && agentAuthoringSession?.mode === 'create'
+  const agentCreateCanvasIncluded =
+    activeView === 'phases' &&
+    (agentAuthoringSession?.mode === 'create' || selectedWorkflowDefinition !== null)
+  const pendingAgentDockSelection =
+    workflowAgentCreateActive && isCreatingAgentSession
+      ? ({ runtimeAgentId: 'agent_create', agentDefinitionId: null } satisfies RuntimeAgentSelection)
+      : pendingInitialRuntimeAgent &&
+          pendingInitialRuntimeAgent.agentSessionId === activeProject?.selectedAgentSessionId
+        ? {
+            runtimeAgentId: pendingInitialRuntimeAgent.runtimeAgentId,
+            agentDefinitionId: pendingInitialRuntimeAgent.agentDefinitionId,
+          }
+        : null
+  const pendingAgentDockRuntimeAgentId: RuntimeAgentIdDto | null =
+    pendingAgentDockSelection?.runtimeAgentId ?? null
+  const pendingAgentDockAgentDefinitionId: string | null =
+    pendingAgentDockSelection?.agentDefinitionId ?? null
 
   useEffect(() => {
     if (!onboardingDismissed && !isLoading && projects.length === 0) {
@@ -1421,6 +2698,29 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [isLoading, onboardingDismissed, projects.length])
 
   const selectedAgentSessionId = activeProject?.selectedAgentSessionId ?? null
+  const visibleAgentSessionIds = useMemo(() => {
+    if (activeView !== 'agent') {
+      return []
+    }
+
+    const paneSessionIds =
+      agentWorkspaceLayout?.paneSlots
+        .map((slot) => slot.agentSessionId)
+        .filter((agentSessionId): agentSessionId is string => Boolean(agentSessionId)) ?? []
+
+    return paneSessionIds.length > 0
+      ? Array.from(new Set(paneSessionIds))
+      : selectedAgentSessionId
+        ? [selectedAgentSessionId]
+        : []
+  }, [activeView, agentWorkspaceLayout, selectedAgentSessionId])
+  useEffect(() => {
+    if (visibleAgentSessionIds.length === 0) {
+      return
+    }
+
+    acknowledgeCompletedAgentSessions(visibleAgentSessionIds)
+  }, [acknowledgeCompletedAgentSessions, visibleAgentSessionIds])
   const resolvePaneAgentSessionId = useCallback(
     (paneId: string): string | null => {
       const slot = agentWorkspaceLayout?.paneSlots.find((candidate) => candidate.id === paneId)
@@ -1708,6 +3008,754 @@ export function XeroApp({ adapter }: XeroAppProps) {
     })
   }, [activeProjectId, createAgentSession])
 
+  const handleCreateAgent = useCallback(
+    () => {
+      if (!activeProjectId) return
+      preloadSurfaceChunk('agent-dock')
+      setSelectedWorkflowDefinition(null)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(false)
+      setSelectedWorkflowTemplatePreviewId(null)
+      setWorkflowsOpen(false)
+      setBrowserOpen(false)
+      setIosOpen(false)
+      setSolanaOpen(false)
+      setVcsOpen(false)
+      setUsageOpen(false)
+      setActiveView('phases')
+      setAgentAuthoringSession({ mode: 'create', initialDetail: null })
+      setAgentDockOpen(true)
+      setIsCreatingAgentSession(true)
+      void createAgentSession()
+        .then((updatedProject) => {
+          const newSessionId = updatedProject?.selectedAgentSessionId
+          if (newSessionId) {
+            setPendingInitialRuntimeAgent({
+              agentSessionId: newSessionId,
+              runtimeAgentId: 'agent_create',
+              agentDefinitionId: null,
+            })
+          }
+        })
+        .finally(() => {
+          setIsCreatingAgentSession(false)
+        })
+    },
+    [activeProjectId, createAgentSession],
+  )
+
+  const handleClearPendingInitialRuntimeAgent = useCallback(
+    (agentSessionId: string) => {
+      setPendingInitialRuntimeAgent((current) =>
+        current?.agentSessionId === agentSessionId ? null : current,
+      )
+    },
+    [],
+  )
+
+  // Lazy-load the baseline authoring catalog once a session opens. Skills can
+  // be expanded later by query-scoped online search from the picker.
+  useEffect(() => {
+    if (!agentAuthoringSession) return
+    if (!activeProjectId) return
+    if (agentAuthoringCatalog) return
+    let cancelled = false
+    void resolvedAdapter
+      .getAgentAuthoringCatalog({ projectId: activeProjectId })
+      .then((catalog) => {
+        if (cancelled) return
+        setAgentAuthoringCatalog(catalog)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        console.error('Failed to load agent authoring catalog', error)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentAuthoringSession, activeProjectId, agentAuthoringCatalog, resolvedAdapter])
+
+  // Lazy-load the tool-pack catalog the same way. The granular policy editor
+  // in the canvas properties panel consumes it for the pack picker and to
+  // expand `allowedToolPacks` entries into the tools they grant.
+  useEffect(() => {
+    if (!agentAuthoringSession) return
+    if (!activeProjectId) return
+    if (agentToolPackCatalog) return
+    if (!resolvedAdapter.getAgentToolPackCatalog) return
+    let cancelled = false
+    void resolvedAdapter
+      .getAgentToolPackCatalog({ projectId: activeProjectId })
+      .then((catalog) => {
+        if (cancelled) return
+        setAgentToolPackCatalog(catalog)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        console.error('Failed to load agent tool-pack catalog', error)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentAuthoringSession, activeProjectId, agentToolPackCatalog, resolvedAdapter])
+
+  const handleSearchAttachableSkills = useCallback(
+    async (params: {
+      query: string
+      offset: number
+      limit: number
+    }): Promise<SearchAgentAuthoringSkillsResponseDto> => {
+      const emptyResponse: SearchAgentAuthoringSkillsResponseDto = {
+        entries: [],
+        offset: params.offset,
+        limit: params.limit,
+        nextOffset: null,
+        hasMore: false,
+      }
+      if (!activeProjectId || !resolvedAdapter.searchAgentAuthoringSkills) return emptyResponse
+      return resolvedAdapter.searchAgentAuthoringSkills({
+        projectId: activeProjectId,
+        query: params.query,
+        offset: params.offset,
+        limit: params.limit,
+      })
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleResolveAttachableSkill = useCallback(
+    async (result: AgentAuthoringSkillSearchResultDto): Promise<AgentAuthoringAttachableSkillDto> => {
+      if (!activeProjectId || !resolvedAdapter.resolveAgentAuthoringSkill) {
+        throw new Error('Online skill resolution is unavailable.')
+      }
+      const skill = await resolvedAdapter.resolveAgentAuthoringSkill({
+        projectId: activeProjectId,
+        source: result.source,
+        skillId: result.skillId,
+      })
+      setAgentAuthoringCatalog((current) => {
+        if (!current) return current
+        const bySourceId = new Map<string, AgentAuthoringAttachableSkillDto>()
+        for (const skill of current.attachableSkills) {
+          bySourceId.set(skill.sourceId, skill)
+        }
+        bySourceId.set(skill.sourceId, skill)
+        return {
+          ...current,
+          attachableSkills: [...bySourceId.values()],
+        }
+      })
+      return skill
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleStartAgentAuthoringCreate = useCallback(() => {
+    setWorkflowsOpen(false)
+    setAgentDockOpen(false)
+    setActiveView('phases')
+    setAgentAuthoringSession({ mode: 'create', initialDetail: null })
+  }, [])
+
+  const handleStartWorkflowAgentCreate = useCallback(() => {
+    if (!activeProjectId) return
+    preloadSurfaceChunk('agent-dock')
+    const definition = instantiateBlankWorkflow({
+      projectId: activeProjectId,
+      name: 'New workflow',
+    })
+    setSelectedWorkflowDefinition(definition)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(true)
+    setSelectedWorkflowTemplatePreviewId(null)
+    setAgentAuthoringSession(null)
+    workflowAgentInspector.selectAgent(null)
+    setWorkflowsOpen(false)
+    setBrowserOpen(false)
+    setIosOpen(false)
+    setSolanaOpen(false)
+    setVcsOpen(false)
+    setUsageOpen(false)
+    setActiveView('phases')
+    setAgentDockOpen(true)
+    const selectAgentCreate = (agentSessionId: string) => {
+      setPendingInitialRuntimeAgent({
+        agentSessionId,
+        runtimeAgentId: 'agent_create',
+        agentDefinitionId: null,
+      })
+    }
+    if (activeProject?.selectedAgentSessionId) {
+      selectAgentCreate(activeProject.selectedAgentSessionId)
+      return
+    }
+    setIsCreatingAgentSession(true)
+    void createAgentSession()
+      .then((updatedProject) => {
+        const newSessionId = updatedProject?.selectedAgentSessionId
+        if (newSessionId) selectAgentCreate(newSessionId)
+      })
+      .finally(() => {
+        setIsCreatingAgentSession(false)
+      })
+  }, [
+    activeProject?.selectedAgentSessionId,
+    activeProjectId,
+    createAgentSession,
+    setActiveView,
+    workflowAgentInspector.selectAgent,
+  ])
+
+  const handleStartAgentAuthoringFromRef = useCallback(
+    async (mode: 'edit' | 'duplicate', ref: AgentRefDto) => {
+      if (!activeProjectId) return
+      setAgentAuthoringLoading(true)
+      try {
+        const detail = await resolvedAdapter.getWorkflowAgentDetail({
+          projectId: activeProjectId,
+          ref,
+        })
+        setWorkflowsOpen(false)
+        setAgentDockOpen(false)
+        setActiveView('phases')
+        setAgentAuthoringSession({ mode, initialDetail: detail })
+      } catch (error) {
+        console.error('Failed to load agent definition for authoring', error)
+      } finally {
+        setAgentAuthoringLoading(false)
+      }
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleCreateAgentFromTemplate = useCallback(
+    (ref: AgentRefDto) => {
+      void handleStartAgentAuthoringFromRef('duplicate', ref)
+    },
+    [handleStartAgentAuthoringFromRef],
+  )
+
+  const handleCloseAgentAuthoring = useCallback(() => {
+    setAgentAuthoringSession(null)
+  }, [])
+
+  const handleAgentAuthoringSubmit = useCallback(
+    async ({
+      snapshot,
+      mode,
+      definitionId,
+      dryRun,
+    }: {
+      snapshot: Record<string, unknown>
+      mode: 'create' | 'edit' | 'duplicate'
+      definitionId?: string
+      dryRun?: boolean
+    }) => {
+      if (!activeProjectId) {
+        throw new Error('Select a project before saving an agent definition.')
+      }
+      const definition = canonicalCustomAgentDefinitionSchema.parse(snapshot)
+      if (mode === 'edit' && definitionId) {
+        return resolvedAdapter.updateAgentDefinition({
+          projectId: activeProjectId,
+          definitionId,
+          definition,
+          dryRun: dryRun ?? false,
+        })
+      }
+      return resolvedAdapter.saveAgentDefinition({
+        projectId: activeProjectId,
+        definition,
+        dryRun: dryRun ?? false,
+      })
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleAgentAuthoringSaved = useCallback(() => {
+    refreshCustomAgentDefinitions()
+    void workflowAgentInspector.refreshAgents()
+  }, [refreshCustomAgentDefinitions, workflowAgentInspector.refreshAgents])
+
+  const handleClearWorkflowAgentSelection = useCallback(() => {
+    workflowAgentInspector.selectAgent(null)
+  }, [workflowAgentInspector.selectAgent])
+
+  const handleSelectWorkflowDefinition = useCallback(
+    async (workflowId: string) => {
+      if (!activeProjectId || !resolvedAdapter.getWorkflowDefinition) return
+      try {
+        const response = await resolvedAdapter.getWorkflowDefinition({
+          projectId: activeProjectId,
+          workflowId,
+        })
+        setSelectedWorkflowDefinition(response.definition)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        setAgentAuthoringSession(null)
+        setSelectedWorkflowRun((current) =>
+          current?.workflowId === workflowId ? current : workflowRuns.find((run) => run.workflowId === workflowId) ?? null,
+        )
+        workflowAgentInspector.selectAgent(null)
+        setActiveView('phases')
+      } catch (error) {
+        console.error('Failed to load workflow definition', error)
+      }
+    },
+    [activeProjectId, resolvedAdapter, setActiveView, workflowAgentInspector, workflowRuns],
+  )
+
+  const handleSelectWorkflowRun = useCallback(
+    async (runId: string) => {
+      if (!activeProjectId || !resolvedAdapter.getWorkflowRun) return
+      try {
+        const response = await resolvedAdapter.getWorkflowRun({ projectId: activeProjectId, runId })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        setAgentAuthoringSession(null)
+        workflowAgentInspector.selectAgent(null)
+        setActiveView('phases')
+      } catch (error) {
+        console.error('Failed to load workflow run', error)
+      }
+    },
+    [activeProjectId, resolvedAdapter, setActiveView, workflowAgentInspector],
+  )
+
+  const handleCreateWorkflow = useCallback(() => {
+    if (!activeProjectId) {
+      setWorkflowsOpen(true)
+      return
+    }
+    const definition = instantiateBlankWorkflow({
+      projectId: activeProjectId,
+      name: 'New workflow',
+    })
+    setSelectedWorkflowDefinition(definition)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(true)
+    setSelectedWorkflowTemplatePreviewId(null)
+    setAgentAuthoringSession(null)
+    workflowAgentInspector.selectAgent(null)
+    setWorkflowsOpen(false)
+    setActiveView('phases')
+  }, [
+    activeProjectId,
+    setActiveView,
+    workflowAgentInspector,
+  ])
+
+  const handleCreateWorkflowFromTemplate = useCallback(
+    async (templateId: WorkflowTemplateIdDto) => {
+      if (!activeProjectId) return
+      const definition = instantiateWorkflowTemplate({
+        projectId: activeProjectId,
+        templateId,
+        agents: workflowAgentInspector.agents,
+      })
+      setSelectedWorkflowDefinition(definition)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(true)
+      setSelectedWorkflowTemplatePreviewId(null)
+      setAgentAuthoringSession(null)
+      workflowAgentInspector.selectAgent(null)
+      setWorkflowsOpen(false)
+      setActiveView('phases')
+    },
+    [
+      activeProjectId,
+      setActiveView,
+      workflowAgentInspector,
+      workflowAgentInspector.agents,
+    ],
+  )
+
+  const handlePreviewWorkflowTemplate = useCallback(
+    (templateId: WorkflowTemplateIdDto) => {
+      if (!activeProjectId) return
+      const definition = instantiateWorkflowTemplate({
+        projectId: activeProjectId,
+        templateId,
+        agents: workflowAgentInspector.agents,
+      })
+      setSelectedWorkflowDefinition(definition)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(false)
+      setSelectedWorkflowTemplatePreviewId(templateId)
+      setAgentAuthoringSession(null)
+      workflowAgentInspector.selectAgent(null)
+      setActiveView('phases')
+    },
+    [
+      activeProjectId,
+      setActiveView,
+      workflowAgentInspector,
+      workflowAgentInspector.agents,
+    ],
+  )
+
+  const handleSaveWorkflowDefinition = useCallback(
+    async (definition: WorkflowDefinitionDto) => {
+      if (!activeProjectId) {
+        throw new Error('Select a project before saving a Workflow.')
+      }
+      setWorkflowActionRunning(true)
+      try {
+        const response = selectedWorkflowIsDraft
+          ? await resolvedAdapter.createWorkflowDefinition?.({ definition })
+          : await resolvedAdapter.updateWorkflowDefinition?.({
+              workflowId: definition.id,
+              definition,
+            })
+        if (!response) {
+          throw new Error('Workflow persistence is unavailable in this build.')
+        }
+        setSelectedWorkflowDefinition(response.definition)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        await refreshWorkflowDefinitions()
+        return response.definition
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowDefinitions, resolvedAdapter, selectedWorkflowIsDraft],
+  )
+
+  const handleCancelWorkflowEditing = useCallback(() => {
+    if (!selectedWorkflowIsDraft) return
+    setSelectedWorkflowDefinition(null)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(false)
+    setSelectedWorkflowTemplatePreviewId(null)
+  }, [selectedWorkflowIsDraft])
+
+  const handleClearWorkflowSelection = useCallback(() => {
+    setSelectedWorkflowDefinition(null)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(false)
+    setSelectedWorkflowTemplatePreviewId(null)
+  }, [])
+
+  const handleStartWorkflowDefinitionRun = useCallback(
+    async (workflowId: string, initialInput: unknown) => {
+      if (!activeProjectId || !resolvedAdapter.startWorkflowRun) {
+        throw new Error('Select a project before starting a Workflow.')
+      }
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.startWorkflowRun({
+          projectId: activeProjectId,
+          workflowId,
+          initialInput,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleCancelWorkflowRun = useCallback(
+    async (runId: string) => {
+      if (!activeProjectId || !resolvedAdapter.cancelWorkflowRun) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.cancelWorkflowRun({
+          projectId: activeProjectId,
+          runId,
+          reason: 'Cancelled by user.',
+        })
+        setSelectedWorkflowRun(response.run)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleRetryWorkflowNodeRun = useCallback(
+    async (runId: string, nodeRunId: string) => {
+      if (!activeProjectId || !resolvedAdapter.retryWorkflowNodeRun) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.retryWorkflowNodeRun({
+          projectId: activeProjectId,
+          runId,
+          nodeRunId,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleSkipWorkflowBranch = useCallback(
+    async (runId: string, nodeRunId: string, reason = 'Skipped by user.') => {
+      if (!activeProjectId || !resolvedAdapter.skipWorkflowBranch) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.skipWorkflowBranch({
+          projectId: activeProjectId,
+          runId,
+          nodeRunId,
+          reason,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleResumeWorkflowCheckpoint = useCallback(
+    async (runId: string, nodeRunId: string, decision: string, payload: unknown = null) => {
+      if (!activeProjectId || !resolvedAdapter.resumeWorkflowCheckpoint) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.resumeWorkflowCheckpoint({
+          projectId: activeProjectId,
+          runId,
+          nodeRunId,
+          decision,
+          payload,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleExplainWorkflowRunBlocker = useCallback(
+    async (runId: string): Promise<WorkflowRunBlockerResponseDto | void> => {
+      if (!activeProjectId || !resolvedAdapter.explainWorkflowRunBlocker) return
+      setWorkflowActionRunning(true)
+      try {
+        return await resolvedAdapter.explainWorkflowRunBlocker({
+          projectId: activeProjectId,
+          runId,
+        })
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleExportWorkflowRunBundle = useCallback(
+    async (runId: string): Promise<WorkflowRunBundleResponseDto | void> => {
+      if (!activeProjectId || !resolvedAdapter.exportWorkflowRunBundle) return
+      setWorkflowActionRunning(true)
+      try {
+        return await resolvedAdapter.exportWorkflowRunBundle({
+          projectId: activeProjectId,
+          runId,
+        })
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleResumeWorkflowNextIncompletePhase = useCallback(
+    async (runId: string): Promise<WorkflowRunDto | void> => {
+      if (!activeProjectId || !resolvedAdapter.resumeWorkflowNextIncompletePhase) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.resumeWorkflowNextIncompletePhase({
+          projectId: activeProjectId,
+          runId,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleInspectWorkflowAgent = useCallback(
+    (ref: AgentRefDto) => {
+      workflowAgentInspector.selectAgent(ref)
+      setSelectedWorkflowDefinition(null)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(false)
+      setSelectedWorkflowTemplatePreviewId(null)
+      setActiveView('phases')
+    },
+    [setActiveView, workflowAgentInspector.selectAgent],
+  )
+
+  const handleUseWorkflowAgentInChat = useCallback(
+    (ref: AgentRefDto) => {
+      if (!activeProjectId) return
+      const selection = runtimeAgentSelectionFromRef(
+        ref,
+        customAgentDefinitions,
+        workflowAgentInspector.agents,
+      )
+      if (!selection) {
+        console.error('Failed to resolve agent for chat selection', ref)
+        return
+      }
+
+      const applySelection = (agentSessionId: string) => {
+        setPendingInitialRuntimeAgent({
+          agentSessionId,
+          ...selection,
+        })
+      }
+
+      setWorkflowsOpen(false)
+      setBrowserOpen(false)
+      setIosOpen(false)
+      setSolanaOpen(false)
+      setVcsOpen(false)
+      setUsageOpen(false)
+      setTerminalOpen(false)
+      setAgentDockOpen(false)
+      setActiveView('agent')
+
+      if (activeProject?.selectedAgentSessionId) {
+        applySelection(activeProject.selectedAgentSessionId)
+        return
+      }
+
+      setIsCreatingAgentSession(true)
+      void createAgentSession()
+        .then((updatedProject) => {
+          const newSessionId = updatedProject?.selectedAgentSessionId
+          if (newSessionId) applySelection(newSessionId)
+        })
+        .finally(() => {
+          setIsCreatingAgentSession(false)
+        })
+    },
+    [
+      activeProject?.selectedAgentSessionId,
+      activeProjectId,
+      createAgentSession,
+      customAgentDefinitions,
+      workflowAgentInspector.agents,
+    ],
+  )
+
+  const handleSetWorkflowAgentDefaultModel = useCallback(
+    async (agent: WorkflowAgentSummaryDto, defaultModel: AgentDefaultModelDto | null) => {
+      if (!activeProjectId) {
+        throw new Error('Select a project before setting an agent default model.')
+      }
+      await resolvedAdapter.setAgentDefaultModel({
+        projectId: activeProjectId,
+        ref: agent.ref,
+        defaultModel,
+      })
+      refreshCustomAgentDefinitions()
+      void workflowAgentInspector.refreshAgents()
+    },
+    [activeProjectId, refreshCustomAgentDefinitions, resolvedAdapter, workflowAgentInspector],
+  )
+
+  const handlePhaseAuthoringSaved = useCallback(
+    (response: AgentDefinitionWriteResponseDto) => {
+      handleAgentAuthoringSaved()
+      if (response.applied) handleCloseAgentAuthoring()
+    },
+    [handleAgentAuthoringSaved, handleCloseAgentAuthoring],
+  )
+
+  const handlePreviewEffectiveRuntime = useCallback(
+    async ({
+      snapshot,
+      definitionId,
+    }: {
+      snapshot: Record<string, unknown>
+      definitionId: string | null
+    }) => {
+      if (!activeProjectId) {
+        throw new Error('Select a project before previewing an agent definition.')
+      }
+      const definition = canonicalCustomAgentDefinitionSchema.parse(snapshot)
+      return resolvedAdapter.previewAgentDefinition({
+        projectId: activeProjectId,
+        definitionId,
+        definition,
+      })
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleReadProjectUiState = useCallback(
+    async (key: string): Promise<unknown | null> => {
+      if (!activeProjectId || !resolvedAdapter.readProjectUiState) return null
+      const response = await resolvedAdapter.readProjectUiState({ projectId: activeProjectId, key })
+      return response.value ?? null
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleWriteProjectUiState = useCallback(
+    async (key: string, value: unknown | null): Promise<void> => {
+      if (!activeProjectId || !resolvedAdapter.writeProjectUiState) return
+      await resolvedAdapter.writeProjectUiState({ projectId: activeProjectId, key, value })
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleArchiveAgentDefinition = useCallback(
+    async (ref: AgentRefDto) => {
+      if (!activeProjectId) return
+      if (ref.kind !== 'custom') return
+      try {
+        await resolvedAdapter.archiveAgentDefinition({
+          projectId: activeProjectId,
+          definitionId: ref.definitionId,
+        })
+        refreshCustomAgentDefinitions()
+        await workflowAgentInspector.refreshAgents()
+      } catch (error) {
+        console.error('Failed to archive agent definition', error)
+      }
+    },
+    [activeProjectId, refreshCustomAgentDefinitions, resolvedAdapter, workflowAgentInspector],
+  )
+
   const handleArchiveAgentSession = useCallback((agentSessionId: string) => {
     setPendingAgentSessionId(agentSessionId)
     void archiveAgentSession(agentSessionId).finally(() => {
@@ -1806,14 +3854,41 @@ export function XeroApp({ adapter }: XeroAppProps) {
     if (!(await ensurePaneAgentSessionSelected(paneId))) return null
     return updateRuntimeRunControls(request)
   }, [ensurePaneAgentSessionSelected, updateRuntimeRunControls])
+  const handleSendEditorContextToAgent = useCallback(
+    async (request: EditorAgentContextRequest) => {
+      if (!activeProject) {
+        throw new Error('Select a project before sending editor context to an agent.')
+      }
+
+      const activeRuntimeRun = agentView?.runtimeRun ?? null
+      if (activeRuntimeRun && !activeRuntimeRun.isTerminal) {
+        await updateRuntimeRunControls({ prompt: request.prompt })
+      } else {
+        await startRuntimeRun({
+          controls: agentComposerControls,
+          prompt: request.prompt,
+        })
+      }
+      setActiveView('agent')
+    },
+    [
+      activeProject,
+      agentComposerControls,
+      agentView?.runtimeRun,
+      setActiveView,
+      startRuntimeRun,
+      updateRuntimeRunControls,
+    ],
+  )
   const handleAgentComposerControlsChange = useCallback((
     _paneId: string,
     controls: RuntimeRunControlInputDto | null,
   ) => {
+    persistComposerSettings(controls)
     setAgentComposerControls((current) =>
       sameRuntimeRunControlInput(current, controls) ? current : controls,
     )
-  }, [])
+  }, [persistComposerSettings])
   const handleAgentStartRuntimeSession = useCallback(
     (
       _paneId: string,
@@ -1829,6 +3904,162 @@ export function XeroApp({ adapter }: XeroAppProps) {
     (_paneId: string) => logoutRuntimeSession(),
     [logoutRuntimeSession],
   )
+
+  const startComputerUseRuntimeRun = useCallback(
+    async (options?: {
+      controls?: RuntimeRunControlInputDto | null
+      prompt?: string | null
+      attachments?: StagedAgentAttachmentDto[]
+    }) => {
+      const isPromptSubmission =
+        Boolean(options?.prompt?.trim()) || Boolean(options?.attachments?.length)
+      if (!isPromptSubmission) {
+        setComputerUseRuntimeRunActionStatus('running')
+        setComputerUsePendingRuntimeRunAction('start')
+      }
+      setComputerUseRuntimeRunActionError(null)
+
+      try {
+        await loadComputerUseProject()
+        const response = await resolvedAdapter.startRuntimeRun(
+          GLOBAL_COMPUTER_USE_PROJECT_ID,
+          GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
+          {
+            initialControls: options?.controls ?? null,
+            initialPrompt: options?.prompt ?? null,
+            initialAttachments: options?.attachments ?? [],
+          },
+        )
+        const runtimeRun = mapRuntimeRun(response)
+        setComputerUseRuntimeRun(runtimeRun)
+        setComputerUseProject((current) => (current ? applyRuntimeRun(current, runtimeRun) : current))
+        return runtimeRun
+      } catch (error) {
+        setComputerUseRuntimeRunActionError(
+          getOperatorActionError(
+            error,
+            'Xero could not start the Computer Use run.',
+          ),
+        )
+        throw error
+      } finally {
+        if (!isPromptSubmission) {
+          setComputerUseRuntimeRunActionStatus('idle')
+          setComputerUsePendingRuntimeRunAction(null)
+        }
+      }
+    },
+    [loadComputerUseProject, resolvedAdapter],
+  )
+
+  const updateComputerUseRuntimeRunControls = useCallback(
+    async (request: {
+      controls?: RuntimeRunControlInputDto | null
+      prompt?: string | null
+      attachments?: StagedAgentAttachmentDto[]
+    } = {}) => {
+      const isPromptSubmission =
+        Boolean(request.prompt?.trim()) || Boolean(request.attachments?.length)
+      if (!isPromptSubmission) {
+        setComputerUseRuntimeRunActionStatus('running')
+        setComputerUsePendingRuntimeRunAction('update_controls')
+      }
+      setComputerUseRuntimeRunActionError(null)
+
+      try {
+        const runId =
+          computerUseRuntimeRun?.runId ??
+          (await refreshComputerUseRuntimeMetadata()).runtimeRun?.runId ??
+          null
+        if (!runId) {
+          throw new Error('Xero cannot queue Computer Use controls until a run exists.')
+        }
+        const response = await resolvedAdapter.updateRuntimeRunControls({
+          projectId: GLOBAL_COMPUTER_USE_PROJECT_ID,
+          agentSessionId: GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
+          runId,
+          controls: request.controls ?? null,
+          prompt: request.prompt ?? null,
+          attachments: request.attachments ?? [],
+        })
+        const runtimeRun = mapRuntimeRun(response)
+        setComputerUseRuntimeRun(runtimeRun)
+        setComputerUseProject((current) => (current ? applyRuntimeRun(current, runtimeRun) : current))
+        return runtimeRun
+      } catch (error) {
+        setComputerUseRuntimeRunActionError(
+          getOperatorActionError(
+            error,
+            'Xero could not queue Computer Use control changes.',
+          ),
+        )
+        throw error
+      } finally {
+        if (!isPromptSubmission) {
+          setComputerUseRuntimeRunActionStatus('idle')
+          setComputerUsePendingRuntimeRunAction(null)
+        }
+      }
+    },
+    [computerUseRuntimeRun?.runId, refreshComputerUseRuntimeMetadata, resolvedAdapter],
+  )
+
+  const startComputerUseRuntimeSession = useCallback(
+    async (options?: { providerProfileId?: string | null }) => {
+      const response = await resolvedAdapter.startRuntimeSession(
+        GLOBAL_COMPUTER_USE_PROJECT_ID,
+        options,
+      )
+      const runtimeSession = mapRuntimeSession(response)
+      setComputerUseRuntimeSession(runtimeSession)
+      setComputerUseProject((current) =>
+        current ? applyRuntimeSession(current, runtimeSession) : current,
+      )
+      return runtimeSession
+    },
+    [resolvedAdapter],
+  )
+
+  const stopComputerUseRuntimeRun = useCallback(
+    async (runId: string) => {
+      setComputerUseRuntimeRunActionStatus('running')
+      setComputerUsePendingRuntimeRunAction('stop')
+      setComputerUseRuntimeRunActionError(null)
+      try {
+        const response = await resolvedAdapter.stopRuntimeRun(
+          GLOBAL_COMPUTER_USE_PROJECT_ID,
+          GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
+          runId,
+        )
+        const runtimeRun = response ? mapRuntimeRun(response) : null
+        setComputerUseRuntimeRun(runtimeRun)
+        setComputerUseProject((current) =>
+          current ? applyRuntimeRun(current, runtimeRun) : current,
+        )
+        return runtimeRun
+      } catch (error) {
+        setComputerUseRuntimeRunActionError(
+          getOperatorActionError(error, 'Xero could not stop the Computer Use run.'),
+        )
+        throw error
+      } finally {
+        setComputerUseRuntimeRunActionStatus('idle')
+        setComputerUsePendingRuntimeRunAction(null)
+      }
+    },
+    [resolvedAdapter],
+  )
+
+  const logoutComputerUseRuntimeSession = useCallback(async () => {
+    const response = await resolvedAdapter.logoutRuntimeSession(GLOBAL_COMPUTER_USE_PROJECT_ID)
+    const runtimeSession = mapRuntimeSession(response)
+    setComputerUseRuntimeSession(runtimeSession)
+    setComputerUseProject((current) =>
+      current ? applyRuntimeSession(current, runtimeSession) : current,
+    )
+    return runtimeSession
+  }, [resolvedAdapter])
+
   const handleAgentResolveOperatorAction = useCallback(async (
     paneId: string,
     actionId: string,
@@ -1877,12 +4108,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
     ) => upsertNotificationRoute(request),
     [upsertNotificationRoute],
   )
+  const handleAgentCodeUndoApplied = useCallback(() => retry(), [retry])
   const handleStartWorkflowRun = useCallback(() => startRuntimeRun(), [startRuntimeRun])
-  const handleCreateWorkflow = useCallback(() => {
-    if (!workflowsOpen) {
-      toggleWorkflows()
-    }
-  }, [toggleWorkflows, workflowsOpen])
 
   const handleSelectProject = useCallback(
     (projectId: string) => {
@@ -1890,6 +4117,22 @@ export function XeroApp({ adapter }: XeroAppProps) {
     },
     [selectProject],
   )
+
+  const handlePreviewProject = useCallback(
+    (projectId: string) => {
+      const project = projects.find((candidate) => candidate.id === projectId)
+      if (!project) {
+        return
+      }
+
+      previewProjectSelection(project.id, project.name)
+    },
+    [projects],
+  )
+
+  useEffect(() => {
+    clearProjectSelectionPreview(activeProjectId)
+  }, [activeProjectId])
 
   const handleRemoveProject = useCallback(
     (projectId: string) => {
@@ -2027,6 +4270,12 @@ export function XeroApp({ adapter }: XeroAppProps) {
               : undefined
           }
           onOpenSearchResult={handleOpenSearchResult}
+          onReadProjectUiState={
+            resolvedAdapter.readProjectUiState ? handleReadProjectUiState : undefined
+          }
+          onWriteProjectUiState={
+            resolvedAdapter.writeProjectUiState ? handleWriteProjectUiState : undefined
+          }
           pendingSessionId={pendingAgentSessionId}
           isCreating={isCreatingAgentSession}
           collapsed={activeView !== 'agent' || explorerCollapsed}
@@ -2084,6 +4333,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
               prewarm={startupSurfacePrewarm.shouldMount}
             >
               <PhaseView
+                active={activeView === 'phases'}
+                projectId={activeProjectId}
                 workflow={workflowView}
                 canStartRun={Boolean(
                   agentView?.runtimeRunActionStatus !== undefined &&
@@ -2095,8 +4346,54 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onStartRun={handleStartWorkflowRun}
                 onToggleWorkflows={toggleWorkflows}
                 workflowsOpen={workflowsOpen}
+                onCreateAgent={handleCreateAgent}
+                onCreateAgentFromTemplate={handleCreateAgentFromTemplate}
+                onEditAgentFromWorkflow={(ref) => handleStartAgentAuthoringFromRef('edit', ref)}
+                selectedWorkflowDefinition={selectedWorkflowDefinition}
+                selectedWorkflowRun={selectedWorkflowRun}
+                selectedWorkflowIsDraft={selectedWorkflowIsDraft}
+                selectedWorkflowIsTemplatePreview={selectedWorkflowTemplatePreviewId !== null}
+                workflowActionRunning={workflowActionRunning}
                 onCreateWorkflow={handleCreateWorkflow}
-                onCreateAgent={handleCreateAgentSession}
+                onCreateWorkflowWithAgentCreate={handleStartWorkflowAgentCreate}
+                onCreateWorkflowFromTemplate={handleCreateWorkflowFromTemplate}
+                onSaveWorkflowDefinition={handleSaveWorkflowDefinition}
+                onCancelWorkflowEditing={handleCancelWorkflowEditing}
+                onClearWorkflowSelection={handleClearWorkflowSelection}
+                onStartWorkflowDefinitionRun={handleStartWorkflowDefinitionRun}
+                onCancelWorkflowRun={handleCancelWorkflowRun}
+                onRetryWorkflowNodeRun={handleRetryWorkflowNodeRun}
+                onSkipWorkflowBranch={handleSkipWorkflowBranch}
+                onResumeWorkflowCheckpoint={handleResumeWorkflowCheckpoint}
+                onExplainWorkflowRunBlocker={handleExplainWorkflowRunBlocker}
+                onExportWorkflowRunBundle={handleExportWorkflowRunBundle}
+                onResumeWorkflowNextIncompletePhase={handleResumeWorkflowNextIncompletePhase}
+                templates={workflowAgentInspector.agents}
+                templatesLoading={workflowAgentInspector.agentsStatus === 'loading'}
+                templatesError={workflowAgentInspector.agentsError}
+                agentDetail={workflowAgentInspector.detail}
+                agentDetailStatus={workflowAgentInspector.detailStatus}
+                agentDetailError={workflowAgentInspector.detailError}
+                onClearAgentSelection={handleClearWorkflowAgentSelection}
+                onReloadAgentDetail={workflowAgentInspector.reloadDetail}
+                authoringSession={agentAuthoringSession}
+                authoringCatalog={agentAuthoringCatalog}
+                toolPackCatalog={agentToolPackCatalog}
+                onSearchAttachableSkills={handleSearchAttachableSkills}
+                onResolveAttachableSkill={handleResolveAttachableSkill}
+                onAuthoringSubmit={handleAgentAuthoringSubmit}
+                onAuthoringSaved={handlePhaseAuthoringSaved}
+                onAuthoringCancel={handleCloseAgentAuthoring}
+                onReadProjectUiState={
+                  resolvedAdapter.readProjectUiState ? handleReadProjectUiState : undefined
+                }
+                onWriteProjectUiState={
+                  resolvedAdapter.writeProjectUiState ? handleWriteProjectUiState : undefined
+                }
+                onSelectedNodeChange={handlePhaseSelectedNodeChange}
+                onPreviewEffectiveRuntime={
+                  activeProjectId ? handlePreviewEffectiveRuntime : undefined
+                }
               />
             </LazyActivityPane>
           ) : null}
@@ -2118,9 +4415,15 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 desktopAdapter={resolvedAdapter}
                 accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
                 accountLogin={githubSession?.user.login ?? null}
+                toolCallGroupingPreference={toolCallGroupingPreference}
                 customAgentDefinitions={customAgentDefinitions}
+                agentDefaultModels={agentDefaultModels}
                 onOpenAgentManagement={handleOpenAgentManagement}
+                onCreateAgentByHand={handleStartAgentAuthoringCreate}
+                onStartWorkflowAgentCreate={handleStartWorkflowAgentCreate}
                 onCreateSession={handleCreateAgentSession}
+                pendingInitialRuntimeAgent={pendingInitialRuntimeAgent}
+                onClearPendingInitialRuntimeAgent={handleClearPendingInitialRuntimeAgent}
                 isCreatingSession={isCreatingAgentSession}
                 onSpawnPane={handleSpawnPane}
                 onClosePane={handleClosePane}
@@ -2145,6 +4448,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onStopRuntimeRun={handleAgentStopRuntimeRun}
                 onSubmitManualCallback={handleAgentSubmitManualCallback}
                 onUpsertNotificationRoute={handleAgentUpsertNotificationRoute}
+                onCodeUndoApplied={handleAgentCodeUndoApplied}
               />
             </LazyActivityPane>
           ) : null}
@@ -2159,9 +4463,19 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 <LazyExecutionView
                   active={isExecutionVisible}
                   execution={executionView}
+                  listProjectFileIndex={resolvedAdapter.listProjectFileIndex}
                   listProjectFiles={listProjectFiles}
                   readProjectFile={readProjectFile}
                   writeProjectFile={writeProjectFile}
+                  statProjectFiles={resolvedAdapter.statProjectFiles}
+                  readProjectUiState={resolvedAdapter.readProjectUiState}
+                  writeProjectUiState={resolvedAdapter.writeProjectUiState}
+                  runProjectTypecheck={resolvedAdapter.runProjectTypecheck}
+                  formatProjectDocument={resolvedAdapter.formatProjectDocument}
+                  runProjectLint={resolvedAdapter.runProjectLint}
+                  getRepositoryDiff={resolvedAdapter.getRepositoryDiff}
+                  gitRevertPatch={resolvedAdapter.gitRevertPatch}
+                  runEditorTerminalTask={handleRunEditorTerminalTask}
                   revokeProjectAssetTokens={revokeProjectAssetTokens}
                   openProjectFileExternal={openProjectFileExternal}
                   createProjectEntry={createProjectEntry}
@@ -2170,6 +4484,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
                   deleteProjectEntry={deleteProjectEntry}
                   searchProject={searchProject}
                   replaceInProject={replaceInProject}
+                  agentActivities={editorAgentActivities}
+                  onSendEditorContextToAgent={handleSendEditorContextToAgent}
                 />
               </Suspense>
             </LazyMountedPane>
@@ -2186,25 +4502,45 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
     : null
   const shouldAutoOpenOnboarding = !onboardingDismissed && !isLoading && projects.length === 0
-  const showOnboarding = (onboardingOpen || shouldAutoOpenOnboarding) && !onboardingDismissed && !isLoading
+  const showOnboarding =
+    (onboardingOpen || shouldAutoOpenOnboarding) &&
+    !onboardingDismissed &&
+    !isLoading &&
+    activeViewHydrated
   const isForegroundProjectSelection = pendingProjectSelectionId !== null
+  const pendingProjectSelectionName = pendingProjectSelectionId
+    ? projects.find((project) => project.id === pendingProjectSelectionId)?.name ?? null
+    : null
+  const shellProjectName = pendingProjectSelectionName ?? activeProject?.name
+  const agentDockSurfaceOpen = agentDockOpen || computerUseOpen
+  const agentDockSurfaceAgent = computerUseOpen ? computerUseAgentView : agentView
+  const agentDockSurfaceSessions = computerUseOpen
+    ? (computerUseProjectForView?.agentSessions ?? [])
+    : (activeProject?.agentSessions ?? [])
+  const agentDockSurfaceSelectedSessionId = computerUseOpen
+    ? GLOBAL_COMPUTER_USE_AGENT_SESSION_ID
+    : (activeProject?.selectedAgentSessionId ?? null)
   const foregroundProjectLoad = isForegroundProjectLoad(refreshSource)
   const isBlockingProjectLoading =
     isProjectLoading &&
     foregroundProjectLoad &&
     !isForegroundProjectSelection &&
     !activeProject
+  const isProjectSelectionShellPending =
+    pendingProjectSelectionId !== null && activeProjectId !== pendingProjectSelectionId
   const startupSurfacePrewarm = useStartupSurfacePrewarm(
-    !showOnboarding && !isLoading && !isBlockingProjectLoading,
+    activeViewHydrated && !showOnboarding && !isLoading && !isBlockingProjectLoading,
   )
   useIdleSurfacePreloads(
-    !showOnboarding &&
+    activeViewHydrated &&
+      !showOnboarding &&
       !isLoading &&
       !isBlockingProjectLoading &&
       startupSurfacePrewarm.ready,
   )
   const showStartupSurfacePrewarm = !startupSurfacePrewarm.ready
   const showAppBootLoading = !showOnboarding && (
+    !activeViewHydrated ||
     isLoading ||
     isBlockingProjectLoading ||
     showStartupSurfacePrewarm
@@ -2245,15 +4581,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
         onViewChange={setActiveView}
         onViewPreload={preloadViewChunk}
         onSurfacePreload={preloadSurfaceChunk}
-        projectName={activeProject?.name}
-        onOpenSettings={() => openSettings('providers')}
-        onOpenAccount={() => openSettings('account')}
-        onAccountLogin={() => {
-          void loginWithGithub()
-        }}
-        accountAuthenticating={githubAuthStatus === 'authenticating'}
-        accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
-        accountLogin={githubSession?.user.login ?? null}
+        projectId={activeProjectId}
+        projectName={shellProjectName}
         onToggleBrowser={toggleBrowser}
         browserOpen={browserOpen}
         onToggleIos={toggleIos}
@@ -2267,11 +4596,12 @@ export function XeroApp({ adapter }: XeroAppProps) {
         onToggleAgentDock={toggleAgentDock}
         agentDockOpen={agentDockOpen}
         agentDockDisabled={activeView === 'agent' || !activeProject}
+        onToggleComputerUse={toggleComputerUse}
+        computerUseOpen={computerUseOpen}
+        computerUseRunning={computerUseRunning}
         vcsChangeCount={repositoryStatus?.statusCount ?? 0}
         vcsAdditions={repositoryStatus?.additions ?? 0}
         vcsDeletions={repositoryStatus?.deletions ?? 0}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={toggleSidebarCollapsed}
         platformOverride={platformOverride}
         footer={statusFooter}
         chromeOnly
@@ -2294,6 +4624,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
           environmentPermissionRequests={environmentDiscoveryStatus?.permissionRequests ?? []}
           onResolveEnvironmentPermissions={resolveEnvironmentPermissions}
+          launchMode={launchMode}
           onImportProject={async () => {
             await importProject()
           }}
@@ -2301,6 +4632,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
           onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
           onStartOAuthLogin={(request) => startOAuthLogin(request)}
+          onStartXaiDeviceCodeLogin={(request) => startXaiDeviceCodeLogin(request)}
+          onPollXaiDeviceCodeLogin={(request) => pollXaiDeviceCodeLogin(request)}
           onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
           onComplete={() => {
             setOnboardingDismissed(true)
@@ -2327,15 +4660,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onViewChange={setActiveView}
           onViewPreload={preloadViewChunk}
           onSurfacePreload={preloadSurfaceChunk}
-          projectName={activeProject?.name}
-          onOpenSettings={() => openSettings('providers')}
-          onOpenAccount={() => openSettings('account')}
-          onAccountLogin={() => {
-            void loginWithGithub()
-          }}
-          accountAuthenticating={githubAuthStatus === 'authenticating'}
-          accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
-          accountLogin={githubSession?.user.login ?? null}
+          projectId={activeProjectId}
+          projectName={shellProjectName}
           onToggleBrowser={toggleBrowser}
           browserOpen={browserOpen}
           onToggleIos={toggleIos}
@@ -2349,28 +4675,40 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onToggleAgentDock={toggleAgentDock}
           agentDockOpen={agentDockOpen}
           agentDockDisabled={activeView === 'agent' || !activeProject}
+          onToggleComputerUse={toggleComputerUse}
+          computerUseOpen={computerUseOpen}
+          computerUseRunning={computerUseRunning}
+          onToggleTerminal={toggleTerminal}
+          terminalOpen={terminalOpen}
+          projectRunning={false}
+          projectStartTargets={activeProjectStartTargets}
+          onEditProjectStartTargets={handleEditProjectStartTargets}
+          onRunTarget={handleRunTarget}
+          onRunAllTargets={handleRunAllTargets}
+          onStopProject={() => {
+            /* PTY stops via Ctrl+C inside the terminal tab. */
+          }}
           vcsChangeCount={repositoryStatus?.statusCount ?? 0}
           vcsAdditions={repositoryStatus?.additions ?? 0}
           vcsDeletions={repositoryStatus?.deletions ?? 0}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebarCollapsed}
           platformOverride={platformOverride}
           footer={statusFooter}
         >
           <ProjectRail
             activeProjectId={activeProjectId}
-            collapsed={sidebarCollapsed}
             errorMessage={errorMessage}
             isImporting={isImporting}
             isLoading={isLoading || (isProjectLoading && foregroundProjectLoad)}
             onImportProject={() => setProjectAddOpen(true)}
+            onOpenSettings={() => openSettings('providers')}
+            onPreloadProject={prefetchProject}
+            onPreviewProject={handlePreviewProject}
             onRemoveProject={handleRemoveProject}
             onSelectProject={handleSelectProject}
             pendingProjectSelectionId={pendingProjectSelectionId}
             pendingProjectRemovalId={pendingProjectRemovalId}
             projectRemovalStatus={projectRemovalStatus}
             projects={projects}
-            snapWidth={projectRailSnapWidth}
             onSessionsHoverEnter={
               activeView === 'agent' && explorerCollapsed && Boolean(activeProject)
                 ? requestExplorerPeek
@@ -2382,7 +4720,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 : undefined
             }
           />
-          {renderBody()}
+          {isProjectSelectionShellPending ? <LoadingScreen /> : renderBody()}
           <LazyPrerenderedSurface
             open={browserOpen}
             prewarm={startupSurfacePrewarm.shouldMount}
@@ -2416,22 +4754,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
               />
             </Suspense>
           </LazyPrerenderedSurface>
-          <LazyPrerenderedSurface
+          <IosEmulatorSurface
             open={iosOpen}
-            prewarm={startupSurfacePrewarm.shouldMount}
-          >
-            <Suspense
-              fallback={
-                <InlineSidebarLoadingShell
-                  label="iOS Simulator"
-                  open={iosOpen}
-                  width={640}
-                />
-              }
-            >
-              <LazyIosEmulatorSidebar open={iosOpen} />
-            </Suspense>
-          </LazyPrerenderedSurface>
+            prewarm={startupSurfacePrewarm.shouldMount && shouldIncludeIosSurface()}
+          />
           <SolanaWorkbenchSurface
             open={solanaOpen}
             prewarm={startupSurfacePrewarm.shouldMount}
@@ -2449,7 +4775,49 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 />
               }
             >
-              <LazyWorkflowsSidebar open={workflowsOpen} />
+              <LazyWorkflowsSidebar
+                open={workflowsOpen}
+                agents={workflowAgentInspector.agents}
+                agentsLoading={workflowAgentInspector.agentsStatus === 'loading'}
+                agentsError={workflowAgentInspector.agentsError}
+                workflowDefinitions={workflowDefinitions}
+                workflowRuns={workflowRuns}
+                workflowsLoading={
+                  workflowDefinitionsStatus === 'loading' || workflowRunsStatus === 'loading'
+                }
+                workflowsError={workflowDefinitionsError}
+                selectedWorkflowId={
+                  selectedWorkflowIsDraft || selectedWorkflowTemplatePreviewId
+                    ? null
+                    : selectedWorkflowDefinition?.id ?? null
+                }
+                selectedWorkflowTemplateId={selectedWorkflowTemplatePreviewId}
+                selectedWorkflowRunId={selectedWorkflowRun?.id ?? null}
+                onSelectWorkflow={handleSelectWorkflowDefinition}
+                onSelectWorkflowTemplate={handlePreviewWorkflowTemplate}
+                onSelectWorkflowRun={handleSelectWorkflowRun}
+                onCreateWorkflow={handleCreateWorkflow}
+                onCreateWorkflowWithAgentCreate={handleStartWorkflowAgentCreate}
+                onCreateWorkflowFromTemplate={handleCreateWorkflowFromTemplate}
+                onStartWorkflowRun={(workflowId) => {
+                  void handleStartWorkflowDefinitionRun(workflowId, { goal: '' })
+                }}
+                onCancelWorkflowRun={(runId) => {
+                  void handleCancelWorkflowRun(runId)
+                }}
+                onResumeWorkflowRun={(runId, nodeRunId, decision) => {
+                  void handleResumeWorkflowCheckpoint(runId, nodeRunId, decision, { decision })
+                }}
+                selectedAgentRef={workflowAgentInspector.selectedRef}
+                onSelectAgent={handleInspectWorkflowAgent}
+                onCreateAgent={handleCreateAgent}
+                onCreateAgentByHand={handleStartAgentAuthoringCreate}
+                onEditAgent={(ref) => handleStartAgentAuthoringFromRef('edit', ref)}
+                onDeleteAgent={handleArchiveAgentDefinition}
+                onUseAgentInChat={handleUseWorkflowAgentInChat}
+                modelOptions={agentView?.composerModelOptions ?? []}
+                onSetAgentDefaultModel={handleSetWorkflowAgentDefaultModel}
+              />
             </Suspense>
           </LazyPrerenderedSurface>
           <LazyPrerenderedSurface
@@ -2486,48 +4854,69 @@ export function XeroApp({ adapter }: XeroAppProps) {
             </Suspense>
           </LazyPrerenderedSurface>
           <LazyPrerenderedSurface
-            open={agentDockOpen}
+            open={agentDockSurfaceOpen}
             prewarm={startupSurfacePrewarm.shouldMount}
           >
             <Suspense
               fallback={
-                <InlineSidebarLoadingShell label="Agent" open={agentDockOpen} width={460} />
+                <InlineSidebarLoadingShell
+                  label={computerUseOpen ? "Computer Use" : "Agent"}
+                  open={agentDockSurfaceOpen}
+                  width={readPersistedAgentDockWidth()}
+                />
               }
             >
               <LazyAgentDockSidebar
-                open={agentDockOpen}
-                agent={agentView}
+                open={agentDockSurfaceOpen}
+                agent={agentDockSurfaceAgent}
                 highChurnStore={highChurnStore}
-                sessions={activeProject?.agentSessions ?? []}
-                selectedSessionId={activeProject?.selectedAgentSessionId ?? null}
+                sessions={agentDockSurfaceSessions}
+                selectedSessionId={agentDockSurfaceSelectedSessionId}
                 isCreatingSession={isCreatingAgentSession}
-                onClose={() => setAgentDockOpen(false)}
-                onSelectSession={handleSelectAgentSession}
-                onCreateSession={handleCreateAgentSession}
+                onClose={computerUseOpen ? closeComputerUse : () => setAgentDockOpen(false)}
+                onSelectSession={computerUseOpen ? () => undefined : handleSelectAgentSession}
+                onCreateSession={computerUseOpen ? () => undefined : handleCreateAgentSession}
                 desktopAdapter={resolvedAdapter}
                 accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
                 accountLogin={githubSession?.user.login ?? null}
+                toolCallGroupingPreference={toolCallGroupingPreference}
                 customAgentDefinitions={customAgentDefinitions}
+                agentDefaultModels={agentDefaultModels}
                 onOpenAgentManagement={handleOpenAgentManagement}
+                onCreateAgentByHand={handleStartAgentAuthoringCreate}
+                onStartWorkflowAgentCreate={handleStartWorkflowAgentCreate}
                 onOpenSettings={handleOpenAgentProviderSettings}
                 onOpenDiagnostics={handleOpenAgentDiagnostics}
                 onStartLogin={(options) => startOpenAiLogin(options)}
                 onStartAutonomousRun={() => startAutonomousRun()}
                 onInspectAutonomousRun={() => inspectAutonomousRun()}
                 onCancelAutonomousRun={(runId) => cancelAutonomousRun(runId)}
-                onStartRuntimeRun={(options) => startRuntimeRun(options)}
-                onUpdateRuntimeRunControls={(request) => updateRuntimeRunControls(request)}
-                onComposerControlsChange={(controls) =>
-                  setAgentComposerControls((current) =>
-                    sameRuntimeRunControlInput(current, controls) ? current : controls,
-                  )
+                onStartRuntimeRun={
+                  computerUseOpen ? startComputerUseRuntimeRun : (options) => startRuntimeRun(options)
                 }
-                onStartRuntimeSession={(options) => startRuntimeSession(options)}
-                onStopRuntimeRun={(runId) => stopRuntimeRun(runId)}
+                onUpdateRuntimeRunControls={
+                  computerUseOpen
+                    ? updateComputerUseRuntimeRunControls
+                    : (request) => updateRuntimeRunControls(request)
+                }
+                onComposerControlsChange={(controls) => {
+                  persistComposerSettings(controls)
+                  if (!computerUseOpen) {
+                    setAgentComposerControls((current) =>
+                      sameRuntimeRunControlInput(current, controls) ? current : controls,
+                    )
+                  }
+                }}
+                onStartRuntimeSession={
+                  computerUseOpen ? startComputerUseRuntimeSession : (options) => startRuntimeSession(options)
+                }
+                onStopRuntimeRun={
+                  computerUseOpen ? stopComputerUseRuntimeRun : (runId) => stopRuntimeRun(runId)
+                }
                 onSubmitManualCallback={(flowId, manualInput) =>
                   submitOpenAiCallback(flowId, { manualInput })
                 }
-                onLogout={() => logoutRuntimeSession()}
+                onLogout={computerUseOpen ? logoutComputerUseRuntimeSession : () => logoutRuntimeSession()}
                 onResolveOperatorAction={async (actionId, decision, options) => {
                   const result = await resolveOperatorAction(actionId, decision, {
                     userAnswer: options?.userAnswer ?? null,
@@ -2540,7 +4929,42 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 }
                 onRefreshNotificationRoutes={(options) => refreshNotificationRoutes(options)}
                 onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
+                onCodeUndoApplied={handleAgentCodeUndoApplied}
                 onRetryStream={retry}
+                agentCreateCanvasIncluded={agentCreateCanvasIncluded}
+                pendingInitialRuntimeAgentId={
+                  computerUseOpen ? null : pendingAgentDockRuntimeAgentId
+                }
+                pendingInitialAgentDefinitionId={
+                  computerUseOpen ? null : pendingAgentDockAgentDefinitionId
+                }
+                onPendingInitialRuntimeAgentIdConsumed={() => {
+                  if (!computerUseOpen && activeProject?.selectedAgentSessionId) {
+                    handleClearPendingInitialRuntimeAgent(activeProject.selectedAgentSessionId)
+                  }
+                }}
+              />
+            </Suspense>
+          </LazyPrerenderedSurface>
+          <LazyPrerenderedSurface
+            open={terminalOpen}
+            prewarm={startupSurfacePrewarm.shouldMount}
+          >
+            <Suspense
+              fallback={
+                <InlineSidebarLoadingShell
+                  label="Terminal"
+                  open={terminalOpen}
+                  width={520}
+                />
+              }
+            >
+              <LazyTerminalSidebar
+                open={terminalOpen}
+                projectId={activeProjectId}
+                registerHandle={(handle) => {
+                  terminalSidebarHandleRef.current = handle
+                }}
               />
             </Suspense>
           </LazyPrerenderedSurface>
@@ -2563,7 +4987,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
                 onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
                 onStartOAuthLogin={(request) => startOAuthLogin(request)}
-                onCheckProviderProfile={(profileId, options) => checkProviderProfile(profileId, options)}
+                onStartXaiDeviceCodeLogin={(request) => startXaiDeviceCodeLogin(request)}
+                onPollXaiDeviceCodeLogin={(request) => pollXaiDeviceCodeLogin(request)}
                 doctorReport={doctorReport}
                 doctorReportStatus={doctorReportStatus}
                 doctorReportError={doctorReportError}
@@ -2576,6 +5001,18 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onRunDoctorReport={(request) => runDoctorReport(request)}
                 dictationAdapter={resolvedAdapter}
                 soulAdapter={resolvedAdapter}
+                agentToolingAdapter={resolvedAdapter}
+                powerAdapter={resolvedAdapter}
+                toolCallGroupingPreference={toolCallGroupingPreference}
+                onToolCallGroupingPreferenceChange={handleToolCallGroupingPreferenceChange}
+                memoryReviewAdapter={memoryReviewAdapter}
+                projectStateAdapter={projectStateAdapter}
+                dangerAdapter={dangerAdapter}
+                projects={projects}
+                projectStartTargets={activeProjectStartTargets}
+                onUpdateProjectStartTargets={handleUpdateProjectStartTargets}
+                resolveProjectRunnerSuggestRequest={resolveProjectRunnerSuggestRequest}
+                onSuggestProjectStartTargets={handleSuggestProjectStartTargets}
                 onUpsertNotificationRoute={(request) =>
                   upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })
                 }
@@ -2624,6 +5061,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onListAgentDefinitions={(request) => resolvedAdapter.listAgentDefinitions(request)}
                 onArchiveAgentDefinition={(request) => resolvedAdapter.archiveAgentDefinition(request)}
                 onGetAgentDefinitionVersion={(request) => resolvedAdapter.getAgentDefinitionVersion(request)}
+                onGetAgentDefinitionVersionDiff={(request) => resolvedAdapter.getAgentDefinitionVersionDiff(request)}
                 onAgentRegistryChanged={refreshCustomAgentDefinitions}
               />
             </Suspense>
@@ -2636,6 +5074,21 @@ export function XeroApp({ adapter }: XeroAppProps) {
             onPickParentFolder={() => resolvedAdapter.pickParentFolder()}
             onCreate={(parentPath, name) => createProject(parentPath, name)}
           />
+          <Suspense fallback={null}>
+            {startTargetsDialogOpen && activeProjectId ? (
+              <LazyStartTargetsDialog
+                open={startTargetsDialogOpen}
+                onOpenChange={setStartTargetsDialogOpen}
+                projectName={shellProjectName ?? activeProject?.name ?? activeProjectId}
+                initialTargets={activeProjectStartTargets}
+                onSubmit={async (targets) => {
+                  await handleUpdateProjectStartTargets(targets)
+                }}
+                resolveSuggestRequest={resolveProjectRunnerSuggestRequest}
+                onSuggest={handleSuggestProjectStartTargets}
+              />
+            ) : null}
+          </Suspense>
         </XeroShell>
       </div>
       <AppBootLoadingOverlay active={showAppBootLoading} />
@@ -2643,6 +5096,36 @@ export function XeroApp({ adapter }: XeroAppProps) {
   )
 }
 
+function ForcedUpdateGate({ children }: { children: ReactNode }) {
+  const update = useForcedAppUpdate()
+
+  if (update.canContinue) {
+    return <>{children}</>
+  }
+
+  const blockingStatus =
+    update.status === 'checking' ||
+    update.status === 'downloading' ||
+    update.status === 'installing' ||
+    update.status === 'error'
+      ? update.status
+      : 'checking'
+
+  return (
+    <UpdateScreen
+      status={blockingStatus}
+      percent={update.progress.percent}
+      version={update.version}
+      error={update.error}
+      onRetry={() => void update.retry()}
+    />
+  )
+}
+
 export default function App() {
-  return <XeroApp />
+  return (
+    <ForcedUpdateGate>
+      <XeroApp />
+    </ForcedUpdateGate>
+  )
 }

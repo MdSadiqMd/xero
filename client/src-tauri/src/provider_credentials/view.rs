@@ -4,10 +4,12 @@ use crate::{
     commands::CommandResult,
     runtime::{
         normalize_openai_codex_model_id, ANTHROPIC_PROVIDER_ID, ANTHROPIC_RUNTIME_KIND,
-        AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
-        GEMINI_RUNTIME_KIND, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
-        OPENAI_CODEX_PROVIDER_ID, OPENAI_COMPATIBLE_RUNTIME_KIND, OPENROUTER_PROVIDER_ID,
-        VERTEX_PROVIDER_ID,
+        AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, CURSOR_DEFAULT_MODEL_ID, CURSOR_PROVIDER_ID,
+        CURSOR_RUNTIME_KIND, DEEPSEEK_PROVIDER_ID, DEEPSEEK_RUNTIME_KIND,
+        GEMINI_AI_STUDIO_PROVIDER_ID, GEMINI_RUNTIME_KIND, GITHUB_MODELS_PROVIDER_ID,
+        OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
+        OPENAI_COMPATIBLE_RUNTIME_KIND, OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID,
+        XAI_DEFAULT_MODEL_ID, XAI_PROVIDER_ID, XAI_RUNTIME_KIND,
     },
 };
 
@@ -20,7 +22,11 @@ pub const OPENAI_CODEX_DEFAULT_PROFILE_ID: &str = "openai_codex-default";
 pub const OPENROUTER_DEFAULT_PROFILE_ID: &str = "openrouter-default";
 pub const ANTHROPIC_DEFAULT_PROFILE_ID: &str = "anthropic-default";
 pub const GITHUB_MODELS_DEFAULT_PROFILE_ID: &str = "github_models-default";
+pub const DEEPSEEK_DEFAULT_PROFILE_ID: &str = "deepseek-default";
+pub const XAI_DEFAULT_PROFILE_ID: &str = "xai-default";
+pub const CURSOR_DEFAULT_PROFILE_ID: &str = "external_cursor_sdk-default";
 pub const OPENROUTER_FALLBACK_MODEL_ID: &str = "openai/gpt-4.1-mini";
+pub const DEEPSEEK_FALLBACK_MODEL_ID: &str = "deepseek-v4-pro";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_LABEL: &str = "OpenAI Codex";
 const OPENROUTER_DEFAULT_PROFILE_LABEL: &str = "OpenRouter";
@@ -52,6 +58,11 @@ pub struct ProviderCredentialProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderCredentialLink {
     OpenAiCodex {
+        account_id: String,
+        session_id: String,
+        updated_at: String,
+    },
+    Xai {
         account_id: String,
         session_id: String,
         updated_at: String,
@@ -198,6 +209,14 @@ impl ProviderCredentialProfile {
                     proof_updated_at: Some(updated_at.clone()),
                 }
             }
+            Some(ProviderCredentialLink::Xai { updated_at, .. }) => {
+                ProviderCredentialReadinessProjection {
+                    ready: true,
+                    status: ProviderCredentialReadinessStatus::Ready,
+                    proof: Some(ProviderCredentialReadinessProof::OAuthSession),
+                    proof_updated_at: Some(updated_at.clone()),
+                }
+            }
             Some(ProviderCredentialLink::ApiKey { updated_at }) => {
                 ProviderCredentialReadinessProjection {
                     ready: true,
@@ -247,11 +266,19 @@ fn synthesize_profile_from_credential(
         ProviderCredentialKind::OAuthSession => {
             let account_id = record.oauth_account_id.clone()?;
             let session_id = record.oauth_session_id.clone()?;
-            Some(ProviderCredentialLink::OpenAiCodex {
-                account_id,
-                session_id,
-                updated_at: record.updated_at.clone(),
-            })
+            match provider_id {
+                OPENAI_CODEX_PROVIDER_ID => Some(ProviderCredentialLink::OpenAiCodex {
+                    account_id,
+                    session_id,
+                    updated_at: record.updated_at.clone(),
+                }),
+                XAI_PROVIDER_ID => Some(ProviderCredentialLink::Xai {
+                    account_id,
+                    session_id,
+                    updated_at: record.updated_at.clone(),
+                }),
+                _ => None,
+            }
         }
         ProviderCredentialKind::ApiKey => Some(ProviderCredentialLink::ApiKey {
             updated_at: record.updated_at.clone(),
@@ -273,6 +300,12 @@ fn synthesize_profile_from_credential(
                 normalize_openai_codex_model_id(OPENAI_CODEX_PROVIDER_ID)
             } else if provider_id == OPENROUTER_PROVIDER_ID {
                 OPENROUTER_FALLBACK_MODEL_ID.into()
+            } else if provider_id == DEEPSEEK_PROVIDER_ID {
+                DEEPSEEK_FALLBACK_MODEL_ID.into()
+            } else if provider_id == XAI_PROVIDER_ID {
+                XAI_DEFAULT_MODEL_ID.into()
+            } else if provider_id == CURSOR_PROVIDER_ID {
+                CURSOR_DEFAULT_MODEL_ID.into()
             } else {
                 provider_id.to_owned()
             }
@@ -336,6 +369,24 @@ fn synthesized_profile_metadata(
             OPENAI_COMPATIBLE_RUNTIME_KIND,
             Some(GITHUB_MODELS_PROVIDER_ID.into()),
         ),
+        DEEPSEEK_PROVIDER_ID => (
+            DEEPSEEK_DEFAULT_PROFILE_ID.into(),
+            "DeepSeek".into(),
+            DEEPSEEK_RUNTIME_KIND,
+            Some(DEEPSEEK_PROVIDER_ID.into()),
+        ),
+        XAI_PROVIDER_ID => (
+            XAI_DEFAULT_PROFILE_ID.into(),
+            "xAI / Grok".into(),
+            XAI_RUNTIME_KIND,
+            Some(XAI_PROVIDER_ID.into()),
+        ),
+        CURSOR_PROVIDER_ID => (
+            CURSOR_DEFAULT_PROFILE_ID.into(),
+            "Cursor".into(),
+            CURSOR_RUNTIME_KIND,
+            Some(CURSOR_PROVIDER_ID.into()),
+        ),
         OPENAI_API_PROVIDER_ID => (
             format!("{OPENAI_API_PROVIDER_ID}-default"),
             "OpenAI API".into(),
@@ -378,5 +429,125 @@ fn synthesized_profile_metadata(
             OPENAI_COMPATIBLE_RUNTIME_KIND,
             None,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xai_api_key_profile_is_synthesized_as_native_provider() {
+        let record = ProviderCredentialRecord {
+            provider_id: XAI_PROVIDER_ID.into(),
+            kind: ProviderCredentialKind::ApiKey,
+            api_key: Some("xai-key".into()),
+            oauth_account_id: None,
+            oauth_session_id: None,
+            oauth_access_token: None,
+            oauth_refresh_token: None,
+            oauth_expires_at: None,
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            default_model_id: None,
+            updated_at: "2026-05-20T12:00:00Z".into(),
+        };
+
+        let synthesized = synthesize_profile_from_credential(&record).expect("xAI profile");
+
+        assert_eq!(synthesized.profile.profile_id, XAI_DEFAULT_PROFILE_ID);
+        assert_eq!(synthesized.profile.provider_id, XAI_PROVIDER_ID);
+        assert_eq!(synthesized.profile.runtime_kind, XAI_RUNTIME_KIND);
+        assert_eq!(synthesized.profile.label, "xAI / Grok");
+        assert_eq!(synthesized.profile.model_id, XAI_DEFAULT_MODEL_ID);
+        assert_eq!(
+            synthesized.profile.preset_id.as_deref(),
+            Some(XAI_PROVIDER_ID)
+        );
+        assert!(matches!(
+            synthesized.profile.credential_link,
+            Some(ProviderCredentialLink::ApiKey { .. })
+        ));
+        assert_eq!(
+            synthesized
+                .api_key_entry
+                .as_ref()
+                .map(|entry| entry.profile_id.as_str()),
+            Some(XAI_DEFAULT_PROFILE_ID)
+        );
+    }
+
+    #[test]
+    fn xai_oauth_profile_keeps_account_session_link() {
+        let record = ProviderCredentialRecord {
+            provider_id: XAI_PROVIDER_ID.into(),
+            kind: ProviderCredentialKind::OAuthSession,
+            api_key: None,
+            oauth_account_id: Some("acct-1".into()),
+            oauth_session_id: Some("sess-1".into()),
+            oauth_access_token: Some("access".into()),
+            oauth_refresh_token: Some("refresh".into()),
+            oauth_expires_at: Some(1_779_984_000),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            default_model_id: None,
+            updated_at: "2026-05-20T12:00:00Z".into(),
+        };
+
+        let synthesized = synthesize_profile_from_credential(&record).expect("xAI profile");
+
+        assert!(synthesized.api_key_entry.is_none());
+        assert!(matches!(
+            synthesized.profile.credential_link,
+            Some(ProviderCredentialLink::Xai { ref account_id, ref session_id, .. })
+                if account_id == "acct-1" && session_id == "sess-1"
+        ));
+    }
+
+    #[test]
+    fn cursor_api_key_profile_is_synthesized_as_external_provider() {
+        let record = ProviderCredentialRecord {
+            provider_id: CURSOR_PROVIDER_ID.into(),
+            kind: ProviderCredentialKind::ApiKey,
+            api_key: Some("cursor-key".into()),
+            oauth_account_id: None,
+            oauth_session_id: None,
+            oauth_access_token: None,
+            oauth_refresh_token: None,
+            oauth_expires_at: None,
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            default_model_id: None,
+            updated_at: "2026-05-23T12:00:00Z".into(),
+        };
+
+        let synthesized = synthesize_profile_from_credential(&record).expect("Cursor profile");
+
+        assert_eq!(synthesized.profile.profile_id, CURSOR_DEFAULT_PROFILE_ID);
+        assert_eq!(synthesized.profile.provider_id, CURSOR_PROVIDER_ID);
+        assert_eq!(synthesized.profile.runtime_kind, CURSOR_RUNTIME_KIND);
+        assert_eq!(synthesized.profile.label, "Cursor");
+        assert_eq!(synthesized.profile.model_id, CURSOR_DEFAULT_MODEL_ID);
+        assert_eq!(
+            synthesized.profile.preset_id.as_deref(),
+            Some(CURSOR_PROVIDER_ID)
+        );
+        assert!(matches!(
+            synthesized.profile.credential_link,
+            Some(ProviderCredentialLink::ApiKey { .. })
+        ));
+        assert_eq!(
+            synthesized
+                .api_key_entry
+                .as_ref()
+                .map(|entry| entry.profile_id.as_str()),
+            Some(CURSOR_DEFAULT_PROFILE_ID)
+        );
     }
 }

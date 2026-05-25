@@ -4,8 +4,8 @@ import { ProviderCredentialsList } from '@/components/xero/provider-profiles/pro
 import type {
   ProviderCredentialDto,
   ProviderCredentialsSnapshotDto,
-  ProviderProfileDiagnosticsDto,
   RuntimeSessionView,
+  XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
@@ -64,32 +64,23 @@ function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): Runtim
   }
 }
 
-function makeProviderDiagnostics(overrides: Partial<ProviderProfileDiagnosticsDto> = {}): ProviderProfileDiagnosticsDto {
+function makeXaiDeviceCodeLogin(
+  overrides: Partial<XaiDeviceCodeLoginDto> = {},
+): XaiDeviceCodeLoginDto {
   return {
-    checkedAt: '2026-04-26T12:00:00Z',
-    profileId: 'openrouter',
-    providerId: 'openrouter',
-    validationChecks: [],
-    reachabilityChecks: [],
-    capabilityChecks: [
-      {
-        contractVersion: 1,
-        checkId: 'diagnostic:v1:openrouter:provider_tool_call_capability',
-        subject: 'model_catalog',
-        status: 'passed',
-        severity: 'info',
-        retryable: false,
-        code: 'provider_tool_call_capability_supported',
-        message: 'Tool calls are supported.',
-        affectedProfileId: 'openrouter',
-        affectedProviderId: 'openrouter',
-        endpoint: null,
-        remediation: null,
-        redactionClass: 'public',
-        redacted: false,
-      },
-    ],
-    modelCatalog: null,
+    providerId: 'xai',
+    flowId: 'xai-device-flow-1',
+    userCode: 'GROK-1234',
+    verificationUri: 'https://auth.x.ai/device',
+    verificationUriComplete: 'https://auth.x.ai/device?user_code=GROK-1234',
+    intervalSeconds: 5,
+    expiresAt: 1_779_984_000,
+    phase: 'awaiting_manual_input',
+    sessionId: null,
+    accountId: null,
+    lastErrorCode: null,
+    lastError: null,
+    updatedAt: '2026-04-15T20:00:00.000Z',
     ...overrides,
   }
 }
@@ -122,8 +113,56 @@ describe('ProviderCredentialsList', () => {
     expect(within(getProviderCard('OpenAI Codex')).getByRole('button', { name: /sign in/i })).toBeInTheDocument()
     expect(within(getProviderCard('OpenRouter')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
     expect(within(getProviderCard('Anthropic')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
+    expect(within(getProviderCard('DeepSeek')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
+    expect(within(getProviderCard('xAI / Grok')).getByRole('button', { name: /sign in/i })).toBeInTheDocument()
+    expect(within(getProviderCard('xAI / Grok')).getByRole('button', { name: /device/i })).toBeInTheDocument()
+    expect(within(getProviderCard('xAI / Grok')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
+    expect(within(getProviderCard('Cursor')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
     expect(within(getProviderCard('Ollama')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
     expect(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: /configure/i })).toBeInTheDocument()
+  })
+
+  it('renders the real provider brand marks in the provider rows', () => {
+    render(
+      <ProviderCredentialsList
+        providerCredentials={makeSnapshot([])}
+        providerCredentialsLoadStatus="ready"
+        providerCredentialsLoadError={null}
+        providerCredentialsSaveStatus="idle"
+        providerCredentialsSaveError={null}
+      />,
+    )
+
+    expect(within(getProviderCard('OpenRouter')).getByRole('img', { name: 'OpenRouter' })).toBeInTheDocument()
+    expect(within(getProviderCard('DeepSeek')).getByRole('img', { name: 'DeepSeek' })).toBeInTheDocument()
+    expect(within(getProviderCard('xAI / Grok')).getByRole('img', { name: 'xAI' })).toBeInTheDocument()
+    expect(within(getProviderCard('Cursor')).getByRole('img', { name: 'Cursor' })).toBeInTheDocument()
+    expect(within(getProviderCard('GitHub Models')).getByRole('img', { name: 'GitHub' })).toBeInTheDocument()
+    expect(within(getProviderCard('Ollama')).getByRole('img', { name: 'Ollama' })).toBeInTheDocument()
+    expect(within(getProviderCard('Azure OpenAI')).getByRole('img', { name: 'Microsoft Azure' })).toBeInTheDocument()
+    expect(within(getProviderCard('Gemini AI Studio')).getByRole('img', { name: 'Google Gemini' })).toBeInTheDocument()
+    expect(within(getProviderCard('Amazon Bedrock')).getByRole('img', { name: 'Amazon Web Services' })).toBeInTheDocument()
+    expect(within(getProviderCard('Google Vertex AI')).getByRole('img', { name: 'Google Cloud' })).toBeInTheDocument()
+  })
+
+  it('keeps provider icon chrome on theme tokens instead of brand colors', () => {
+    render(
+      <ProviderCredentialsList
+        providerCredentials={makeSnapshot([])}
+        providerCredentialsLoadStatus="ready"
+        providerCredentialsLoadError={null}
+        providerCredentialsSaveStatus="idle"
+        providerCredentialsSaveError={null}
+      />,
+    )
+
+    const iconFrame = within(getProviderCard('OpenRouter'))
+      .getByRole('img', { name: 'OpenRouter' })
+      .parentElement
+
+    expect(iconFrame).toHaveClass('border-border/60')
+    expect(iconFrame).toHaveClass('bg-background/60')
+    expect(iconFrame?.className).not.toContain('#')
   })
 
   it('shows Ready badge for an api_key provider with stored credential', () => {
@@ -141,35 +180,6 @@ describe('ProviderCredentialsList', () => {
     )
 
     expect(within(getProviderCard('OpenRouter')).getByText('Ready')).toBeInTheDocument()
-  })
-
-  it('runs a provider preflight check from a connected provider row', async () => {
-    const onCheckProviderProfile = vi.fn(async () => makeProviderDiagnostics())
-    const credentials = makeSnapshot([
-      makeCredential({ providerId: 'openrouter', readinessProof: 'stored_secret', defaultModelId: 'openai/gpt-4.1-mini' }),
-    ])
-    render(
-      <ProviderCredentialsList
-        providerCredentials={credentials}
-        providerCredentialsLoadStatus="ready"
-        providerCredentialsLoadError={null}
-        providerCredentialsSaveStatus="idle"
-        providerCredentialsSaveError={null}
-        onCheckProviderProfile={onCheckProviderProfile}
-      />,
-    )
-
-    const card = getProviderCard('OpenRouter')
-    await act(async () => {
-      fireEvent.click(within(card).getByRole('button', { name: /check/i }))
-    })
-
-    await waitFor(() => expect(onCheckProviderProfile).toHaveBeenCalledWith('openrouter', {
-      includeNetwork: true,
-      modelId: 'openai/gpt-4.1-mini',
-    }))
-    expect(await within(card).findByText('OpenRouter is ready')).toBeInTheDocument()
-    expect(within(card).getByText('1 passed')).toBeInTheDocument()
   })
 
   it('shows Signed in badge and Sign out button for OAuth provider with active session', () => {
@@ -280,6 +290,28 @@ describe('ProviderCredentialsList', () => {
       fireEvent.click(within(card).getByRole('button', { name: /sign in/i }))
     })
     await waitFor(() => expect(onStart).toHaveBeenCalledWith({ providerId: 'openai_codex' }))
+  })
+
+  it('starts the xAI device-code flow and shows the user code', async () => {
+    const onStartDevice = vi.fn(async () => makeXaiDeviceCodeLogin())
+    render(
+      <ProviderCredentialsList
+        providerCredentials={makeSnapshot([])}
+        providerCredentialsLoadStatus="ready"
+        providerCredentialsLoadError={null}
+        providerCredentialsSaveStatus="idle"
+        providerCredentialsSaveError={null}
+        onStartXaiDeviceCodeLogin={onStartDevice}
+      />,
+    )
+
+    const card = getProviderCard('xAI / Grok')
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: /device/i }))
+    })
+
+    await waitFor(() => expect(onStartDevice).toHaveBeenCalledWith({ providerId: 'xai' }))
+    expect(within(card).getByText('GROK-1234')).toBeInTheDocument()
   })
 
   it('calls deleteProviderCredential when signing out an OAuth provider', async () => {

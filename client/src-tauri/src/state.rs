@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     auth::{
         ActiveAuthFlowRegistry, AnthropicAuthConfig, OpenAiCodexAuthConfig,
-        OpenAiCompatibleAuthConfig, OpenRouterAuthConfig,
+        OpenAiCompatibleAuthConfig, OpenRouterAuthConfig, XaiAuthConfig, XaiDeviceCodeFlowRegistry,
     },
     commands::{backend_jobs::BackendJobRegistry, CommandError},
     global_db::global_database_path,
@@ -36,6 +36,7 @@ pub struct DesktopState {
     openai_compatible_auth_config_override: Option<OpenAiCompatibleAuthConfig>,
     openrouter_auth_config_override: Option<OpenRouterAuthConfig>,
     anthropic_auth_config_override: Option<AnthropicAuthConfig>,
+    xai_auth_config_override: Option<XaiAuthConfig>,
     autonomous_web_config_override: Option<AutonomousWebConfig>,
     owned_agent_provider_config_override: Option<AgentProviderConfig>,
     import_failpoints: ImportFailpoints,
@@ -44,6 +45,7 @@ pub struct DesktopState {
     backend_jobs: BackendJobRegistry,
     provider_model_catalog_refresh_registry: ProviderModelCatalogRefreshRegistry,
     active_auth_flows: ActiveAuthFlowRegistry,
+    xai_device_code_flows: XaiDeviceCodeFlowRegistry,
 }
 
 impl DesktopState {
@@ -77,6 +79,11 @@ impl DesktopState {
 
     pub fn with_anthropic_auth_config_override(mut self, config: AnthropicAuthConfig) -> Self {
         self.anthropic_auth_config_override = Some(config);
+        self
+    }
+
+    pub fn with_xai_auth_config_override(mut self, config: XaiAuthConfig) -> Self {
+        self.xai_auth_config_override = Some(config);
         self
     }
 
@@ -147,6 +154,12 @@ impl DesktopState {
             .unwrap_or_else(AnthropicAuthConfig::for_platform)
     }
 
+    pub fn xai_auth_config(&self) -> XaiAuthConfig {
+        self.xai_auth_config_override
+            .clone()
+            .unwrap_or_else(XaiAuthConfig::for_platform)
+    }
+
     pub fn autonomous_web_config(&self) -> AutonomousWebConfig {
         self.autonomous_web_config_override
             .clone()
@@ -159,6 +172,10 @@ impl DesktopState {
 
     pub fn active_auth_flows(&self) -> &ActiveAuthFlowRegistry {
         &self.active_auth_flows
+    }
+
+    pub fn xai_device_code_flows(&self) -> &XaiDeviceCodeFlowRegistry {
+        &self.xai_device_code_flows
     }
 
     pub fn app_data_dir<R: Runtime>(&self, app: &AppHandle<R>) -> Result<PathBuf, CommandError> {

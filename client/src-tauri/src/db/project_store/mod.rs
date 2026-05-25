@@ -1,3 +1,4 @@
+mod agent_audit;
 mod agent_context;
 mod agent_continuity;
 mod agent_coordination;
@@ -11,18 +12,27 @@ pub(crate) mod agent_memory_lance;
 mod agent_retrieval;
 mod agent_session;
 mod autonomous;
+mod code_history;
+mod code_rollback;
 mod connection;
+mod cross_store_outbox;
+mod delivery_state;
 mod freshness;
+mod lance_health;
 mod notifications;
 mod operator;
 mod plugins;
 mod project_record;
 pub(crate) mod project_record_lance;
 mod project_snapshot;
+mod project_state_backup;
 mod runtime;
 mod runtime_boundary;
 mod skills;
+mod storage_observability;
+mod workflows;
 
+pub use agent_audit::*;
 pub use agent_context::*;
 pub use agent_continuity::*;
 pub use agent_coordination::*;
@@ -36,7 +46,11 @@ pub use agent_retrieval::*;
 pub use agent_session::*;
 pub(crate) use agent_session::{ensure_agent_session_active, touch_agent_session_runtime_run};
 pub use autonomous::*;
+pub use code_history::*;
+pub use code_rollback::*;
 pub(crate) use connection::{open_project_database, open_runtime_database};
+pub use cross_store_outbox::*;
+pub use delivery_state::*;
 pub use freshness::*;
 pub use notifications::*;
 pub use operator::*;
@@ -54,8 +68,9 @@ pub use project_record::*;
 pub(crate) use project_snapshot::read_project_row;
 pub use project_snapshot::{
     ensure_runtime_agent_allowed_for_project, load_project_origin, load_project_snapshot,
-    load_project_summary, ProjectSnapshotRecord,
+    load_project_snapshot_and_agent_sessions, load_project_summary, ProjectSnapshotRecord,
 };
+pub use project_state_backup::*;
 pub use runtime::*;
 pub(crate) use runtime::{
     find_prohibited_runtime_persistence_content, find_prohibited_transition_diagnostic_content,
@@ -66,3 +81,5 @@ pub(crate) use runtime::{
 pub(crate) use runtime_boundary::classify_operator_answer_requirement;
 pub use runtime_boundary::*;
 pub use skills::*;
+pub use storage_observability::*;
+pub use workflows::*;

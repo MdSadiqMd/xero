@@ -1,14 +1,14 @@
 import { z } from 'zod'
 import { estimateUtf16Bytes } from '@/lib/byte-budget-cache'
-import { optionalIsoTimestampSchema } from './shared'
-import { runtimeProviderIdSchema } from './runtime'
+import { optionalIsoTimestampSchema } from '@xero/ui/model/shared'
+import { runtimeProviderIdSchema } from '@xero/ui/model/runtime'
 import {
   sessionContextLimitConfidenceSchema,
   sessionContextLimitSourceSchema,
 } from './session-context'
 
 export const providerModelCatalogSourceSchema = z.enum(['live', 'cache', 'manual', 'unavailable'])
-export const providerModelThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
+export const providerModelThinkingEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'x_high'])
 export const providerCapabilityStatusSchema = z.enum([
   'supported',
   'probed',
@@ -22,6 +22,15 @@ export const providerModelCatalogDiagnosticSchema = z
     code: z.string().trim().min(1),
     message: z.string().trim().min(1),
     retryable: z.boolean(),
+  })
+  .strict()
+
+export const providerModelCatalogContractDiagnosticSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+    severity: z.enum(['info', 'warning', 'error']),
+    path: z.array(z.string()),
   })
   .strict()
 
@@ -288,6 +297,7 @@ function validateRuntimeProviderModel(
 
 export const providerModelCatalogSchema = z
   .object({
+    contractVersion: z.literal(1).default(1),
     profileId: z.string().trim().min(1),
     providerId: runtimeProviderIdSchema,
     configuredModelId: z.string().trim().min(1),
@@ -299,6 +309,7 @@ export const providerModelCatalogSchema = z
     cacheAgeSeconds: z.number().int().nullable().optional(),
     cacheTtlSeconds: z.number().int().positive().nullable().optional(),
     models: z.array(providerModelSchema),
+    contractDiagnostics: z.array(providerModelCatalogContractDiagnosticSchema).default([]),
   })
   .strict()
   .superRefine((catalog, ctx) => {
@@ -404,6 +415,7 @@ export type ProviderModelCatalogSourceDto = z.infer<typeof providerModelCatalogS
 export type ProviderModelThinkingEffortDto = z.infer<typeof providerModelThinkingEffortSchema>
 export type ProviderCapabilityStatusDto = z.infer<typeof providerCapabilityStatusSchema>
 export type ProviderModelCatalogDiagnosticDto = z.infer<typeof providerModelCatalogDiagnosticSchema>
+export type ProviderModelCatalogContractDiagnosticDto = z.infer<typeof providerModelCatalogContractDiagnosticSchema>
 export type ProviderModelThinkingCapabilityDto = z.infer<typeof providerModelThinkingCapabilitySchema>
 export type ProviderFeatureCapabilityDto = z.infer<typeof providerFeatureCapabilitySchema>
 export type ProviderToolCallCapabilityDto = z.infer<typeof providerToolCallCapabilitySchema>
@@ -450,6 +462,8 @@ export function getProviderModelThinkingEffortLabel(
   effort: ProviderModelThinkingEffortDto | null | undefined,
 ): string {
   switch (effort) {
+    case 'none':
+      return 'None'
     case 'minimal':
       return 'Minimal'
     case 'low':

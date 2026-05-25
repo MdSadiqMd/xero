@@ -31,7 +31,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { createFrameCoalescer } from "@/lib/frame-governance"
-import { useSidebarWidthMotion } from "@/lib/sidebar-motion"
+import { useSidebarOpenMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -140,6 +140,7 @@ type TabId =
 interface SolanaWorkbenchSidebarProps {
   active?: boolean
   open: boolean
+  openImmediately?: boolean
   prewarm?: boolean
 }
 
@@ -227,13 +228,14 @@ function SolanaPanelSlot({
 export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
   active,
   open,
+  openImmediately = false,
 }: SolanaWorkbenchSidebarProps) {
   const [width, setWidth] = useState<number>(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
-  const workbenchActive = active ?? open
-  const targetWidth = open ? width : 0
+  const workbenchActive = open && (active ?? open)
+  const motionOpen = useSidebarOpenMotion(open, { instantOpen: openImmediately })
+  const targetWidth = motionOpen ? width : 0
   const widthMotion = useSidebarWidthMotion(targetWidth, {
-    animate: false,
     isResizing,
   })
   const widthRef = useRef(width)
@@ -311,11 +313,11 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
 
   const handleStart = useCallback(() => {
     void workbench.start(selectedKind)
-  }, [workbench, selectedKind])
+  }, [workbench.start, selectedKind])
 
   const handleStop = useCallback(() => {
     void workbench.stop()
-  }, [workbench])
+  }, [workbench.stop])
 
   const selectedCluster = useMemo(
     () => workbench.clusters.find((c) => c.kind === selectedKind) ?? null,
@@ -326,7 +328,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
 
   const refreshPersonasForCluster = useCallback(() => {
     void workbench.refreshPersonas(selectedKind)
-  }, [workbench, selectedKind])
+  }, [workbench.refreshPersonas, selectedKind])
 
   const handleCreatePersona = useCallback(
     async (name: string, role: PersonaRole, note: string | null) => {
@@ -338,52 +340,52 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       })
       return response?.receipt ?? null
     },
-    [workbench, selectedKind],
+    [workbench.createPersona, selectedKind],
   )
 
   const handleDeletePersona = useCallback(
     async (name: string) => workbench.deletePersona(selectedKind, name),
-    [workbench, selectedKind],
+    [workbench.deletePersona, selectedKind],
   )
 
   const handleFundPersona = useCallback(
     async (name: string, delta: FundingDelta) =>
       workbench.fundPersona(selectedKind, name, delta),
-    [workbench, selectedKind],
+    [workbench.fundPersona, selectedKind],
   )
 
   const handleSimulate = useCallback(
     async (request: SimulateRequest) => workbench.simulateTx(request),
-    [workbench],
+    [workbench.simulateTx],
   )
 
   const handleExplain = useCallback(
     async (signature: string) =>
       workbench.explainTx({ cluster: selectedKind, signature }),
-    [workbench, selectedKind],
+    [workbench.explainTx, selectedKind],
   )
 
   const handleEstimateFee = useCallback(
     async (programIds: string[]) =>
       workbench.estimatePriorityFee(selectedKind, programIds),
-    [workbench, selectedKind],
+    [workbench.estimatePriorityFee, selectedKind],
   )
 
   const handleIdlFetch = useCallback(
     async (programId: string) => workbench.fetchIdl(programId, selectedKind),
-    [workbench, selectedKind],
+    [workbench.fetchIdl, selectedKind],
   )
 
   const handleIdlDrift = useCallback(
     async (programId: string, localPath: string) =>
       workbench.driftIdl(programId, selectedKind, localPath),
-    [workbench, selectedKind],
+    [workbench.driftIdl, selectedKind],
   )
 
   const handleCodama = useCallback(
     async (idlPath: string, targets: CodamaTarget[], outputDir: string) =>
       workbench.generateCodama(idlPath, targets, outputDir),
-    [workbench],
+    [workbench.generateCodama],
   )
 
   const handlePublishIdl = useCallback(
@@ -400,7 +402,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
         authorityPersona: args.authorityPersona,
         mode: args.mode,
       }),
-    [workbench, selectedKind],
+    [workbench.publishIdl, selectedKind],
   )
 
   const handleBuildProgram = useCallback(
@@ -410,7 +412,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
         profile: args.profile,
         program: args.program,
       }),
-    [workbench],
+    [workbench.buildProgram],
   )
 
   const handleUpgradeCheck = useCallback(
@@ -421,7 +423,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       expectedAuthority: string
       localIdlPath: string | null
     }) => workbench.upgradeCheck(args),
-    [workbench],
+    [workbench.upgradeCheck],
   )
 
   const handleDeploy = useCallback(
@@ -433,7 +435,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       idlPath: string | null
       isFirstDeploy: boolean
     }) => workbench.deployProgram(args),
-    [workbench],
+    [workbench.deployProgram],
   )
 
   const handleSubmitVerified = useCallback(
@@ -445,7 +447,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       commitHash: string | null
       libraryName: string | null
     }) => workbench.submitVerifiedBuild(args),
-    [workbench],
+    [workbench.submitVerifiedBuild],
   )
 
   const handleRollback = useCallback(
@@ -455,7 +457,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       previousSha256: string
       authority: DeployAuthority
     }) => workbench.rollbackProgram(args),
-    [workbench],
+    [workbench.rollbackProgram],
   )
 
   const handleSubscribeLogs = useCallback(
@@ -464,7 +466,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       programIds: string[]
       includeDecoded: boolean
     }) => workbench.subscribeLogs(filter),
-    [workbench],
+    [workbench.subscribeLogs],
   )
 
   const handleFetchRecentLogs = useCallback(
@@ -475,7 +477,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       rpcUrl?: string | null
       cachedOnly?: boolean
     }) => workbench.fetchRecentLogs(args),
-    [workbench],
+    [workbench.fetchRecentLogs],
   )
 
   const handleScaffoldIndexer = useCallback(
@@ -487,7 +489,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       overwrite?: boolean
       rpcUrl?: string | null
     }) => workbench.scaffoldIndexer(args),
-    [workbench],
+    [workbench.scaffoldIndexer],
   )
 
   const handleRunIndexer = useCallback(
@@ -497,11 +499,27 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
       lastN?: number
       rpcUrl?: string | null
     }) => workbench.runIndexer(args),
-    [workbench],
+    [workbench.runIndexer],
+  )
+
+  const handleCheckClusterDrift = useCallback(
+    () => workbench.checkClusterDrift(),
+    [workbench.checkClusterDrift],
+  )
+
+  const handleRefreshCostSnapshot = useCallback(
+    () => workbench.refreshCostSnapshot(),
+    [workbench.refreshCostSnapshot],
+  )
+
+  const handleRefreshRpcHealth = useCallback(
+    () => workbench.refreshRpcHealth(),
+    [workbench.refreshRpcHealth],
   )
 
   const notifications = useMemo(() => {
-    const logErrorCount = countErroredLogs(workbench.logEntries)
+    const logErrorCount =
+      workbench.logFeedView?.counts.errors ?? countErroredLogs(workbench.logEntries)
     const indexerErrorCount = countErroredLogs(
       workbench.lastIndexerRun?.entries ?? [],
     )
@@ -720,6 +738,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
   return (
     <aside
       aria-hidden={!open}
+      aria-label="Solana workbench"
       className={cn(
         widthMotion.islandClassName,
         "relative flex shrink-0 flex-col overflow-hidden bg-sidebar",
@@ -1007,13 +1026,15 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
               <LazySolanaLogFeed
                 cluster={selectedKind}
                 busy={workbench.logBusy}
-                entries={workbench.logEntries}
+                feedView={workbench.logFeedView}
+                feedVersion={workbench.logFeedVersion}
                 decodedEvents={workbench.decodedLogEvents}
                 activeSubscriptions={workbench.activeLogSubscriptions}
                 lastFetch={workbench.lastLogFetch}
                 onSubscribe={handleSubscribeLogs}
                 onUnsubscribe={workbench.unsubscribeLogs}
                 onFetchRecent={handleFetchRecentLogs}
+                onRefreshView={workbench.refreshLogView}
                 onRefreshSubscriptions={workbench.refreshActiveLogSubscriptions}
                 onClear={workbench.clearLogFeed}
               />
@@ -1171,8 +1192,8 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
                 trackedPrograms={workbench.trackedPrograms}
                 onScanSecrets={workbench.scanSecrets}
                 onRunScopeCheck={workbench.runScopeCheck}
-                onCheckDrift={() => workbench.checkClusterDrift()}
-                onRefreshCost={() => workbench.refreshCostSnapshot()}
+                onCheckDrift={handleCheckClusterDrift}
+                onRefreshCost={handleRefreshCostSnapshot}
                 onResetCost={workbench.resetCostLedger}
               />
             </SolanaPanelSlot>
@@ -1185,7 +1206,7 @@ export const SolanaWorkbenchSidebar = memo(function SolanaWorkbenchSidebar({
           >
             <RpcEndpoints
               active={activeTab === "rpc"}
-              onRefresh={() => workbench.refreshRpcHealth()}
+              onRefresh={handleRefreshRpcHealth}
               rpcHealth={workbench.rpcHealth}
             />
           </SolanaPanelSlot>

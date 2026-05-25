@@ -1,12 +1,13 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from 'react'
 import {
   ArrowDown,
   Check,
   ChevronDown,
   ChevronRight,
   Loader2,
+  Monitor,
   Plus,
   SplitSquareHorizontal,
   X,
@@ -26,25 +27,35 @@ import type {
   AgentPaneView,
   AgentProviderModelView,
 } from '@/src/features/xero/use-xero-desktop-state'
+import type { ToolCallGroupingPreference } from '@/src/features/xero/tool-call-grouping-preference'
 import type { XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import type {
   AgentDefinitionSummaryDto,
   AgentSessionView,
+  CodeHistoryOperationDto,
+  RuntimeAgentIdDto,
   RuntimeRunView,
+  RuntimeAgentProjectOrigin,
   RuntimeAutoCompactPreferenceDto,
   ProviderAuthSessionView,
   RuntimeSessionView,
+  RuntimeStreamActionRequiredItemView,
   RuntimeStreamActivityItemView,
   RuntimeStreamFailureItemView,
+  RuntimeStreamMediaAttachmentDto,
   RuntimeStreamToolItemView,
   RuntimeStreamViewItem,
+  ReturnSessionToHereResponseDto,
+  SelectiveUndoResponseDto,
   UpsertNotificationRouteRequestDto,
 } from '@/src/lib/xero-model'
 import type { SessionContextSnapshotDto } from '@/src/lib/xero-model/session-context'
+import type { AgentHandoffContextSummaryDto } from '@/src/lib/xero-model/agent-reports'
 import {
   getRuntimeAgentDescriptorsForProjectOrigin,
   getRuntimeAgentLabel,
   getRuntimeRunThinkingEffortLabel,
+  type AgentDefaultModelDto,
   type RuntimeRunControlInputDto,
   type StagedAgentAttachmentDto,
 } from '@/src/lib/xero-model'
@@ -64,11 +75,30 @@ import {
   getComposerPlaceholder,
   getComposerThinkingOptions,
 } from './agent-runtime/composer-helpers'
+import {
+  ActionPromptDispatchProvider,
+  type ActionPromptDispatchValue,
+} from '@xero/ui/components/transcript/action-prompt-card'
+import {
+  RoutingSuggestionDispatchProvider,
+  type RoutingSuggestionDispatchValue,
+} from '@xero/ui/components/transcript/routing-suggestion-card'
 import { ComposerDock, type ComposerPendingAttachment } from './agent-runtime/composer-dock'
+import { PlanTray } from './agent-runtime/plan-tray'
 import { AgentPaneDropOverlay } from './agent-runtime/agent-pane-drop-overlay'
 import { AgentCreateDraftSection } from './agent-runtime/agent-create-draft-section'
-import { ConversationSection, type ConversationTurn } from './agent-runtime/conversation-section'
-import { EmptySessionState } from './agent-runtime/empty-session-state'
+import {
+  ConversationSection,
+  getCodeUndoStateKey,
+  getReturnSessionToHereStateKey,
+  type CodeUndoRequest,
+  type CodeUndoConflictSummary,
+  type CodeUndoUiState,
+  type ConversationMessageAttachment,
+  type ConversationTurn,
+  type ReturnSessionToHereUiRequest,
+} from '@xero/ui/components/transcript/conversation-section'
+import { EmptySessionState } from '@xero/ui/components/empty-session-state'
 import {
   getToolCardTitle,
   getStreamRunId,
@@ -76,6 +106,10 @@ import {
   getToolSummaryContext,
   hasUsableRuntimeRunId,
 } from './agent-runtime/runtime-stream-helpers'
+import {
+  HandoffContextDialog,
+  type HandoffContextDialogStatus,
+} from './agent-runtime/handoff-context-dialog'
 import { SetupEmptyState } from './agent-runtime/setup-empty-state'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictation'
@@ -84,7 +118,13 @@ export type AgentRuntimeDesktopAdapter = SpeechDictationAdapter &
   Partial<
     Pick<
       XeroDesktopAdapter,
-      'getSessionContextSnapshot' | 'stageAgentAttachment' | 'discardAgentAttachment'
+      | 'applySelectiveUndo'
+      | 'returnSessionToHere'
+      | 'getSessionContextSnapshot'
+      | 'getSessionTranscript'
+      | 'stageAgentAttachment'
+      | 'discardAgentAttachment'
+      | 'getAgentHandoffContextSummary'
     >
   >
 
@@ -101,11 +141,12 @@ export interface AgentRuntimeProps {
   onStartRuntimeRun?: (options?: {
     controls?: RuntimeRunControlInputDto | null
     prompt?: string | null
+    attachments?: StagedAgentAttachmentDto[]
   }) => Promise<RuntimeRunView | null>
   onUpdateRuntimeRunControls?: (request?: {
     controls?: RuntimeRunControlInputDto | null
     prompt?: string | null
-    autoCompact?: RuntimeAutoCompactPreferenceDto | null
+    attachments?: StagedAgentAttachmentDto[]
   }) => Promise<RuntimeRunView | null>
   onComposerControlsChange?: (controls: RuntimeRunControlInputDto | null) => void
   onStartRuntimeSession?: (options?: { providerProfileId?: string | null }) => Promise<RuntimeSessionView | null>
@@ -113,6 +154,7 @@ export interface AgentRuntimeProps {
   onSubmitManualCallback?: (flowId: string, manualInput: string) => Promise<ProviderAuthSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
   onRetryStream?: () => Promise<void>
+  onCodeUndoApplied?: () => Promise<unknown> | unknown
   onResolveOperatorAction?: (
     actionId: string,
     decision: 'approve' | 'reject',
@@ -132,8 +174,16 @@ export interface AgentRuntimeProps {
   isCreatingSession?: boolean
   /** Active and known custom agent definitions visible to the composer selector. */
   customAgentDefinitions?: readonly AgentDefinitionSummaryDto[]
+  /** Per-agent default models keyed by composer agent selection key. */
+  agentDefaultModels?: Readonly<Record<string, AgentDefaultModelDto | null | undefined>>
   /** Open the Settings → Agents tab so the user can manage custom agents. */
   onOpenAgentManagement?: () => void
+  /** Open the by-hand agent builder form. */
+  onCreateAgentByHand?: () => void
+  /** Move to Workflow and begin a new canvas-backed Agent Create session. */
+  onStartWorkflowAgentCreate?: () => void
+  /** True when Agent Create is paired with the visible workflow authoring canvas. */
+  agentCreateCanvasIncluded?: boolean
   /** Visual density. Compact attaches the composer flush to bottom and moves secondary controls into a gear popover. */
   density?: 'comfortable' | 'compact'
   /** Pane id for multi-pane workspaces. */
@@ -169,6 +219,25 @@ export interface AgentRuntimeProps {
   onSelectSidebarSession?: (agentSessionId: string) => void
   /** Close the sidebar from the agent header (X button). */
   onCloseSidebar?: () => void
+  /**
+   * Historical conversation turns from prior runs in this agent session
+   * (loaded from the persisted session transcript). When provided, they are
+   * prepended ahead of the live stream so a same-session handoff reads as a
+   * continuous conversation. Items belonging to the active run must already
+   * be excluded by the caller.
+   */
+  historicalConversationTurns?: readonly ConversationTurn[]
+  /**
+   * One-shot runtime agent to apply to the composer when this pane mounts or
+   * when the value changes to a new non-null id. Used by "Create agent" entry
+   * points that open a fresh session pre-selected on a specific agent.
+   */
+  pendingInitialRuntimeAgentId?: RuntimeAgentIdDto | null
+  pendingInitialAgentDefinitionId?: string | null
+  /** Called once the pending initial runtime agent has been applied. */
+  onPendingInitialRuntimeAgentIdConsumed?: () => void
+  /** Display preference for compacting adjacent completed tool calls. */
+  toolCallGroupingPreference?: ToolCallGroupingPreference
 }
 
 const EMPTY_RUNTIME_STREAM_ITEMS: RuntimeStreamViewItem[] = []
@@ -213,12 +282,78 @@ function isReasoningActivityItem(item: RuntimeStreamViewItem): item is RuntimeSt
   return item.kind === 'activity' && item.code === 'owned_agent_reasoning'
 }
 
+function isFileChangeActivityItem(item: RuntimeStreamViewItem): item is RuntimeStreamActivityItemView {
+  return item.kind === 'activity' && item.code === 'owned_agent_file_changed'
+}
+
 function getReasoningActivityText(item: RuntimeStreamActivityItemView): string {
   return item.text ?? item.detail ?? ''
 }
 
+function parseFileChangeActivityDetail(detail: string | null): {
+  operation: string
+  path: string
+  toPath: string | null
+} {
+  const fallback = {
+    operation: 'changed',
+    path: 'unknown path',
+    toPath: null,
+  }
+  if (!detail) {
+    return fallback
+  }
+
+  const summary = detail.split(' · ')[0]?.trim() ?? ''
+  const match = /^([^:]+):\s*(.+)$/.exec(summary)
+  if (!match) {
+    return {
+      ...fallback,
+      path: summary || fallback.path,
+    }
+  }
+
+  const operation = match[1]?.trim() || fallback.operation
+  const pathSegment = match[2]?.trim() || fallback.path
+  const renameSeparator = ' -> '
+  const renameIndex = pathSegment.indexOf(renameSeparator)
+  if (renameIndex >= 0) {
+    const path = pathSegment.slice(0, renameIndex).trim()
+    const toPath = pathSegment.slice(renameIndex + renameSeparator.length).trim()
+    return {
+      operation,
+      path: path || fallback.path,
+      toPath: toPath || null,
+    }
+  }
+
+  return {
+    operation,
+    path: pathSegment,
+    toPath: null,
+  }
+}
+
 function isCodeEditToolName(toolName: string): boolean {
   return CODE_EDIT_TOOL_NAMES.has(toolName)
+}
+
+function actionPromptTurnFromItem(item: RuntimeStreamActionRequiredItemView): ConversationTurn {
+  const shape = item.answerShape ?? 'plain_text'
+  return {
+    id: item.id,
+    kind: 'action_prompt',
+    sequence: item.sequence,
+    actionId: item.actionId,
+    actionType: item.actionType,
+    title: item.title,
+    detail: item.detail,
+    shape,
+    options: item.options ?? null,
+    allowMultiple: item.allowMultiple ?? shape === 'multi_choice',
+    pendingDecision: null,
+    isResolved: false,
+  }
 }
 
 function actionTurnFromItem(item: RuntimeStreamToolItemView): ConversationTurn {
@@ -233,8 +368,67 @@ function actionTurnFromItem(item: RuntimeStreamToolItemView): ConversationTurn {
     title: getToolCardTitle(item),
     detail,
     detailRows: getActionDetailRows(item, summary),
+    mediaAttachments: runtimeMediaAttachmentsToConversation(item.mediaAttachments),
     state: item.toolState,
     defaultOpen: isCodeEditToolName(item.toolName),
+  }
+}
+
+function runtimeMediaAttachmentsToConversation(
+  attachments: readonly RuntimeStreamMediaAttachmentDto[] | null | undefined,
+): ConversationMessageAttachment[] | undefined {
+  if (!attachments || attachments.length === 0) {
+    return undefined
+  }
+  return attachments.map((attachment) => {
+    const originalName = attachment.title?.trim()
+      || (attachment.source.kind === 'app_data_path'
+        ? attachment.source.absolutePath.split(/[\\/]/).pop()
+        : null)
+      || attachment.id
+    const absolutePath =
+      attachment.source.kind === 'app_data_path'
+        ? attachment.source.absolutePath
+        : attachment.source.kind === 'artifact'
+          ? attachment.source.absolutePath ?? undefined
+          : undefined
+    return {
+      id: attachment.id,
+      kind: attachment.kind,
+      mediaType: attachment.mediaType,
+      originalName,
+      sizeBytes: attachment.sizeBytes ?? 0,
+      title: attachment.title ?? null,
+      alt: attachment.alt ?? null,
+      width: attachment.width ?? null,
+      height: attachment.height ?? null,
+      source: attachment.source,
+      renderUrl: attachment.renderUrl ?? null,
+      previewSrc:
+        attachment.renderUrl ??
+        (attachment.source.kind === 'data_url' ? attachment.source.dataUrl : undefined),
+      absolutePath,
+    }
+  })
+}
+
+function fileChangeTurnFromItem(item: RuntimeStreamActivityItemView): ConversationTurn {
+  const detail = item.detail ?? item.text ?? 'File changed.'
+  const parsed = parseFileChangeActivityDetail(detail)
+
+  return {
+    id: item.id,
+    kind: 'file_change',
+    runId: item.runId,
+    sequence: item.sequence,
+    title: item.title,
+    detail,
+    operation: parsed.operation,
+    path: parsed.path,
+    toPath: parsed.toPath,
+    changeGroupId: item.codeChangeGroupId ?? null,
+    workspaceEpoch: item.codeWorkspaceEpoch ?? null,
+    patchAvailability: item.codePatchAvailability ?? null,
   }
 }
 
@@ -332,6 +526,22 @@ function mergeActionRows(
   return merged
 }
 
+function mergeConversationAttachments(
+  existing: ConversationMessageAttachment[] | undefined,
+  incoming: ConversationMessageAttachment[] | undefined,
+): ConversationMessageAttachment[] | undefined {
+  if (!existing?.length) return incoming
+  if (!incoming?.length) return existing
+  const merged = existing.slice()
+  const seen = new Set(existing.map((attachment) => attachment.id))
+  for (const attachment of incoming) {
+    if (seen.has(attachment.id)) continue
+    seen.add(attachment.id)
+    merged.push(attachment)
+  }
+  return merged
+}
+
 function mergeActionTurn(existing: ConversationTurn, incoming: ConversationTurn): void {
   if (existing.kind !== 'action' || incoming.kind !== 'action') {
     return
@@ -341,6 +551,10 @@ function mergeActionTurn(existing: ConversationTurn, incoming: ConversationTurn)
   existing.state = incoming.state
   existing.detail = incoming.detail
   existing.detailRows = mergeActionRows(existing.detailRows, incoming.detailRows)
+  existing.mediaAttachments = mergeConversationAttachments(
+    existing.mediaAttachments,
+    incoming.mediaAttachments,
+  )
   existing.defaultOpen = Boolean(existing.defaultOpen || incoming.defaultOpen)
 
   if (incoming.title.length >= existing.title.length) {
@@ -429,6 +643,12 @@ function isCodeEditAction(turn: Extract<ConversationTurn, { kind: 'action' }>): 
   return isCodeEditToolName(turn.toolName)
 }
 
+function isTerminalActionState(
+  state: RuntimeStreamToolItemView['toolState'] | null | undefined,
+): boolean {
+  return state === 'succeeded' || state === 'failed'
+}
+
 function summarizeActionGroup(
   actions: Extract<ConversationTurn, { kind: 'action' }>[],
 ): string {
@@ -471,10 +691,15 @@ function actionGroupTurnFromActions(
     state: actionGroupState(actions),
     actions: actions.map((action) => ({
       id: action.id,
+      sequence: action.sequence,
+      toolCallId: action.toolCallId,
+      toolName: action.toolName,
       title: action.title,
       detail: action.detail,
       detailRows: action.detailRows,
+      mediaAttachments: action.mediaAttachments,
       state: action.state ?? null,
+      ...(action.defaultOpen ? { defaultOpen: true } : {}),
     })),
   }
 }
@@ -494,7 +719,7 @@ function compactActionBursts(turns: ConversationTurn[]): ConversationTurn[] {
 
   for (const turn of turns) {
     if (turn.kind === 'action') {
-      if (isCodeEditAction(turn)) {
+      if (isCodeEditAction(turn) || !isTerminalActionState(turn.state)) {
         flushActionBuffer()
         compactedTurns.push(turn)
         continue
@@ -537,100 +762,352 @@ interface PendingPromptTurn {
   queuedAt: string | null
 }
 
-const conversationProjectionCache = new WeakMap<readonly RuntimeStreamViewItem[], ConversationProjection>()
+const conversationProjectionCache = new WeakMap<
+  readonly RuntimeStreamViewItem[],
+  Partial<Record<ToolCallGroupingPreference, ConversationProjection>>
+>()
 
-function buildConversationProjection(runtimeStreamItems: readonly RuntimeStreamViewItem[]): ConversationProjection {
-  const turns: ConversationTurn[] = []
-  const actionTurnIndexByToolCallId = new Map<string, number>()
+interface TurnRoutingContext {
+  turns: ConversationTurn[]
+  actionTurnIndexByToolCallId: Map<string, number>
+}
+
+function createTurnRoutingContext(): TurnRoutingContext {
+  return {
+    turns: [],
+    actionTurnIndexByToolCallId: new Map<string, number>(),
+  }
+}
+
+const ROUTING_MARKER_REGEX =
+  /<xero-routing-suggestion\s+([^/>]*?)\/>/i
+
+interface ParsedRoutingMarker {
+  targetAgentId: 'plan' | 'engineer' | 'debug'
+  reason: string
+  summary: string
+  rawMarker: string
+}
+
+function parseRoutingMarker(text: string): ParsedRoutingMarker | null {
+  const match = text.match(ROUTING_MARKER_REGEX)
+  if (!match) return null
+  const attrs = match[1]
+  const target = /target\s*=\s*"([^"]*)"/i.exec(attrs)?.[1]?.toLowerCase().trim()
+  if (target !== 'plan' && target !== 'engineer' && target !== 'debug') {
+    return null
+  }
+  const reason = /reason\s*=\s*"([^"]*)"/i.exec(attrs)?.[1]?.trim() ?? ''
+  const summary = /summary\s*=\s*"([^"]*)"/i.exec(attrs)?.[1]?.trim() ?? ''
+  return {
+    targetAgentId: target,
+    reason,
+    summary,
+    rawMarker: match[0],
+  }
+}
+
+function maybeAttachRoutingSuggestion(
+  context: TurnRoutingContext,
+  messageTurn: Extract<ConversationTurn, { kind: 'message' }>,
+): void {
+  if (messageTurn.role !== 'assistant') return
+  const parsed = parseRoutingMarker(messageTurn.text)
+  if (!parsed) return
+
+  // Strip the marker from the message body so the assistant text reads cleanly.
+  messageTurn.text = messageTurn.text.replace(parsed.rawMarker, '').replace(/\n{3,}/g, '\n\n').trim()
+
+  const routingTurnId = `routing_suggestion:${messageTurn.id}`
+  const existingIndex = context.turns.findIndex(
+    (turn) => turn.kind === 'routing_suggestion' && turn.id === routingTurnId,
+  )
+
+  const next: Extract<ConversationTurn, { kind: 'routing_suggestion' }> = {
+    id: routingTurnId,
+    kind: 'routing_suggestion',
+    sequence: messageTurn.sequence + 0.5,
+    targetAgentId: parsed.targetAgentId,
+    reason: parsed.reason,
+    summary: parsed.summary,
+    isResolved: false,
+    acceptedTarget: null,
+  }
+
+  if (existingIndex >= 0) {
+    const existing = context.turns[existingIndex]
+    if (existing.kind === 'routing_suggestion') {
+      next.isResolved = existing.isResolved
+      next.acceptedTarget = existing.acceptedTarget
+    }
+    context.turns[existingIndex] = next
+    return
+  }
+
+  context.turns.push(next)
+}
+
+/**
+ * Append the projected turn for a single runtime stream item into `context`,
+ * preserving the assistant-transcript merge and tool-call dedupe behaviour.
+ *
+ * Returns true when the item is a user transcript (so the caller can update
+ * top-level state like `hasUserMessage`).
+ */
+function routeItemIntoTurns(item: RuntimeStreamViewItem, context: TurnRoutingContext): boolean {
+  if (item.kind === 'transcript') {
+    if (item.role !== 'user' && item.role !== 'assistant') {
+      return false
+    }
+
+    const previous = context.turns.at(-1)
+    if (item.role === 'assistant' && previous?.kind === 'message' && previous.role === item.role) {
+      previous.text = appendTranscriptDelta(previous.text, item.text)
+      previous.sequence = item.sequence
+      previous.attachments = mergeConversationAttachments(
+        previous.attachments,
+        runtimeMediaAttachmentsToConversation(item.mediaAttachments),
+      )
+      maybeAttachRoutingSuggestion(context, previous)
+      return false
+    }
+
+    context.turns.push({
+      id: item.id,
+      kind: 'message',
+      role: item.role,
+      sequence: item.sequence,
+      text: item.text,
+      attachments: runtimeMediaAttachmentsToConversation(item.mediaAttachments),
+    })
+    if (item.role === 'assistant') {
+      const justPushed = context.turns.at(-1)
+      if (justPushed?.kind === 'message') {
+        maybeAttachRoutingSuggestion(context, justPushed)
+      }
+    }
+    return item.role === 'user'
+  }
+
+  if (isReasoningActivityItem(item)) {
+    const text = getReasoningActivityText(item)
+    if (text.trim().length === 0) {
+      return false
+    }
+    context.turns.push({
+      id: item.id,
+      kind: 'thinking',
+      sequence: item.sequence,
+      text,
+    })
+    return false
+  }
+
+  if (isFileChangeActivityItem(item)) {
+    context.turns.push(fileChangeTurnFromItem(item))
+    return false
+  }
+
+  if (item.kind === 'action_required') {
+    context.turns.push(actionPromptTurnFromItem(item))
+    return false
+  }
+
+  if (!shouldShowActionItem(item)) {
+    return false
+  }
+
+  if (item.kind === 'failure') {
+    context.turns.push({
+      id: item.id,
+      kind: 'failure',
+      sequence: item.sequence,
+      code: item.code,
+      message: item.message,
+    })
+    return false
+  }
+
+  if (item.kind !== 'tool') {
+    return false
+  }
+
+  const incomingActionTurn = actionTurnFromItem(item)
+  const existingActionTurnIndex = context.actionTurnIndexByToolCallId.get(item.toolCallId)
+  const existingActionTurn =
+    existingActionTurnIndex != null ? context.turns[existingActionTurnIndex] : null
+
+  if (existingActionTurn?.kind === 'action') {
+    mergeActionTurn(existingActionTurn, incomingActionTurn)
+    return false
+  }
+
+  context.actionTurnIndexByToolCallId.set(item.toolCallId, context.turns.length)
+  context.turns.push(incomingActionTurn)
+  return false
+}
+
+interface SubagentGroupState {
+  index: number
+  context: TurnRoutingContext
+}
+
+function subagentLifecycleStatusOrFallback(item: RuntimeStreamViewItem): string {
+  if (item.kind === 'subagent_lifecycle') {
+    return item.subagentStatus
+  }
+  return 'running'
+}
+
+function subagentRoleLabelFor(item: RuntimeStreamViewItem): string {
+  if (item.kind === 'subagent_lifecycle') {
+    return (
+      item.subagentRoleLabel ??
+      item.subagentRole ??
+      item.subagentId ??
+      'Subagent'
+    )
+  }
+  return item.subagentRoleLabel ?? item.subagentRole ?? item.subagentId ?? 'Subagent'
+}
+
+function emptySubagentGroupTurn(
+  item: RuntimeStreamViewItem,
+  subagentId: string,
+): Extract<ConversationTurn, { kind: 'subagent_group' }> {
+  return {
+    id: `subagent_group:${subagentId}`,
+    kind: 'subagent_group',
+    sequence: item.sequence,
+    subagentId,
+    role: item.kind === 'subagent_lifecycle' ? item.subagentRole : item.subagentRole ?? null,
+    roleLabel: subagentRoleLabelFor(item),
+    status: subagentLifecycleStatusOrFallback(item),
+    runId: item.kind === 'subagent_lifecycle' ? item.subagentRunId : null,
+    prompt: item.kind === 'subagent_lifecycle' ? item.prompt : null,
+    usedToolCalls: item.kind === 'subagent_lifecycle' ? item.usedToolCalls : null,
+    maxToolCalls: item.kind === 'subagent_lifecycle' ? item.maxToolCalls : null,
+    usedTokens: item.kind === 'subagent_lifecycle' ? item.usedTokens : null,
+    maxTokens: item.kind === 'subagent_lifecycle' ? item.maxTokens : null,
+    resultSummary: item.kind === 'subagent_lifecycle' ? item.resultSummary : null,
+    startedAt: item.kind === 'subagent_lifecycle' ? item.createdAt : null,
+    completedAt: null,
+    children: [],
+  }
+}
+
+function finalizeActionTurns(
+  turns: ConversationTurn[],
+  toolCallGroupingPreference: ToolCallGroupingPreference,
+): ConversationTurn[] {
+  const projectedTurns =
+    toolCallGroupingPreference === 'grouped' ? compactActionBursts(turns) : turns
+  return limitActionTurns(projectedTurns)
+}
+
+function buildConversationProjection(
+  runtimeStreamItems: readonly RuntimeStreamViewItem[],
+  toolCallGroupingPreference: ToolCallGroupingPreference,
+): ConversationProjection {
+  const topContext = createTurnRoutingContext()
+  const subagentGroups = new Map<string, SubagentGroupState>()
   let hasUserMessage = false
 
+  const ensureSubagentGroup = (
+    item: RuntimeStreamViewItem,
+    subagentId: string,
+  ): SubagentGroupState => {
+    const existing = subagentGroups.get(subagentId)
+    if (existing) {
+      return existing
+    }
+    const turn = emptySubagentGroupTurn(item, subagentId)
+    const index = topContext.turns.length
+    topContext.turns.push(turn)
+    const state: SubagentGroupState = {
+      index,
+      context: createTurnRoutingContext(),
+    }
+    subagentGroups.set(subagentId, state)
+    return state
+  }
+
   for (const item of runtimeStreamItems) {
-    if (item.kind === 'transcript') {
-      if (item.role !== 'user' && item.role !== 'assistant') {
-        continue
+    if (item.kind === 'subagent_lifecycle') {
+      const state = ensureSubagentGroup(item, item.subagentId)
+      const groupTurn = topContext.turns[state.index]
+      if (groupTurn?.kind === 'subagent_group') {
+        groupTurn.status = item.subagentStatus
+        if (item.subagentRole) groupTurn.role = item.subagentRole
+        const roleLabel = subagentRoleLabelFor(item)
+        if (roleLabel) groupTurn.roleLabel = roleLabel
+        if (item.subagentRunId) groupTurn.runId = item.subagentRunId
+        if (item.prompt) groupTurn.prompt = item.prompt
+        if (typeof item.usedToolCalls === 'number') {
+          groupTurn.usedToolCalls = item.usedToolCalls
+        }
+        if (typeof item.maxToolCalls === 'number') {
+          groupTurn.maxToolCalls = item.maxToolCalls
+        }
+        if (typeof item.usedTokens === 'number') {
+          groupTurn.usedTokens = item.usedTokens
+        }
+        if (typeof item.maxTokens === 'number') {
+          groupTurn.maxTokens = item.maxTokens
+        }
+        if (item.resultSummary) groupTurn.resultSummary = item.resultSummary
+        if (
+          item.subagentStatus === 'completed' ||
+          item.subagentStatus === 'failed' ||
+          item.subagentStatus === 'cancelled' ||
+          item.subagentStatus === 'budget_exhausted' ||
+          item.subagentStatus === 'handed_off'
+        ) {
+          groupTurn.completedAt = item.createdAt
+        }
+        groupTurn.sequence = Math.max(groupTurn.sequence, item.sequence)
       }
+      continue
+    }
 
-      if (item.role === 'user') {
-        hasUserMessage = true
+    if (item.subagentId) {
+      const state = ensureSubagentGroup(item, item.subagentId)
+      routeItemIntoTurns(item, state.context)
+      const groupTurn = topContext.turns[state.index]
+      if (groupTurn?.kind === 'subagent_group') {
+        groupTurn.children = finalizeActionTurns(state.context.turns, toolCallGroupingPreference)
+        groupTurn.sequence = Math.max(groupTurn.sequence, item.sequence)
       }
-
-      const previous = turns.at(-1)
-      if (item.role === 'assistant' && previous?.kind === 'message' && previous.role === item.role) {
-        previous.text = appendTranscriptDelta(previous.text, item.text)
-        previous.sequence = item.sequence
-        continue
-      }
-
-      turns.push({
-        id: item.id,
-        kind: 'message',
-        role: item.role,
-        sequence: item.sequence,
-        text: item.text,
-      })
       continue
     }
 
-    if (isReasoningActivityItem(item)) {
-      const text = getReasoningActivityText(item)
-      if (text.trim().length === 0) {
-        continue
-      }
-
-      turns.push({
-        id: item.id,
-        kind: 'thinking',
-        sequence: item.sequence,
-        text,
-      })
-      continue
+    const sawUser = routeItemIntoTurns(item, topContext)
+    if (sawUser) {
+      hasUserMessage = true
     }
-
-    if (!shouldShowActionItem(item)) {
-      continue
-    }
-
-    if (item.kind === 'failure') {
-      turns.push({
-        id: item.id,
-        kind: 'failure',
-        sequence: item.sequence,
-        code: item.code,
-        message: item.message,
-      })
-      continue
-    }
-
-    const incomingActionTurn = actionTurnFromItem(item)
-    const existingActionTurnIndex = actionTurnIndexByToolCallId.get(item.toolCallId)
-    const existingActionTurn =
-      existingActionTurnIndex != null ? turns[existingActionTurnIndex] : null
-
-    if (existingActionTurn?.kind === 'action') {
-      mergeActionTurn(existingActionTurn, incomingActionTurn)
-      continue
-    }
-
-    actionTurnIndexByToolCallId.set(item.toolCallId, turns.length)
-    turns.push(incomingActionTurn)
   }
 
   return {
-    visibleTurns: limitActionTurns(compactActionBursts(turns)),
+    visibleTurns: finalizeActionTurns(topContext.turns, toolCallGroupingPreference),
     hasUserMessage,
   }
 }
 
 function getConversationProjection(
   runtimeStreamItems: readonly RuntimeStreamViewItem[],
+  toolCallGroupingPreference: ToolCallGroupingPreference,
 ): ConversationProjection {
   const cached = conversationProjectionCache.get(runtimeStreamItems)
-  if (cached) {
-    return cached
+  const cachedProjection = cached?.[toolCallGroupingPreference]
+  if (cachedProjection) {
+    return cachedProjection
   }
 
-  const projection = buildConversationProjection(runtimeStreamItems)
-  conversationProjectionCache.set(runtimeStreamItems, projection)
+  const projection = buildConversationProjection(runtimeStreamItems, toolCallGroupingPreference)
+  conversationProjectionCache.set(runtimeStreamItems, {
+    ...cached,
+    [toolCallGroupingPreference]: projection,
+  })
   return projection
 }
 
@@ -654,30 +1131,45 @@ function hasTranscriptForPendingPrompt(
   runtimeStreamItems: readonly RuntimeStreamViewItem[],
   pendingPrompt: PendingPromptTurn | null,
 ): boolean {
+  return findTranscriptForPendingPrompt(runtimeStreamItems, pendingPrompt) !== null
+}
+
+function findTranscriptForPendingPrompt(
+  runtimeStreamItems: readonly RuntimeStreamViewItem[],
+  pendingPrompt: PendingPromptTurn | null,
+): Extract<RuntimeStreamViewItem, { kind: 'transcript' }> | null {
   if (!pendingPrompt) {
-    return false
+    return null
   }
 
   const promptText = pendingPrompt.text.trim()
   if (!promptText) {
-    return false
+    return null
   }
 
   const queuedAtMs = Date.parse(pendingPrompt.queuedAt ?? '')
   const hasQueuedTimestamp = Number.isFinite(queuedAtMs)
 
-  return runtimeStreamItems.some((item) => {
+  for (const item of runtimeStreamItems) {
     if (item.kind !== 'transcript' || item.role !== 'user' || item.text.trim() !== promptText) {
-      return false
+      continue
     }
 
     if (!hasQueuedTimestamp) {
-      return true
+      return item
     }
 
     const itemCreatedAtMs = Date.parse(item.createdAt)
-    return Number.isFinite(itemCreatedAtMs) && itemCreatedAtMs >= queuedAtMs - 5_000
-  })
+    if (Number.isFinite(itemCreatedAtMs) && itemCreatedAtMs >= queuedAtMs - 5_000) {
+      return item
+    }
+  }
+
+  return null
+}
+
+function getPendingPromptTurnId(pendingPrompt: PendingPromptTurn): string {
+  return `pending-prompt:${pendingPrompt.id}`
 }
 
 function appendPendingPromptTurn(
@@ -697,13 +1189,227 @@ function appendPendingPromptTurn(
   return [
     ...turns,
     {
-      id: `pending-prompt:${pendingPrompt.id}`,
+      id: getPendingPromptTurnId(pendingPrompt),
       kind: 'message',
       role: 'user',
       sequence: latestSequence + 0.5,
       text,
     },
   ]
+}
+
+function getConversationTurnRunId(turn: ConversationTurn): string | null {
+  const id = turn.kind === 'routing_suggestion'
+    ? turn.id.replace(/^routing_suggestion:/, '')
+    : turn.id
+  const match = /^(?:transcript|history):(.+):[^:]+$/.exec(id)
+  return match?.[1] ?? null
+}
+
+function normalizeConversationTurnText(text: string): string {
+  return text.trim().replace(/\s+/g, ' ')
+}
+
+function conversationTurnTextKey(turn: ConversationTurn): string | null {
+  if (turn.kind !== 'message') {
+    return null
+  }
+
+  const runId = getConversationTurnRunId(turn)
+  const text = normalizeConversationTurnText(turn.text)
+  const attachmentKey = turn.attachments?.map((attachment) => attachment.id).join('|') ?? ''
+  if (!runId || (!text && !attachmentKey)) {
+    return null
+  }
+
+  return ['message', runId, turn.role, text, attachmentKey].join('\u0000')
+}
+
+function conversationMessageCovers(
+  coveringTurn: ConversationTurn,
+  candidateTurn: ConversationTurn,
+): boolean {
+  if (
+    coveringTurn.kind !== 'message' ||
+    candidateTurn.kind !== 'message' ||
+    coveringTurn.role !== candidateTurn.role
+  ) {
+    return false
+  }
+
+  const coveringRunId = getConversationTurnRunId(coveringTurn)
+  const candidateRunId = getConversationTurnRunId(candidateTurn)
+  if (!coveringRunId || coveringRunId !== candidateRunId) {
+    return false
+  }
+
+  const coveringText = normalizeConversationTurnText(coveringTurn.text)
+  const candidateText = normalizeConversationTurnText(candidateTurn.text)
+  if (!coveringText || !candidateText) {
+    const coveringAttachments = coveringTurn.attachments?.map((attachment) => attachment.id).join('|') ?? ''
+    const candidateAttachments = candidateTurn.attachments?.map((attachment) => attachment.id).join('|') ?? ''
+    return Boolean(coveringAttachments && coveringAttachments === candidateAttachments)
+  }
+
+  return (
+    coveringText === candidateText ||
+    (candidateText.length >= 24 && coveringText.includes(candidateText))
+  )
+}
+
+function isConversationTurnCoveredByTurns(
+  candidateTurn: ConversationTurn,
+  coveringTurns: readonly ConversationTurn[],
+): boolean {
+  return coveringTurns.some((coveringTurn) =>
+    conversationMessageCovers(coveringTurn, candidateTurn),
+  )
+}
+
+function mergeHistoricalAndLiveTurns(
+  historicalTurns: readonly ConversationTurn[] | null | undefined,
+  liveTurns: readonly ConversationTurn[],
+): ConversationTurn[] {
+  if (!historicalTurns || historicalTurns.length === 0) {
+    return liveTurns.slice()
+  }
+
+  if (liveTurns.length === 0) {
+    return historicalTurns.slice()
+  }
+
+  const historicalIds = new Set(historicalTurns.map((turn) => turn.id))
+  const historicalTextKeys = new Set(
+    historicalTurns
+      .map(conversationTurnTextKey)
+      .filter((key): key is string => Boolean(key)),
+  )
+
+  const filteredLiveTurns = liveTurns.filter((turn) => {
+    if (historicalIds.has(turn.id)) {
+      return false
+    }
+
+    const textKey = conversationTurnTextKey(turn)
+    if (textKey && historicalTextKeys.has(textKey)) {
+      return false
+    }
+
+    if (isConversationTurnCoveredByTurns(turn, historicalTurns)) {
+      return false
+    }
+
+    return true
+  })
+
+  return [...historicalTurns, ...filteredLiveTurns]
+}
+
+interface ConversationContinuitySnapshot {
+  sessionKey: string
+  turns: ConversationTurn[]
+}
+
+function mergeConversationContinuityTurns(
+  previousTurns: readonly ConversationTurn[],
+  currentTurns: readonly ConversationTurn[],
+): ConversationTurn[] {
+  const previousIds = new Set(previousTurns.map((turn) => turn.id))
+  const mergedTurns = previousTurns.slice() as ConversationTurn[]
+  const additions: ConversationTurn[] = []
+
+  for (const currentTurn of currentTurns) {
+    if (previousIds.has(currentTurn.id)) {
+      continue
+    }
+
+    if (isConversationTurnCoveredByTurns(currentTurn, mergedTurns)) {
+      continue
+    }
+
+    const equivalentPendingPromptIndex = mergedTurns.findIndex((previousTurn) =>
+      areEquivalentPendingPromptTurns(previousTurn, currentTurn),
+    )
+    if (equivalentPendingPromptIndex >= 0) {
+      mergedTurns[equivalentPendingPromptIndex] = currentTurn
+      previousIds.add(currentTurn.id)
+      continue
+    }
+
+    additions.push(currentTurn)
+  }
+
+  if (additions.length === 0) {
+    return mergedTurns
+  }
+
+  return [...mergedTurns, ...additions]
+}
+
+function areEquivalentPendingPromptTurns(
+  left: ConversationTurn,
+  right: ConversationTurn,
+): boolean {
+  return (
+    left.kind === 'message' &&
+    right.kind === 'message' &&
+    left.role === 'user' &&
+    right.role === 'user' &&
+    left.id.startsWith('pending-prompt:') &&
+    right.id.startsWith('pending-prompt:') &&
+    left.text.trim() === right.text.trim()
+  )
+}
+
+function useContinuousConversationTurns(
+  turns: ConversationTurn[],
+  {
+    sessionKey,
+    preserveDuringTransition,
+  }: {
+    sessionKey: string
+    preserveDuringTransition: boolean
+  },
+): ConversationTurn[] {
+  const continuityRef = useRef<ConversationContinuitySnapshot | null>(null)
+  const visibleTurns = useMemo(() => {
+    const previous = continuityRef.current
+    const currentIds = new Set(turns.map((turn) => turn.id))
+    const previousTurns = previous?.turns ?? []
+    const sharedTurnCount = previousTurns.reduce(
+      (count, turn) => count + (currentIds.has(turn.id) ? 1 : 0),
+      0,
+    )
+    const missingPreviousTurnCount = previousTurns.length - sharedTurnCount
+    const looksLikeRuntimeReset =
+      missingPreviousTurnCount > 0 && (sharedTurnCount === 0 || sharedTurnCount <= 2)
+    if (
+      preserveDuringTransition &&
+      previous?.sessionKey === sessionKey &&
+      previous.turns.length > 0 &&
+      looksLikeRuntimeReset
+    ) {
+      return mergeConversationContinuityTurns(previous.turns, turns)
+    }
+
+    return turns
+  }, [preserveDuringTransition, sessionKey, turns])
+
+  useEffect(() => {
+    if (visibleTurns.length === 0 && !preserveDuringTransition) {
+      continuityRef.current = null
+      return
+    }
+
+    if (visibleTurns.length > 0) {
+      continuityRef.current = {
+        sessionKey,
+        turns: visibleTurns,
+      }
+    }
+  }, [preserveDuringTransition, sessionKey, visibleTurns])
+
+  return visibleTurns
 }
 
 function getContextMeterRequestKey(options: {
@@ -777,6 +1483,142 @@ function toContextMeterError(error: unknown): {
         ? error.message
         : 'Xero could not refresh the context meter.',
     retryable: typeof candidate?.retryable === 'boolean' ? candidate.retryable : true,
+  }
+}
+
+function getCodeUndoErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message
+  }
+
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error
+  }
+
+  const maybeError = error as { message?: unknown } | null
+  if (typeof maybeError?.message === 'string' && maybeError.message.trim().length > 0) {
+    return maybeError.message
+  }
+
+  return 'Xero could not undo this change.'
+}
+
+function getAgentProjectOrigin(project: AgentPaneView['project']): RuntimeAgentProjectOrigin {
+  return (project as AgentPaneView['project'] & { projectOrigin?: RuntimeAgentProjectOrigin })
+    .projectOrigin ?? 'unknown'
+}
+
+function createCodeHistoryOperationId(prefix: string): string {
+  const randomId = globalThis.crypto?.randomUUID?.()
+  if (randomId) {
+    return `${prefix}-${randomId}`
+  }
+
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function formatCodeHistoryTargetLabel(operation: CodeHistoryOperationDto): string {
+  switch (operation.target.targetKind) {
+    case 'file_change':
+      return `Selected file: ${operation.target.targetId}`
+    case 'hunks': {
+      const hunkLabel =
+        operation.target.hunkIds.length > 0
+          ? operation.target.hunkIds.join(', ')
+          : operation.target.targetId
+      return `Selected hunks: ${hunkLabel}`
+    }
+    case 'change_group':
+      return `Selected change group: ${operation.target.targetId}`
+    case 'run_boundary':
+      return `Selected run boundary: ${operation.target.targetId}`
+    case 'session_boundary':
+      return `Selected session boundary: ${operation.target.targetId}`
+    default:
+      return `Selected target: ${operation.target.targetId}`
+  }
+}
+
+function buildCodeHistoryConflictSummary(
+  operation: CodeHistoryOperationDto,
+  title: string,
+): CodeUndoConflictSummary | undefined {
+  if (operation.status !== 'conflicted' || operation.conflicts.length === 0) {
+    return undefined
+  }
+
+  return {
+    title,
+    targetLabel: formatCodeHistoryTargetLabel(operation),
+    affectedPaths: operation.affectedPaths,
+    conflicts: operation.conflicts,
+  }
+}
+
+function formatCodeUndoResult(response: SelectiveUndoResponseDto): CodeUndoUiState {
+  const { operation } = response
+  const affectedCount = operation.affectedPaths.length || 1
+  if (operation.status === 'completed') {
+    return {
+      status: 'succeeded',
+      message: `Undid ${affectedCount} ${affectedCount === 1 ? 'path' : 'paths'}.`,
+    }
+  }
+
+  if (operation.status === 'conflicted') {
+    const conflict = operation.conflicts[0]
+    const path = conflict?.path ?? operation.affectedPaths[0] ?? 'the selected change'
+    const detail = conflict?.message ? ` ${conflict.message}` : ''
+    return {
+      status: 'failed',
+      message: `Undo blocked by conflict in ${path}.${detail}`,
+      conflictSummary: buildCodeHistoryConflictSummary(operation, 'Undo conflict'),
+    }
+  }
+
+  if (operation.status === 'pending' || operation.status === 'planning' || operation.status === 'applying') {
+    return {
+      status: 'pending',
+      message: 'Undo is still applying...',
+    }
+  }
+
+  return {
+    status: 'failed',
+    message: 'Undo failed before changing files.',
+  }
+}
+
+function formatReturnSessionToHereResult(response: ReturnSessionToHereResponseDto): CodeUndoUiState {
+  const { operation } = response
+  if (operation.status === 'completed') {
+    return {
+      status: 'succeeded',
+      message: 'Return session history event added. Other sessions are unchanged.',
+    }
+  }
+
+  if (operation.status === 'conflicted') {
+    const conflict = operation.conflicts[0]
+    const path = conflict?.path ?? operation.affectedPaths[0] ?? 'the selected boundary'
+    const detail = conflict?.message ? ` ${conflict.message}` : ''
+    return {
+      status: 'failed',
+      message: `Return session blocked by conflict in ${path}.${detail}`,
+      conflictSummary: buildCodeHistoryConflictSummary(operation, 'Return session conflict'),
+    }
+  }
+
+  if (operation.status === 'pending' || operation.status === 'planning' || operation.status === 'applying') {
+    return {
+      status: 'pending',
+      message: 'Return session is still applying...',
+    }
+  }
+
+  return {
+    status: 'failed',
+    message: 'Xero could not return this session to here.',
   }
 }
 
@@ -939,12 +1781,17 @@ export const AgentRuntime = memo(function AgentRuntime({
   onResolveOperatorAction,
   onResumeOperatorRun,
   desktopAdapter,
+  onCodeUndoApplied,
   accountAvatarUrl = null,
   accountLogin = null,
   onCreateSession,
   isCreatingSession = false,
   customAgentDefinitions = [],
+  agentDefaultModels = {},
   onOpenAgentManagement,
+  onCreateAgentByHand,
+  onStartWorkflowAgentCreate,
+  agentCreateCanvasIncluded = false,
   density = 'comfortable',
   paneNumber = null,
   paneCount = 1,
@@ -958,6 +1805,11 @@ export const AgentRuntime = memo(function AgentRuntime({
   sidebarSessions,
   onSelectSidebarSession,
   onCloseSidebar,
+  historicalConversationTurns,
+  pendingInitialRuntimeAgentId = null,
+  pendingInitialAgentDefinitionId = null,
+  onPendingInitialRuntimeAgentIdConsumed,
+  toolCallGroupingPreference = 'grouped',
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
@@ -983,16 +1835,26 @@ export const AgentRuntime = memo(function AgentRuntime({
     [runtimeStreamItems, useBackgroundPaneFastPath],
   )
   const conversationProjection = useMemo(
-    () => getConversationProjection(runtimeStreamItemsForTurns),
-    [runtimeStreamItemsForTurns],
+    () => getConversationProjection(runtimeStreamItemsForTurns, toolCallGroupingPreference),
+    [runtimeStreamItemsForTurns, toolCallGroupingPreference],
   )
   const visibleTurns = conversationProjection.visibleTurns
+  // Historical turns from prior runs in this agent session (loaded from the
+  // persisted session transcript) are prepended so the conversation reads as
+  // a continuous thread across same-session handoffs. The active run's items
+  // come from the live stream; the merge also guards the transient reload /
+  // session-switch case where a stale transcript fetch briefly overlaps with
+  // the live replay for the same run.
+  const visibleTurnsWithHistory = useMemo(
+    () => mergeHistoricalAndLiveTurns(historicalConversationTurns, visibleTurns),
+    [historicalConversationTurns, visibleTurns],
+  )
   const visibleTurnsForDisplay = useMemo(
     () =>
       useBackgroundPaneFastPath
-        ? sliceBackgroundPaneTurns(visibleTurns)
-        : visibleTurns,
-    [useBackgroundPaneFastPath, visibleTurns],
+        ? sliceBackgroundPaneTurns(visibleTurnsWithHistory)
+        : visibleTurnsWithHistory,
+    [useBackgroundPaneFastPath, visibleTurnsWithHistory],
   )
   const [optimisticPromptTurn, setOptimisticPromptTurn] = useState<PendingPromptTurn | null>(null)
   const selectedQueuedPromptTurn = useMemo<PendingPromptTurn | null>(() => {
@@ -1018,15 +1880,86 @@ export const AgentRuntime = memo(function AgentRuntime({
 
     return null
   }, [optimisticPromptTurn, runtimeStreamItems, selectedQueuedPromptTurn])
-  const visibleTurnsWithPendingPrompt = useMemo(
+  const rawVisibleTurnsWithPendingPrompt = useMemo(
     () => appendPendingPromptTurn(visibleTurnsForDisplay, pendingPromptTurn),
     [pendingPromptTurn, visibleTurnsForDisplay],
   )
-  const pendingRuntimeRunAction = agent.pendingRuntimeRunAction ?? null
-  const runtimeRunActionStatus = agent.runtimeRunActionStatus
+  const submittedPromptTurnIdOverridesRef = useRef<{
+    sessionKey: string
+    byTranscriptId: Map<string, string>
+  } | null>(null)
+  const conversationSessionKey = `${agent.project.id}:${agent.project.selectedAgentSessionId ?? 'none'}`
+  if (submittedPromptTurnIdOverridesRef.current?.sessionKey !== conversationSessionKey) {
+    submittedPromptTurnIdOverridesRef.current = {
+      sessionKey: conversationSessionKey,
+      byTranscriptId: new Map<string, string>(),
+    }
+  }
+  const pendingPromptForStableId = optimisticPromptTurn ?? selectedQueuedPromptTurn
+  const visibleTurnsWithStableSubmittedPromptIds = useMemo(() => {
+    const overrides = submittedPromptTurnIdOverridesRef.current?.byTranscriptId
+    if (!overrides) {
+      return rawVisibleTurnsWithPendingPrompt
+    }
+
+    const matchedTranscript = findTranscriptForPendingPrompt(runtimeStreamItems, pendingPromptForStableId)
+    if (matchedTranscript && pendingPromptForStableId) {
+      if (!overrides.has(matchedTranscript.id)) {
+        overrides.set(matchedTranscript.id, getPendingPromptTurnId(pendingPromptForStableId))
+      }
+    }
+
+    if (overrides.size === 0) {
+      return rawVisibleTurnsWithPendingPrompt
+    }
+
+    let changed = false
+    const stableTurns = rawVisibleTurnsWithPendingPrompt.map((turn) => {
+      if (turn.kind !== 'message' || turn.role !== 'user') {
+        return turn
+      }
+
+      const stableId = overrides.get(turn.id)
+      if (!stableId || stableId === turn.id) {
+        return turn
+      }
+
+      changed = true
+      return {
+        ...turn,
+        id: stableId,
+      }
+    })
+
+    return changed ? stableTurns : rawVisibleTurnsWithPendingPrompt
+  }, [pendingPromptForStableId, rawVisibleTurnsWithPendingPrompt, runtimeStreamItems])
+  const [promptSubmissionPending, setPromptSubmissionPending] = useState(false)
+  const promptSubmissionCancelRef = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    return () => {
+      promptSubmissionCancelRef.current?.()
+      promptSubmissionCancelRef.current = null
+    }
+  }, [])
+  const pendingRuntimeRunAction =
+    promptSubmissionPending
+      ? renderableRuntimeRun && !renderableRuntimeRun.isTerminal
+        ? 'update_controls'
+        : 'start'
+      : agent.pendingRuntimeRunAction ?? null
+  const runtimeRunActionStatus = promptSubmissionPending ? 'running' : agent.runtimeRunActionStatus
   const isQueueingRuntimePrompt =
     runtimeRunActionStatus === 'running' &&
     (pendingRuntimeRunAction === 'start' || pendingRuntimeRunAction === 'update_controls')
+  const hasLiveRuntimeStream =
+    streamStatus === 'subscribing' ||
+    streamStatus === 'replaying' ||
+    streamStatus === 'live'
+  const shouldDeferContextMeterForRuntimeActivity = Boolean(
+    isQueueingRuntimePrompt ||
+      agent.selectedPrompt.hasQueuedPrompt ||
+      (renderableRuntimeRun?.isActive && hasLiveRuntimeStream),
+  )
   const showAgentActivityIndicator = Boolean(
     isQueueingRuntimePrompt ||
       agent.selectedPrompt.hasQueuedPrompt ||
@@ -1037,11 +1970,91 @@ export const AgentRuntime = memo(function AgentRuntime({
         !runtimeStream?.failure
       ),
   )
-  const hasUserMessage = conversationProjection.hasUserMessage || Boolean(pendingPromptTurn)
+  const preserveConversationDuringRuntimeTransition = Boolean(
+    isQueueingRuntimePrompt ||
+      promptSubmissionPending ||
+      agent.selectedPrompt.hasQueuedPrompt ||
+      streamStatus === 'subscribing' ||
+      streamStatus === 'replaying' ||
+      streamStatus === 'live' ||
+      streamStatus === 'complete' ||
+      (renderableRuntimeRun?.isActive && runtimeStreamItems.length === 0),
+  )
+  const conversationContinuityKey = `${conversationSessionKey}:${toolCallGroupingPreference}`
+  const visibleTurnsWithPendingPrompt = useContinuousConversationTurns(
+    visibleTurnsWithStableSubmittedPromptIds,
+    {
+      sessionKey: conversationContinuityKey,
+      preserveDuringTransition: preserveConversationDuringRuntimeTransition,
+    },
+  )
+  const hasUserMessage =
+    conversationProjection.hasUserMessage ||
+    visibleTurnsWithPendingPrompt.some((turn) => turn.kind === 'message' && turn.role === 'user')
   const selectedAgentSession = (agent.project.selectedAgentSession ?? null) as AgentSessionView | null
   const selectedAgentSessionId =
     selectedAgentSession?.agentSessionId ?? agent.project.selectedAgentSessionId ?? null
   const hasSelectedAgentSession = Boolean(selectedAgentSessionId?.trim())
+  const isComputerUseSession = Boolean(selectedAgentSession?.isComputerUse)
+  const isComputerUseSidebar = inSidebar && isComputerUseSession
+  const [codeUndoStates, setCodeUndoStates] = useState<Record<string, CodeUndoUiState>>({})
+  const [returnSessionToHereStates, setReturnSessionToHereStates] = useState<Record<string, CodeUndoUiState>>({})
+
+  const [handoffSummaryOpen, setHandoffSummaryOpen] = useState(false)
+  const [handoffSummaryStatus, setHandoffSummaryStatus] =
+    useState<HandoffContextDialogStatus>('idle')
+  const [handoffSummaryError, setHandoffSummaryError] = useState<string | null>(null)
+  const [handoffSummary, setHandoffSummary] =
+    useState<AgentHandoffContextSummaryDto | null>(null)
+  const [handoffSummaryRequest, setHandoffSummaryRequest] = useState<{
+    sourceRunId: string | null
+    targetRunId: string | null
+  } | null>(null)
+  const getAgentHandoffContextSummaryFn = desktopAdapter?.getAgentHandoffContextSummary
+  const handoffSummaryProjectId = agent.project.id
+  const fetchHandoffSummary = useCallback(
+    async (request: { sourceRunId: string | null; targetRunId: string | null }) => {
+      if (!getAgentHandoffContextSummaryFn) return
+      setHandoffSummaryStatus('loading')
+      setHandoffSummaryError(null)
+      try {
+        const result = await getAgentHandoffContextSummaryFn({
+          projectId: handoffSummaryProjectId,
+          targetRunId: request.targetRunId ?? null,
+          sourceRunId: request.targetRunId ? null : request.sourceRunId ?? null,
+        })
+        setHandoffSummary(result)
+        setHandoffSummaryStatus('ready')
+      } catch (error) {
+        setHandoffSummaryStatus('error')
+        setHandoffSummaryError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to load handoff context summary.',
+        )
+      }
+    },
+    [getAgentHandoffContextSummaryFn, handoffSummaryProjectId],
+  )
+  const handleOpenHandoffSummary = useCallback(
+    (request: { sourceRunId?: string | null; targetRunId?: string | null }) => {
+      const normalized = {
+        sourceRunId: request.sourceRunId ?? null,
+        targetRunId: request.targetRunId ?? null,
+      }
+      setHandoffSummaryRequest(normalized)
+      setHandoffSummaryOpen(true)
+      setHandoffSummary(null)
+      void fetchHandoffSummary(normalized)
+    },
+    [fetchHandoffSummary],
+  )
+  const refreshHandoffSummary = useCallback(() => {
+    if (!handoffSummaryRequest) return
+    void fetchHandoffSummary(handoffSummaryRequest)
+  }, [fetchHandoffSummary, handoffSummaryRequest])
+  const footerHandoffSourceRunId =
+    renderableRuntimeRun?.runId ?? runtimeStream?.runId ?? null
 
   const selectedProviderId =
     agent.selectedModel?.providerId ?? agent.selectedProviderId ?? runtimeSession?.providerId ?? 'openai_codex'
@@ -1235,8 +2248,10 @@ export const AgentRuntime = memo(function AgentRuntime({
     selectedRuntimeAgentId: agent.selectedRuntimeAgentId,
     selectedAgentDefinitionId: agent.runtimeRunActiveControls?.agentDefinitionId ?? null,
     customAgentDefinitions,
+    agentDefaultModels,
     selectedThinkingEffort: agent.selectedThinkingEffort,
     selectedApprovalMode: agent.selectedApprovalMode,
+    selectedAutoCompactEnabled: agent.selectedAutoCompactEnabled,
     selectedPrompt: agent.selectedPrompt,
     availableModels,
     approvalRequests: agent.approvalRequests,
@@ -1255,6 +2270,10 @@ export const AgentRuntime = memo(function AgentRuntime({
     dictationEnabled: foregroundWorkReady && isFocusedPane,
     dictationScopeKey: `${agent.project.id}:${agent.project.selectedAgentSessionId ?? 'none'}`,
     reportComposerControls: foregroundWorkReady && isFocusedPane,
+    lockedRuntimeAgentId: isComputerUseSession ? 'computer_use' : null,
+    pendingInitialRuntimeAgentId,
+    pendingInitialAgentDefinitionId,
+    onPendingInitialRuntimeAgentIdConsumed,
     onStartRuntimeRun,
     onStartRuntimeSession,
     onUpdateRuntimeRunControls: canMutateRuntimeRun ? onUpdateRuntimeRunControls : undefined,
@@ -1271,14 +2290,10 @@ export const AgentRuntime = memo(function AgentRuntime({
       return
     }
 
-    const selectedQueuedText = selectedQueuedPromptTurn?.text.trim() ?? null
-    if (
-      hasTranscriptForPendingPrompt(runtimeStreamItems, optimisticPromptTurn) ||
-      selectedQueuedText === optimisticPromptTurn.text.trim()
-    ) {
+    if (hasTranscriptForPendingPrompt(runtimeStreamItems, optimisticPromptTurn)) {
       setOptimisticPromptTurn(null)
     }
-  }, [optimisticPromptTurn, runtimeStreamItems, selectedQueuedPromptTurn])
+  }, [optimisticPromptTurn, runtimeStreamItems])
 
   const selectedComposerModel = useMemo(
     () => getComposerModelOption(availableModels, controller.composerModelId),
@@ -1296,29 +2311,72 @@ export const AgentRuntime = memo(function AgentRuntime({
     () => getComposerApprovalOptions(controller.composerRuntimeAgentId),
     [controller.composerRuntimeAgentId],
   )
-  const availableRuntimeAgentIds = useMemo(
+  const agentProjectOrigin = getAgentProjectOrigin(agent.project)
+  const availableRuntimeAgentIds = useMemo<readonly RuntimeAgentIdDto[]>(
     () =>
-      getRuntimeAgentDescriptorsForProjectOrigin(agent.project.projectOrigin ?? 'unknown').map(
-        (descriptor) => descriptor.id,
-      ),
-    [agent.project.projectOrigin],
+      isComputerUseSession
+        ? ['computer_use']
+        : getRuntimeAgentDescriptorsForProjectOrigin(agentProjectOrigin)
+            .map((descriptor) => descriptor.id)
+            .filter((id) => id !== 'computer_use'),
+    [agentProjectOrigin, isComputerUseSession],
   )
   useEffect(() => {
+    if (isComputerUseSession) {
+      return
+    }
     if (
       !controller.isRuntimeAgentSwitchDisabled &&
       !availableRuntimeAgentIds.includes(controller.composerRuntimeAgentId)
     ) {
-      controller.handleComposerRuntimeAgentChange('ask')
+      controller.handleComposerRuntimeAgentChange('generalist')
     }
   }, [
     availableRuntimeAgentIds,
     controller.composerRuntimeAgentId,
     controller.isRuntimeAgentSwitchDisabled,
     controller.handleComposerRuntimeAgentChange,
+    isComputerUseSession,
   ])
+
+  const [resolvedRoutingTurns, setResolvedRoutingTurns] = useState<
+    Record<string, { acceptedTarget: RuntimeAgentIdDto | null }>
+  >({})
+  const routingSuggestionDispatchValue = useMemo<RoutingSuggestionDispatchValue>(() => {
+    return {
+      resolveRoutingSuggestion: (turnId, decision) => {
+        setResolvedRoutingTurns((previous) => ({
+          ...previous,
+          [turnId]: { acceptedTarget: decision.kind === 'accept' ? decision.targetAgentId : null },
+        }))
+        if (decision.kind === 'accept') {
+          // Update the composer agent so the user's next message in this
+          // session goes to the chosen specialist. The controller no-ops if
+          // the picker is locked during an active run; the next run starts
+          // under the new agent.
+          controller.handleComposerRuntimeAgentChange(decision.targetAgentId)
+        }
+      },
+    }
+  }, [controller.handleComposerRuntimeAgentChange])
+  function applyRoutingResolutions(turns: ConversationTurn[]): ConversationTurn[] {
+    if (Object.keys(resolvedRoutingTurns).length === 0) return turns
+    return turns.map((turn) => {
+      if (turn.kind !== 'routing_suggestion') return turn
+      const resolution = resolvedRoutingTurns[turn.id]
+      if (!resolution) return turn
+      return { ...turn, isResolved: true, acceptedTarget: resolution.acceptedTarget }
+    })
+  }
   const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)
+  const shouldRefreshContextMeter = Boolean(
+    foregroundWorkReady &&
+      isFocusedPane &&
+      runtimeRunActionStatus !== 'running' &&
+      !shouldDeferContextMeterForRuntimeActivity,
+  )
   const contextMeterState = useAgentContextMeterSnapshot({
-    enabled: foregroundWorkReady && isFocusedPane && runtimeRunActionStatus !== 'running',
+    enabled: shouldRefreshContextMeter,
     adapter: desktopAdapter,
     projectId: agent.project.id,
     agentSessionId: selectedAgentSessionId,
@@ -1356,6 +2414,7 @@ export const AgentRuntime = memo(function AgentRuntime({
     {
       selectedProviderId,
       agentRuntimeBlocked,
+      selectedRuntimeAgentId: controller.composerRuntimeAgentId,
     },
   )
   const composerPlaceholder =
@@ -1368,12 +2427,17 @@ export const AgentRuntime = memo(function AgentRuntime({
           !agentRuntimeBlocked &&
           runtimeSession?.isAuthenticated &&
           !renderableRuntimeRun?.isTerminal
-        ? 'Describe the agent you want to create...'
+        ? 'Describe the agent or workflow...'
       : controller.composerRuntimeAgentId === 'crawl' &&
           !agentRuntimeBlocked &&
           runtimeSession?.isAuthenticated &&
           !renderableRuntimeRun?.isTerminal
-        ? 'Map this existing repository...'
+        ? 'Map this repository...'
+      : controller.composerRuntimeAgentId === 'computer_use' &&
+          !agentRuntimeBlocked &&
+          runtimeSession?.isAuthenticated &&
+          !renderableRuntimeRun?.isTerminal
+        ? 'Tell Xero what to do on this computer...'
       : baseComposerPlaceholder
   const showAgentSetupEmptyState = Boolean(
     agentRuntimeBlocked &&
@@ -1392,10 +2456,41 @@ export const AgentRuntime = memo(function AgentRuntime({
       skillItems.length > 0 ||
       actionRequiredItems.length > 0 ||
       runtimeStream?.completion ||
-      runtimeStream?.failure,
+      runtimeStream?.failure ||
+      visibleTurnsWithPendingPrompt.length > 0,
   )
   const promptInputLabel = controller.promptInputAvailable ? 'Agent input' : 'Agent input unavailable'
   const sendButtonLabel = controller.promptInputAvailable ? 'Send message' : 'Send message unavailable'
+  const actionPromptDispatchValue = useMemo<ActionPromptDispatchValue>(() => {
+    const pendingOperatorIntent = controller.pendingOperatorIntent
+    return {
+      pendingActionId: pendingOperatorIntent?.actionId ?? null,
+      pendingDecision: pendingOperatorIntent?.kind ?? null,
+      isResolving: agent.operatorActionStatus === 'running',
+      resolveActionPrompt: async (actionId, decision, options) => {
+        if (decision === 'resume') {
+          if (renderableRuntimeRun && !renderableRuntimeRun.isTerminal) {
+            return controller.handleResumeLiveActionRequired(actionId, {
+              userAnswer: options?.userAnswer ?? null,
+            })
+          }
+          return controller.handleResumeOperatorRun(actionId, {
+            userAnswer: options?.userAnswer ?? null,
+          })
+        }
+        return controller.handleResolveOperatorAction(actionId, decision, {
+          userAnswer: options?.userAnswer ?? null,
+        })
+      },
+    }
+  }, [
+    controller.pendingOperatorIntent,
+    controller.handleResolveOperatorAction,
+    controller.handleResumeOperatorRun,
+    controller.handleResumeLiveActionRequired,
+    agent.operatorActionStatus,
+    renderableRuntimeRun,
+  ])
   const isProviderLoggedIn = Boolean(
     selectedProviderReadyForSession ||
       runtimeSession?.isAuthenticated,
@@ -1411,8 +2506,16 @@ export const AgentRuntime = memo(function AgentRuntime({
   const sessionLabel = agent.project.selectedAgentSession?.title?.trim() || 'New Chat'
   const scrollViewportRef = useRef<HTMLDivElement | null>(null)
   const bottomSentinelRef = useRef<HTMLDivElement | null>(null)
+  const scrollToLatestFrameRef = useRef<number | null>(null)
   const shouldAutoFollowRef = useRef(true)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const conversationRunScrollKey = [
+    agent.project.id,
+    selectedAgentSessionId ?? 'none',
+    renderableRuntimeRun?.runId ?? runtimeStream?.runId ?? 'no-run',
+  ].join(':')
+  const conversationRunScrollKeyRef = useRef<string | null>(null)
+  const shouldAutoFollowNewRun = Boolean(renderableRuntimeRun?.isActive)
   const latestVisibleTurn = visibleTurnsWithPendingPrompt.at(-1)
   const conversationScrollKey = [
     latestVisibleTurn?.id ?? 'none',
@@ -1428,12 +2531,54 @@ export const AgentRuntime = memo(function AgentRuntime({
     runtimeStream?.failure?.id ?? 'no-failure',
     streamIssue?.code ?? 'no-issue',
   ].join(':')
-  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'auto') => {
-    bottomSentinelRef.current?.scrollIntoView({
-      block: 'end',
-      inline: 'nearest',
-      behavior,
+  useLayoutEffect(() => {
+    if (conversationRunScrollKeyRef.current === conversationRunScrollKey) {
+      return
+    }
+
+    conversationRunScrollKeyRef.current = conversationRunScrollKey
+    shouldAutoFollowRef.current = shouldAutoFollowNewRun
+    setShowJumpToLatest(false)
+    if (!shouldAutoFollowNewRun) {
+      const viewport = scrollViewportRef.current
+      if (viewport) {
+        viewport.scrollTop = 0
+      }
+    }
+  }, [conversationRunScrollKey, shouldAutoFollowNewRun])
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'auto', options: { defer?: boolean } = {}) => {
+    const run = () => {
+      bottomSentinelRef.current?.scrollIntoView({
+        block: 'end',
+        inline: 'nearest',
+        behavior,
+      })
+    }
+
+    if (!options.defer || typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      run()
+      return
+    }
+
+    if (scrollToLatestFrameRef.current !== null && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(scrollToLatestFrameRef.current)
+    }
+    scrollToLatestFrameRef.current = window.requestAnimationFrame(() => {
+      scrollToLatestFrameRef.current = null
+      run()
     })
+  }, [])
+  useEffect(() => {
+    return () => {
+      if (
+        scrollToLatestFrameRef.current !== null &&
+        typeof window !== 'undefined' &&
+        typeof window.cancelAnimationFrame === 'function'
+      ) {
+        window.cancelAnimationFrame(scrollToLatestFrameRef.current)
+        scrollToLatestFrameRef.current = null
+      }
+    }
   }, [])
   const handleConversationScroll = useCallback(() => {
     const viewport = scrollViewportRef.current
@@ -1453,6 +2598,212 @@ export const AgentRuntime = memo(function AgentRuntime({
     shouldAutoFollowRef.current = false
     setShowJumpToLatest(true)
   }, [hasConversationViewportContent])
+  const preserveConversationScrollPosition = useCallback(() => {
+    const viewport = scrollViewportRef.current
+    if (!viewport) {
+      return () => {}
+    }
+
+    const scrollTop = viewport.scrollTop
+    const wasAutoFollowing = shouldAutoFollowRef.current
+    shouldAutoFollowRef.current = false
+
+    return () => {
+      const restore = () => {
+        const nextViewport = scrollViewportRef.current
+        if (!nextViewport) {
+          return
+        }
+
+        const maxScrollTop = Math.max(0, nextViewport.scrollHeight - nextViewport.clientHeight)
+        nextViewport.scrollTop = Math.min(scrollTop, maxScrollTop)
+        const isNearBottom = isRuntimeConversationNearBottom(nextViewport)
+        shouldAutoFollowRef.current = wasAutoFollowing && isNearBottom
+        setShowJumpToLatest(hasConversationViewportContent && !isNearBottom)
+      }
+
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(restore)
+        return
+      }
+
+      restore()
+    }
+  }, [hasConversationViewportContent])
+  const handleUndoCodeChange = useCallback(async ({
+    targetKind,
+    changeGroupId,
+    path,
+    filePath,
+    hunkIds = [],
+    expectedWorkspaceEpoch,
+  }: CodeUndoRequest) => {
+    const applySelectiveUndo = desktopAdapter?.applySelectiveUndo
+    const undoStateKey = getCodeUndoStateKey({ targetKind, changeGroupId, filePath })
+    if (!applySelectiveUndo) {
+      setCodeUndoStates((current) => ({
+        ...current,
+        [undoStateKey]: {
+          status: 'failed',
+          message: 'Undo is unavailable in this runtime.',
+        },
+      }))
+      return
+    }
+
+    const restoreScrollPosition = preserveConversationScrollPosition()
+    setCodeUndoStates((current) => ({
+      ...current,
+      [undoStateKey]: {
+        status: 'pending',
+        message:
+          targetKind === 'hunks'
+            ? 'Undoing selected hunks...'
+            : targetKind === 'file_change'
+              ? 'Undoing file change...'
+              : 'Undoing change group...',
+      },
+    }))
+
+    try {
+      const undoFilePath = filePath ?? path
+      const selectedHunkIds = Array.from(new Set(hunkIds))
+      const response = await applySelectiveUndo({
+        projectId: agent.project.id,
+        operationId: createCodeHistoryOperationId('code-undo'),
+        target:
+          targetKind === 'hunks'
+            ? {
+                targetKind: 'hunks',
+                targetId: `${changeGroupId}:${undoFilePath}:hunks`,
+                changeGroupId,
+                filePath: undoFilePath,
+                hunkIds: selectedHunkIds,
+              }
+            : targetKind === 'file_change'
+              ? {
+                  targetKind: 'file_change',
+                  targetId: undoFilePath,
+                  changeGroupId,
+                  filePath: undoFilePath,
+                  hunkIds: [],
+                }
+              : {
+                  targetKind: 'change_group',
+                  targetId: changeGroupId,
+                  changeGroupId,
+                  hunkIds: [],
+                },
+        expectedWorkspaceEpoch: expectedWorkspaceEpoch ?? undefined,
+      })
+      const result = formatCodeUndoResult(response)
+      setCodeUndoStates((current) => ({
+        ...current,
+        [undoStateKey]: result,
+      }))
+      if (result.status === 'succeeded') {
+        await onCodeUndoApplied?.()
+      }
+    } catch (error) {
+      setCodeUndoStates((current) => ({
+        ...current,
+        [undoStateKey]: {
+          status: 'failed',
+          message: getCodeUndoErrorMessage(error),
+        },
+      }))
+    } finally {
+      restoreScrollPosition()
+    }
+  }, [
+    agent.project.id,
+    desktopAdapter,
+    onCodeUndoApplied,
+    preserveConversationScrollPosition,
+  ])
+  const handleReturnSessionToHere = useCallback(async ({
+    targetKind,
+    targetId,
+    boundaryId,
+    runId,
+    changeGroupId,
+    expectedWorkspaceEpoch,
+  }: ReturnSessionToHereUiRequest) => {
+    const returnSessionToHere = desktopAdapter?.returnSessionToHere
+    const agentSessionId = selectedAgentSessionId?.trim() ?? ''
+    const stateKey = getReturnSessionToHereStateKey({ targetKind, boundaryId, runId, changeGroupId })
+
+    if (!returnSessionToHere) {
+      setReturnSessionToHereStates((current) => ({
+        ...current,
+        [stateKey]: {
+          status: 'failed',
+          message: 'Return session is unavailable in this runtime.',
+        },
+      }))
+      return
+    }
+
+    if (!agentSessionId) {
+      setReturnSessionToHereStates((current) => ({
+        ...current,
+        [stateKey]: {
+          status: 'failed',
+          message: 'Select an agent session before returning it to a code boundary.',
+        },
+      }))
+      return
+    }
+
+    const restoreScrollPosition = preserveConversationScrollPosition()
+    setReturnSessionToHereStates((current) => ({
+      ...current,
+      [stateKey]: {
+        status: 'pending',
+        message: 'Returning this session to here...',
+      },
+    }))
+
+    try {
+      const response = await returnSessionToHere({
+        projectId: agent.project.id,
+        operationId: createCodeHistoryOperationId('code-return-session'),
+        target: {
+          targetKind,
+          targetId,
+          agentSessionId,
+          boundaryId,
+          runId: runId ?? undefined,
+          changeGroupId: changeGroupId ?? undefined,
+        },
+        expectedWorkspaceEpoch: expectedWorkspaceEpoch ?? undefined,
+      })
+      const result = formatReturnSessionToHereResult(response)
+      setReturnSessionToHereStates((current) => ({
+        ...current,
+        [stateKey]: result,
+      }))
+      if (result.status === 'succeeded') {
+        await onCodeUndoApplied?.()
+      }
+    } catch (error) {
+      setReturnSessionToHereStates((current) => ({
+        ...current,
+        [stateKey]: {
+          status: 'failed',
+          message: getCodeUndoErrorMessage(error),
+        },
+      }))
+    } finally {
+      restoreScrollPosition()
+    }
+  }, [
+    agent.project.id,
+    desktopAdapter,
+    onCodeUndoApplied,
+    preserveConversationScrollPosition,
+    selectedAgentSessionId,
+  ])
   const handleConversationWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
     const viewport = scrollViewportRef.current
     if (event.deltaY < 0 && viewport && viewport.scrollHeight > viewport.clientHeight) {
@@ -1465,6 +2816,10 @@ export const AgentRuntime = memo(function AgentRuntime({
     scrollToLatest('smooth')
   }, [scrollToLatest])
   const handleSubmitDraftPrompt = useCallback(() => {
+    if (promptSubmissionPending) {
+      return
+    }
+
     const submittedText = controller.draftPrompt.trim()
     const optimisticPrompt = submittedText.length > 0
       ? {
@@ -1480,17 +2835,32 @@ export const AgentRuntime = memo(function AgentRuntime({
 
     shouldAutoFollowRef.current = true
     setShowJumpToLatest(false)
-    scrollToLatest('auto')
+    scrollToLatest('auto', { defer: true })
+    setPromptSubmissionPending(true)
+    promptSubmissionCancelRef.current?.()
+    let cancelled = false
+    const cancelSubmission = () => {
+      cancelled = true
+    }
+    promptSubmissionCancelRef.current = cancelSubmission
     void controller.handleSubmitDraftPrompt().then((submitted) => {
-      if (!submitted && optimisticPrompt) {
-        setOptimisticPromptTurn((current) =>
-          current?.id === optimisticPrompt.id ? null : current,
-        )
+      if (!cancelled) {
+        if (!submitted && optimisticPrompt) {
+          setOptimisticPromptTurn((current) =>
+            current?.id === optimisticPrompt.id ? null : current,
+          )
+        }
       }
     }).finally(() => {
-      scrollToLatest('auto')
+      if (!cancelled) {
+        setPromptSubmissionPending(false)
+        scrollToLatest('auto', { defer: true })
+      }
+      if (promptSubmissionCancelRef.current === cancelSubmission) {
+        promptSubmissionCancelRef.current = null
+      }
     })
-  }, [controller, scrollToLatest])
+  }, [controller, promptSubmissionPending, scrollToLatest])
 
   useEffect(() => {
     if (!foregroundWorkReady) {
@@ -1504,18 +2874,27 @@ export const AgentRuntime = memo(function AgentRuntime({
     }
 
     if (shouldAutoFollowRef.current) {
-      scrollToLatest('auto')
+      scrollToLatest('auto', { defer: true })
       setShowJumpToLatest(false)
       return
     }
 
-    setShowJumpToLatest(true)
+    const viewport = scrollViewportRef.current
+    const isNearBottom = viewport ? isRuntimeConversationNearBottom(viewport) : false
+    setShowJumpToLatest(hasConversationViewportContent && !isNearBottom)
   }, [conversationScrollKey, foregroundWorkReady, hasConversationViewportContent, scrollToLatest])
 
   const isCompact = density === 'compact'
   const isDense = isCompact || paneCount >= 4 || useBackgroundPaneFastPath
   const showPaneNumberChip = paneCount > 1 && paneNumber != null
   const showCloseButton = paneCount > 1 && typeof onClosePane === 'function'
+  const isStopComposerMode = Boolean(
+    controller.canStopRuntimeRun &&
+      renderableRuntimeRun?.isActive &&
+      !renderableRuntimeRun.isTerminal &&
+      hasLiveRuntimeStream,
+  )
+  const isStoppingRuntimeRun = runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'stop'
   const closeState = useMemo<AgentPaneCloseState>(
     () => ({
       hasRunningRun: Boolean(renderableRuntimeRun && !renderableRuntimeRun.isTerminal),
@@ -1555,19 +2934,27 @@ export const AgentRuntime = memo(function AgentRuntime({
               dragHandle ? 'pointer-events-auto cursor-grab active:cursor-grabbing select-none' : null,
             )}
           >
-            <div className="pointer-events-auto flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
-              {showPaneNumberChip ? (
-                <span
-                  aria-label={`Pane ${paneNumber}`}
-                  className="inline-flex h-[18px] shrink-0 items-center justify-center rounded-sm border border-border/60 bg-muted/40 px-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-                >
-                  P{paneNumber}
+            {isComputerUseSidebar ? (
+              <div className="pointer-events-auto flex min-w-0 items-center gap-2 text-[12.5px]">
+                <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Monitor className="h-3.5 w-3.5" />
                 </span>
-              ) : null}
-              <span className="truncate font-semibold text-foreground">{projectLabel}</span>
-              <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/70" />
-              {inSidebar && sidebarSessions && sidebarSessions.length > 0 && onSelectSidebarSession ? (
-                <DropdownMenu>
+                <span className="truncate font-semibold text-foreground">{sessionLabel}</span>
+              </div>
+            ) : (
+              <div className="pointer-events-auto flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
+                {showPaneNumberChip ? (
+                  <span
+                    aria-label={`Pane ${paneNumber}`}
+                    className="inline-flex h-[18px] shrink-0 items-center justify-center rounded-sm border border-border/60 bg-muted/40 px-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                  >
+                    P{paneNumber}
+                  </span>
+                ) : null}
+                <span className="truncate font-semibold text-foreground">{projectLabel}</span>
+                <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+                {inSidebar && sidebarSessions && sidebarSessions.length > 0 && onSelectSidebarSession ? (
+                  <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
@@ -1579,6 +2966,12 @@ export const AgentRuntime = memo(function AgentRuntime({
                       )}
                     >
                       <span className="truncate">{sessionLabel}</span>
+                      {isComputerUseSession ? (
+                        <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-sm border border-primary/20 bg-primary/10 px-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
+                          <Monitor className="h-3 w-3" />
+                          Computer
+                        </span>
+                      ) : null}
                       <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
                     </button>
                   </DropdownMenuTrigger>
@@ -1614,17 +3007,29 @@ export const AgentRuntime = memo(function AgentRuntime({
                             )}
                           />
                           <span className="min-w-0 flex-1 truncate">{label}</span>
+                          {session.isComputerUse ? (
+                            <Monitor className="h-3.5 w-3.5 text-primary" />
+                          ) : null}
                         </DropdownMenuItem>
                       )
                     })}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
-                <span className="truncate font-medium">{sessionLabel}</span>
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <span className="truncate font-medium">{sessionLabel}</span>
+                  {isComputerUseSession ? (
+                    <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-sm border border-primary/20 bg-primary/10 px-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
+                      <Monitor className="h-3 w-3" />
+                      Computer
+                    </span>
+                  ) : null}
+                </span>
               )}
-            </div>
+              </div>
+            )}
             <div className="pointer-events-auto flex items-center gap-1">
-              {onCreateSession && paneCount === 1 ? (
+              {!isComputerUseSidebar && onCreateSession && paneCount === 1 ? (
                 <button
                   type="button"
                   aria-label="New session"
@@ -1641,10 +3046,10 @@ export const AgentRuntime = memo(function AgentRuntime({
                   ) : (
                     <Plus className="h-3.5 w-3.5" />
                   )}
-                  <span>New Session</span>
+                  <span>{inSidebar ? 'New' : 'New Session'}</span>
                 </button>
               ) : null}
-              {onSpawnPane ? (
+              {!isComputerUseSidebar && onSpawnPane ? (
                 <button
                   type="button"
                   aria-label={spawnPaneDisabled ? 'Pane limit reached' : 'Spawn agent pane'}
@@ -1660,7 +3065,7 @@ export const AgentRuntime = memo(function AgentRuntime({
                   <SplitSquareHorizontal className="h-3.5 w-3.5" />
                 </button>
               ) : null}
-              {showCloseButton ? (
+              {!isComputerUseSidebar && showCloseButton ? (
                 <button
                   type="button"
                   aria-label="Close pane"
@@ -1676,7 +3081,7 @@ export const AgentRuntime = memo(function AgentRuntime({
               {inSidebar && onCloseSidebar ? (
                 <button
                   type="button"
-                  aria-label="Close agent dock"
+                  aria-label={isComputerUseSidebar ? 'Close Computer Use' : 'Close agent dock'}
                   onClick={onCloseSidebar}
                   className={cn(
                     'inline-flex h-[30px] w-[30px] items-center justify-center rounded-md text-muted-foreground transition-colors',
@@ -1721,6 +3126,15 @@ export const AgentRuntime = memo(function AgentRuntime({
               <SetupEmptyState onOpenSettings={onOpenSettings} />
             ) : showEmptySessionState ? (
               <EmptySessionState
+                context={
+                  isComputerUseSession
+                    ? 'computer-use'
+                    : controller.composerRuntimeAgentId === 'agent_create'
+                      ? 'agent-create'
+                      : 'default'
+                }
+                agentCreateCanvasIncluded={agentCreateCanvasIncluded}
+                onStartWorkflowAgentCreate={onStartWorkflowAgentCreate}
                 projectLabel={projectLabel}
                 variant={isDense ? 'dense' : 'default'}
                 onSelectSuggestion={(prompt) => {
@@ -1735,22 +3149,39 @@ export const AgentRuntime = memo(function AgentRuntime({
                   isDense ? 'max-w-full gap-1' : 'max-w-[720px] gap-4',
                 )}
               >
-                <ConversationSection
-                  runtimeRun={renderableRuntimeRun}
-                  visibleTurns={visibleTurnsWithPendingPrompt}
-                  streamIssue={streamIssue}
-                  streamFailure={runtimeStream?.failure ?? null}
-                  showActivityIndicator={showAgentActivityIndicator}
-                  streamCompletion={runtimeStream?.completion ?? null}
-                  accountAvatarUrl={accountAvatarUrl}
-                  accountLogin={accountLogin}
-                  variant={isDense ? 'dense' : 'default'}
-                />
+                <ActionPromptDispatchProvider value={actionPromptDispatchValue}>
+                  <RoutingSuggestionDispatchProvider value={routingSuggestionDispatchValue}>
+                    <ConversationSection
+                      runtimeRun={renderableRuntimeRun}
+                      visibleTurns={applyRoutingResolutions(visibleTurnsWithPendingPrompt)}
+                      streamIssue={streamIssue}
+                      streamFailure={runtimeStream?.failure ?? null}
+                      showActivityIndicator={showAgentActivityIndicator}
+                      streamCompletion={runtimeStream?.completion ?? null}
+                      accountAvatarUrl={accountAvatarUrl}
+                      accountLogin={accountLogin}
+                      variant={isDense ? 'dense' : 'default'}
+                      codeUndoStates={codeUndoStates}
+                      returnSessionToHereStates={returnSessionToHereStates}
+                      onUndoChangeGroup={
+                        desktopAdapter?.applySelectiveUndo ? handleUndoCodeChange : undefined
+                      }
+                      onReturnSessionToHere={
+                        desktopAdapter?.returnSessionToHere ? handleReturnSessionToHere : undefined
+                      }
+                      onOpenHandoffSummary={
+                        getAgentHandoffContextSummaryFn ? handleOpenHandoffSummary : undefined
+                      }
+                      footerHandoffSourceRunId={footerHandoffSourceRunId}
+                    />
+                  </RoutingSuggestionDispatchProvider>
+                </ActionPromptDispatchProvider>
                 {controller.composerRuntimeAgentId === 'agent_create' ? (
                   <AgentCreateDraftSection
                     runtimeStreamItems={runtimeStreamItems}
                     pendingApprovalCount={agent.pendingApprovalCount ?? 0}
                     onOpenAgentManagement={onOpenAgentManagement}
+                    onCreateAgentByHand={onCreateAgentByHand}
                   />
                 ) : null}
                 <div ref={bottomSentinelRef} aria-hidden="true" className="h-1 shrink-0 scroll-mb-8" />
@@ -1775,11 +3206,23 @@ export const AgentRuntime = memo(function AgentRuntime({
           ) : null}
         </div>
 
+        <PlanTray plan={runtimeStream?.plan ?? null} density={density} />
+
         <ComposerDock
           density={density}
+          inSidebar={inSidebar}
           composerRuntimeAgentId={controller.composerRuntimeAgentId}
           composerRuntimeAgentLabel={getRuntimeAgentLabel(controller.composerRuntimeAgentId)}
           availableRuntimeAgentIds={availableRuntimeAgentIds}
+          hideAgentSelector={isComputerUseSession}
+          hideAutoCompact={isComputerUseSession}
+          hideContextMeter={isComputerUseSession}
+          hideDictation={isComputerUseSession}
+          runtimeAgentLockReason={
+            isComputerUseSession
+              ? 'Computer Use sessions always run with the Computer Use agent.'
+              : undefined
+          }
           composerAgentDefinitionId={controller.composerAgentDefinitionId}
           composerAgentSelectionKey={controller.composerAgentSelectionKey}
           customAgentDefinitions={customAgentDefinitions}
@@ -1791,13 +3234,16 @@ export const AgentRuntime = memo(function AgentRuntime({
           composerThinkingLevel={controller.composerThinkingEffort}
           composerThinkingOptions={composerThinkingOptions}
           composerThinkingPlaceholder={composerThinkingPlaceholder}
-          controlsDisabled={controller.areControlsDisabled}
+          controlsDisabled={controller.areControlsDisabled || promptSubmissionPending}
           runtimeAgentSwitchDisabled={controller.isRuntimeAgentSwitchDisabled}
           dictation={controller.dictation}
           contextMeter={contextMeter}
           draftPrompt={controller.draftPrompt}
-          isPromptDisabled={controller.isPromptDisabled}
-          isSendDisabled={!controller.canSubmitPrompt}
+          isPromptDisabled={controller.isPromptDisabled || promptSubmissionPending}
+          isSendDisabled={!controller.canSubmitPrompt || promptSubmissionPending}
+          isStopVisible={isStopComposerMode}
+          isStopDisabled={isStoppingRuntimeRun}
+          onStopRuntimeRun={() => void controller.handleStopRuntimeRun()}
           onComposerApprovalModeChange={controller.handleComposerApprovalModeChange}
           onComposerRuntimeAgentChange={controller.handleComposerRuntimeAgentChange}
           onComposerAgentSelectionChange={controller.handleComposerAgentSelectionChange}
@@ -1807,6 +3253,7 @@ export const AgentRuntime = memo(function AgentRuntime({
           onDraftPromptChange={controller.handleDraftPromptChange}
           onSubmitDraftPrompt={handleSubmitDraftPrompt}
           pendingAttachments={pendingAttachments}
+          onAddFiles={handleAddFiles}
           onRemoveAttachment={handleRemoveAttachment}
           pendingRuntimeRunAction={pendingRuntimeRunAction}
           placeholder={composerPlaceholder}
@@ -1821,6 +3268,14 @@ export const AgentRuntime = memo(function AgentRuntime({
         />
         </div>
       </div>
+      <HandoffContextDialog
+        open={handoffSummaryOpen}
+        onOpenChange={setHandoffSummaryOpen}
+        status={handoffSummaryStatus}
+        errorMessage={handoffSummaryError}
+        summary={handoffSummary}
+        onRefresh={refreshHandoffSummary}
+      />
     </AgentPaneDropOverlay>
   )
 })

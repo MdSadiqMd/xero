@@ -4,20 +4,26 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{
-        validate_non_empty, AgentSessionDto, AgentSessionLineageBoundaryKindDto,
-        AgentSessionLineageDiagnosticDto, AgentSessionLineageDto, AgentSessionStatusDto,
-        ArchiveAgentSessionRequestDto, CommandResult, CreateAgentSessionRequestDto,
-        DeleteAgentSessionRequestDto, GetAgentSessionRequestDto, ListAgentSessionsRequestDto,
-        ListAgentSessionsResponseDto, RestoreAgentSessionRequestDto, UpdateAgentSessionRequestDto,
+        validate_non_empty, AgentSessionDto, AgentSessionKindDto,
+        AgentSessionLineageBoundaryKindDto, AgentSessionLineageDiagnosticDto,
+        AgentSessionLineageDto, AgentSessionStatusDto, ArchiveAgentSessionRequestDto, CommandError,
+        CommandResult, CreateAgentSessionRequestDto, DeleteAgentSessionRequestDto,
+        GetAgentSessionRequestDto, ListAgentSessionsRequestDto, ListAgentSessionsResponseDto,
+        RestoreAgentSessionRequestDto, RuntimeAgentIdDto, UpdateAgentSessionRequestDto,
     },
     db::project_store::{
-        self, AgentSessionCreateRecord, AgentSessionLineageBoundaryKind, AgentSessionLineageRecord,
-        AgentSessionRecord, AgentSessionStatus, AgentSessionUpdateRecord,
-        DEFAULT_AGENT_SESSION_TITLE,
+        self, AgentSessionCreateRecord, AgentSessionKind, AgentSessionLineageBoundaryKind,
+        AgentSessionLineageRecord, AgentSessionRecord, AgentSessionStatus,
+        AgentSessionUpdateRecord, COMPUTER_USE_AGENT_SESSION_TITLE, DEFAULT_AGENT_SESSION_TITLE,
     },
     state::DesktopState,
 };
 
+use super::global_computer_use::GLOBAL_COMPUTER_USE_PROJECT_ID;
+use super::remote_bridge::{
+    handle_deleted_agent_session_remote_state, publish_agent_session_remote_state,
+    RemoteBridgeRuntimeState,
+};
 use super::runtime_support::{
     emit_runtime_run_updated_if_changed, load_persisted_runtime_run, resolve_project_root,
     stop_owned_runtime_run,
@@ -34,20 +40,58 @@ pub fn create_agent_session<R: Runtime>(
         validate_non_empty(title, "title")?;
     }
 
-    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    let project_id = request.project_id.clone();
+    let repo_root = resolve_project_root(&app, state.inner(), &project_id)?;
+    let session_kind = create_request_session_kind(&request)?;
     let session = project_store::create_agent_session(
         &repo_root,
         &AgentSessionCreateRecord {
             project_id: request.project_id,
-            title: request
-                .title
-                .unwrap_or_else(|| DEFAULT_AGENT_SESSION_TITLE.to_string()),
+            title: request.title.unwrap_or_else(|| match session_kind {
+                AgentSessionKind::Standard => DEFAULT_AGENT_SESSION_TITLE.to_string(),
+                AgentSessionKind::ComputerUse => COMPUTER_USE_AGENT_SESSION_TITLE.to_string(),
+            }),
             summary: request.summary,
             selected: request.selected,
+            session_kind,
         },
     )?;
+    publish_agent_session_remote_state(&app, state.inner(), &project_id, &session);
 
     Ok(agent_session_dto(&session))
+}
+
+fn create_request_session_kind(
+    request: &CreateAgentSessionRequestDto,
+) -> CommandResult<AgentSessionKind> {
+    let inferred = match (request.session_kind, request.runtime_agent_id) {
+        (Some(AgentSessionKindDto::ComputerUse), _) => AgentSessionKind::ComputerUse,
+        (Some(AgentSessionKindDto::Standard), _) => AgentSessionKind::Standard,
+        (None, Some(RuntimeAgentIdDto::ComputerUse)) => AgentSessionKind::ComputerUse,
+        (None, _) => AgentSessionKind::Standard,
+    };
+
+    if inferred == AgentSessionKind::ComputerUse
+        && request
+            .runtime_agent_id
+            .is_some_and(|agent_id| agent_id != RuntimeAgentIdDto::ComputerUse)
+    {
+        return Err(CommandError::user_fixable(
+            "computer_use_agent_required",
+            "Computer Use sessions must start with the Computer Use agent.",
+        ));
+    }
+
+    if inferred == AgentSessionKind::Standard
+        && request.runtime_agent_id == Some(RuntimeAgentIdDto::ComputerUse)
+    {
+        return Err(CommandError::user_fixable(
+            "computer_use_session_required",
+            "The Computer Use agent can only be selected for Computer Use sessions.",
+        ));
+    }
+
+    Ok(inferred)
 }
 
 #[tauri::command]
@@ -64,7 +108,14 @@ pub fn list_agent_sessions<R: Runtime>(
         request.include_archived,
     )?;
     Ok(ListAgentSessionsResponseDto {
-        sessions: sessions.iter().map(agent_session_dto).collect(),
+        sessions: sessions
+            .iter()
+            .filter(|session| {
+                request.project_id == GLOBAL_COMPUTER_USE_PROJECT_ID
+                    || !matches!(session.session_kind, AgentSessionKind::ComputerUse)
+            })
+            .map(agent_session_dto)
+            .collect(),
     })
 }
 
@@ -97,7 +148,8 @@ pub fn update_agent_session<R: Runtime>(
         validate_non_empty(title, "title")?;
     }
 
-    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    let project_id = request.project_id.clone();
+    let repo_root = resolve_project_root(&app, state.inner(), &project_id)?;
     let session = project_store::update_agent_session(
         &repo_root,
         &AgentSessionUpdateRecord {
@@ -108,13 +160,15 @@ pub fn update_agent_session<R: Runtime>(
             selected: request.selected,
         },
     )?;
+    publish_agent_session_remote_state(&app, state.inner(), &project_id, &session);
     Ok(agent_session_dto(&session))
 }
 
 #[tauri::command]
-pub fn archive_agent_session<R: Runtime>(
+pub fn archive_agent_session<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
+    remote_state: State<'_, RemoteBridgeRuntimeState>,
     request: ArchiveAgentSessionRequestDto,
 ) -> CommandResult<AgentSessionDto> {
     validate_non_empty(&request.project_id, "projectId")?;
@@ -132,10 +186,17 @@ pub fn archive_agent_session<R: Runtime>(
         &request.project_id,
         &request.agent_session_id,
     )?;
+    handle_deleted_agent_session_remote_state(
+        &app,
+        state.inner(),
+        remote_state.inner(),
+        &request.project_id,
+        &session,
+    );
     Ok(agent_session_dto(&session))
 }
 
-fn stop_idle_owned_runtime_run_before_archive<R: Runtime>(
+pub(crate) fn stop_idle_owned_runtime_run_before_archive<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     repo_root: &Path,
@@ -180,29 +241,46 @@ pub fn restore_agent_session<R: Runtime>(
 ) -> CommandResult<AgentSessionDto> {
     validate_non_empty(&request.project_id, "projectId")?;
     validate_non_empty(&request.agent_session_id, "agentSessionId")?;
-    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    let project_id = request.project_id.clone();
+    let repo_root = resolve_project_root(&app, state.inner(), &project_id)?;
     let session = project_store::restore_agent_session(
         &repo_root,
         &request.project_id,
         &request.agent_session_id,
     )?;
+    publish_agent_session_remote_state(&app, state.inner(), &project_id, &session);
     Ok(agent_session_dto(&session))
 }
 
 #[tauri::command]
-pub fn delete_agent_session<R: Runtime>(
+pub fn delete_agent_session<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
+    remote_state: State<'_, RemoteBridgeRuntimeState>,
     request: DeleteAgentSessionRequestDto,
 ) -> CommandResult<()> {
     validate_non_empty(&request.project_id, "projectId")?;
     validate_non_empty(&request.agent_session_id, "agentSessionId")?;
     let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    let deleted_session = project_store::get_agent_session(
+        &repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?;
     project_store::delete_agent_session(
         &repo_root,
         &request.project_id,
         &request.agent_session_id,
     )?;
+    if let Some(session) = deleted_session.as_ref() {
+        handle_deleted_agent_session_remote_state(
+            &app,
+            state.inner(),
+            remote_state.inner(),
+            &request.project_id,
+            session,
+        );
+    }
     Ok(())
 }
 
@@ -210,6 +288,10 @@ pub(crate) fn agent_session_dto(record: &AgentSessionRecord) -> AgentSessionDto 
     AgentSessionDto {
         project_id: record.project_id.clone(),
         agent_session_id: record.agent_session_id.clone(),
+        session_kind: match record.session_kind {
+            AgentSessionKind::Standard => AgentSessionKindDto::Standard,
+            AgentSessionKind::ComputerUse => AgentSessionKindDto::ComputerUse,
+        },
         title: record.title.clone(),
         summary: record.summary.clone(),
         status: match record.status {
@@ -217,6 +299,8 @@ pub(crate) fn agent_session_dto(record: &AgentSessionRecord) -> AgentSessionDto 
             AgentSessionStatus::Archived => AgentSessionStatusDto::Archived,
         },
         selected: record.selected,
+        remote_visible: !matches!(record.status, AgentSessionStatus::Archived)
+            && !matches!(record.session_kind, AgentSessionKind::ComputerUse),
         created_at: record.created_at.clone(),
         updated_at: record.updated_at.clone(),
         archived_at: record.archived_at.clone(),

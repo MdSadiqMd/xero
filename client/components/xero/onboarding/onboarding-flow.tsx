@@ -5,11 +5,13 @@ import { ArrowLeft, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { StepIndicator } from "./step-indicator"
 import { WelcomeStep } from "./steps/welcome-step"
+import { LocalEnvironmentStep } from "./steps/local-environment-step"
 import { ProvidersStep } from "./steps/providers-step"
 import { ProjectStep } from "./steps/project-step"
 import { NotificationsStep } from "./steps/notifications-step"
 import { EnvironmentAccessStep } from "./steps/environment-access-step"
 import { ConfirmationStep } from "./steps/confirmation-step"
+import { BetaStep } from "./steps/beta-step"
 import type {
   NotificationRouteHealthView,
   NotificationRouteMutationStatus,
@@ -24,6 +26,7 @@ import {
   type RuntimeSessionView,
   type UpsertNotificationRouteRequestDto,
   type UpsertProviderCredentialRequestDto,
+  type XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
 import type {
   EnvironmentDiscoveryStatusDto,
@@ -39,7 +42,37 @@ const BASE_STEP_ORDER: Array<{ id: OnboardingStepId; showIndicator: boolean }> =
   { id: "project", showIndicator: true },
   { id: "notifications", showIndicator: true },
   { id: "confirm", showIndicator: true },
+  { id: "beta", showIndicator: true },
 ]
+
+/**
+ * Pure helper exported for unit tests. Computes the active step order given
+ * the current launch mode and whether environment-access decisions are
+ * required.
+ */
+export function computeStepOrder(
+  launchMode: string | null | undefined,
+  hasEnvironmentPermissionRequests: boolean,
+): Array<{ id: OnboardingStepId; showIndicator: boolean }> {
+  const withLocalEnv =
+    launchMode === "local-source"
+      ? BASE_STEP_ORDER.flatMap((step) =>
+          step.id === "providers"
+            ? [{ id: "local-environment" as const, showIndicator: true }, step]
+            : [step],
+        )
+      : BASE_STEP_ORDER
+
+  if (!hasEnvironmentPermissionRequests) {
+    return withLocalEnv
+  }
+
+  return withLocalEnv.flatMap((step) =>
+    step.id === "confirm"
+      ? [{ id: "environment-access" as const, showIndicator: true }, step]
+      : [step],
+  )
+}
 
 interface ImportedProjectView {
   name: string
@@ -112,6 +145,11 @@ export interface OnboardingFlowProps {
     id: string
     status: EnvironmentPermissionDecisionStatusDto
   }>) => Promise<EnvironmentDiscoveryStatusDto | null>
+  /**
+   * "local-source" when the app was launched via `pnpm start` from a source
+   * checkout; null otherwise. Toggles the local-environment onboarding step.
+   */
+  launchMode?: string | null
   onImportProject: () => Promise<void>
   onRefreshProviderCredentials?: (options?: {
     force?: boolean
@@ -126,6 +164,11 @@ export interface OnboardingFlowProps {
     providerId: RuntimeProviderIdDto
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
+  onStartXaiDeviceCodeLogin?: (request: { providerId: "xai" }) => Promise<XaiDeviceCodeLoginDto>
+  onPollXaiDeviceCodeLogin?: (request: {
+    providerId: "xai"
+    flowId: string
+  }) => Promise<XaiDeviceCodeLoginDto>
   onUpsertNotificationRoute: (
     request: Omit<UpsertNotificationRouteRequestDto, "projectId">,
   ) => Promise<unknown>
@@ -150,11 +193,14 @@ export function OnboardingFlow({
   notificationRouteMutationError,
   environmentPermissionRequests = [],
   onResolveEnvironmentPermissions,
+  launchMode = null,
   onImportProject,
   onRefreshProviderCredentials,
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
+  onStartXaiDeviceCodeLogin,
+  onPollXaiDeviceCodeLogin,
   onUpsertNotificationRoute,
   onComplete,
   onDismiss,
@@ -167,19 +213,21 @@ export function OnboardingFlow({
     "idle" | "saving" | "error"
   >("idle")
   const [environmentPermissionSaveError, setEnvironmentPermissionSaveError] = useState<string | null>(null)
+  const [hasEnvironmentPermissionStep, setHasEnvironmentPermissionStep] = useState(
+    environmentPermissionRequests.length > 0,
+  )
   const directionRef = useRef<1 | -1>(1)
 
-  const stepOrder = useMemo(() => {
-    if (environmentPermissionRequests.length === 0) {
-      return BASE_STEP_ORDER
+  useEffect(() => {
+    if (environmentPermissionRequests.length > 0) {
+      setHasEnvironmentPermissionStep(true)
     }
-
-    return BASE_STEP_ORDER.flatMap((step) =>
-      step.id === "confirm"
-        ? [{ id: "environment-access" as const, showIndicator: true }, step]
-        : [step],
-    )
   }, [environmentPermissionRequests.length])
+
+  const stepOrder = useMemo(
+    () => computeStepOrder(launchMode, hasEnvironmentPermissionStep),
+    [hasEnvironmentPermissionStep, launchMode],
+  )
   const indicatorSteps = useMemo(
     () => stepOrder.filter((step) => step.showIndicator),
     [stepOrder],
@@ -283,24 +331,26 @@ export function OnboardingFlow({
 
   const showFooter = currentStep.id !== "welcome"
   const isConfirm = currentStep.id === "confirm"
-  const primaryLabel = isConfirm
+  const isBeta = currentStep.id === "beta"
+  const primaryLabel = isBeta
     ? "Enter Xero"
     : isEnvironmentAccess && environmentPermissionSaveStatus === "saving"
       ? "Saving"
       : "Continue"
-  const handlePrimary = isConfirm
+  const handlePrimary = isBeta
     ? onComplete
     : isEnvironmentAccess
       ? () => void saveEnvironmentAccessAndContinue()
       : next
+  const showStepSkip = !isConfirm && !isBeta
   const primaryDisabled =
     (isEnvironmentAccess && hasRequiredEnvironmentPermissionPending) ||
     environmentPermissionSaveStatus === "saving"
 
   return (
     <div className="relative flex min-h-full flex-1 flex-col overflow-hidden bg-background text-foreground">
-      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 px-8 pt-5">
-        <div className="min-w-[72px]">
+      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 px-5 pt-3">
+        <div className="min-w-[96px]">
           {currentStep.showIndicator ? (
             <StepIndicator total={indicatorSteps.length} currentIndex={indicatorIndex} />
           ) : null}
@@ -310,7 +360,7 @@ export function OnboardingFlow({
           variant="ghost"
           size="sm"
           onClick={onDismiss}
-          className="h-7 text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-8 text-[13px] text-muted-foreground hover:text-foreground"
         >
           Skip setup
         </Button>
@@ -325,62 +375,68 @@ export function OnboardingFlow({
             }`}
           >
             {currentStep.id === "welcome" ? (
-            <WelcomeStep onContinue={next} onSkipAll={onDismiss} />
-          ) : null}
-          {currentStep.id === "providers" ? (
-            <ProvidersStep
-              providerCredentials={providerCredentials}
-              providerCredentialsLoadStatus={providerCredentialsLoadStatus}
-              providerCredentialsLoadError={providerCredentialsLoadError}
-              providerCredentialsSaveStatus={providerCredentialsSaveStatus}
-              providerCredentialsSaveError={providerCredentialsSaveError}
-              runtimeSession={runtimeSession}
-              onRefreshProviderCredentials={onRefreshProviderCredentials}
-              onUpsertProviderCredential={onUpsertProviderCredential}
-              onDeleteProviderCredential={onDeleteProviderCredential}
-              onStartOAuthLogin={onStartOAuthLogin}
-            />
-          ) : null}
-          {currentStep.id === "project" ? (
-            <ProjectStep
-              project={project}
-              isImporting={isImporting}
-              isProjectLoading={isProjectLoading}
-              errorMessage={projectErrorMessage}
-              onImportProject={() => void onImportProject()}
-            />
-          ) : null}
-          {currentStep.id === "notifications" ? (
-            <NotificationsStep
-              projectName={project?.name ?? null}
-              routes={notificationRoutes}
-              mutationStatus={notificationRouteMutationStatus}
-              pendingRouteId={pendingNotificationRouteId}
-              mutationError={notificationRouteMutationError}
-              onUpsertNotificationRoute={onUpsertNotificationRoute}
-            />
-          ) : null}
-          {currentStep.id === "environment-access" ? (
-            <EnvironmentAccessStep
-              permissionRequests={environmentPermissionRequests}
-              decisions={environmentPermissionDecisions}
-              disabled={environmentPermissionSaveStatus === "saving"}
-              onDecisionChange={setEnvironmentPermissionDecision}
-            />
-          ) : null}
-          {currentStep.id === "environment-access" && environmentPermissionSaveError ? (
-            <p className="mt-3 text-[11.5px] leading-relaxed text-destructive">
-              {environmentPermissionSaveError}
-            </p>
-          ) : null}
-          {currentStep.id === "confirm" ? (
-            <ConfirmationStep
-              providerValue={providerReview.value}
-              providerReady={providerReview.ready}
-              projectName={project?.name ?? null}
-              notifications={notificationRoutes}
-            />
-          ) : null}
+              <WelcomeStep onContinue={next} onSkipAll={onDismiss} />
+            ) : null}
+            {currentStep.id === "local-environment" ? (
+              <LocalEnvironmentStep />
+            ) : null}
+            {currentStep.id === "providers" ? (
+              <ProvidersStep
+                providerCredentials={providerCredentials}
+                providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+                providerCredentialsLoadError={providerCredentialsLoadError}
+                providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+                providerCredentialsSaveError={providerCredentialsSaveError}
+                runtimeSession={runtimeSession}
+                onRefreshProviderCredentials={onRefreshProviderCredentials}
+                onUpsertProviderCredential={onUpsertProviderCredential}
+                onDeleteProviderCredential={onDeleteProviderCredential}
+                onStartOAuthLogin={onStartOAuthLogin}
+                onStartXaiDeviceCodeLogin={onStartXaiDeviceCodeLogin}
+                onPollXaiDeviceCodeLogin={onPollXaiDeviceCodeLogin}
+              />
+            ) : null}
+            {currentStep.id === "project" ? (
+              <ProjectStep
+                project={project}
+                isImporting={isImporting}
+                isProjectLoading={isProjectLoading}
+                errorMessage={projectErrorMessage}
+                onImportProject={() => void onImportProject()}
+              />
+            ) : null}
+            {currentStep.id === "notifications" ? (
+              <NotificationsStep
+                projectName={project?.name ?? null}
+                routes={notificationRoutes}
+                mutationStatus={notificationRouteMutationStatus}
+                pendingRouteId={pendingNotificationRouteId}
+                mutationError={notificationRouteMutationError}
+                onUpsertNotificationRoute={onUpsertNotificationRoute}
+              />
+            ) : null}
+            {currentStep.id === "environment-access" ? (
+              <EnvironmentAccessStep
+                permissionRequests={environmentPermissionRequests}
+                decisions={environmentPermissionDecisions}
+                disabled={environmentPermissionSaveStatus === "saving"}
+                onDecisionChange={setEnvironmentPermissionDecision}
+              />
+            ) : null}
+            {currentStep.id === "environment-access" && environmentPermissionSaveError ? (
+              <p className="mt-3 text-[11.5px] leading-relaxed text-destructive">
+                {environmentPermissionSaveError}
+              </p>
+            ) : null}
+            {currentStep.id === "confirm" ? (
+              <ConfirmationStep
+                providerValue={providerReview.value}
+                providerReady={providerReview.ready}
+                projectName={project?.name ?? null}
+                notifications={notificationRoutes}
+              />
+            ) : null}
+            {currentStep.id === "beta" ? <BetaStep /> : null}
           </div>
         </div>
       </main>
@@ -404,7 +460,7 @@ export function OnboardingFlow({
             </Button>
 
             <div className="flex items-center gap-1">
-              {!isConfirm ? (
+              {showStepSkip ? (
                 <Button
                   variant="ghost"
                   size="sm"

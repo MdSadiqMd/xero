@@ -1,4 +1,4 @@
-import { ArrowRight, FileWarning, Settings, Sparkles } from "lucide-react"
+import { ArrowRight, FileWarning, Hammer, Settings, Sparkles } from "lucide-react"
 
 import type {
   RuntimeStreamToolItemView,
@@ -10,24 +10,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { cn } from "@/lib/utils"
 
 const AGENT_DEFINITION_TOOL_NAME = "agent_definition"
+const WORKFLOW_DEFINITION_TOOL_NAME = "workflow_definition"
+const DEFINITION_TOOL_NAMES = new Set([AGENT_DEFINITION_TOOL_NAME, WORKFLOW_DEFINITION_TOOL_NAME])
 
 interface AgentCreateDraftSectionProps {
   runtimeStreamItems: readonly RuntimeStreamViewItem[]
   pendingApprovalCount: number
   onOpenAgentManagement?: () => void
+  onCreateAgentByHand?: () => void
 }
 
-function isAgentDefinitionToolItem(item: RuntimeStreamViewItem): item is RuntimeStreamToolItemView {
-  return item.kind === "tool" && item.toolName === AGENT_DEFINITION_TOOL_NAME
+function isDefinitionToolItem(item: RuntimeStreamViewItem): item is RuntimeStreamToolItemView {
+  return item.kind === "tool" && DEFINITION_TOOL_NAMES.has(item.toolName)
 }
 
 export function AgentCreateDraftSection({
   runtimeStreamItems,
   pendingApprovalCount,
   onOpenAgentManagement,
+  onCreateAgentByHand,
 }: AgentCreateDraftSectionProps) {
   const recentDraftItems = runtimeStreamItems
-    .filter(isAgentDefinitionToolItem)
+    .filter(isDefinitionToolItem)
     .slice(-4)
     .reverse()
 
@@ -40,24 +44,39 @@ export function AgentCreateDraftSection({
             Agent Create
           </CardTitle>
           <CardDescription className="text-[12px]">
-            Describe the agent you want and Agent Create will draft a definition. Saving requires
-            explicit approval through the action panel below.
+            Describe the agent or Workflow you want to build. Agent Create will draft a
+            definition; saving requires explicit approval through the action panel below.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex items-center justify-between text-[12px] text-muted-foreground">
-          <span>Activated drafts appear in the agent selector and can be archived from settings.</span>
-          {onOpenAgentManagement ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 text-[11.5px]"
-              onClick={onOpenAgentManagement}
-            >
-              <Settings className="h-3 w-3" />
-              Manage agents
-              <ArrowRight className="h-3 w-3" />
-            </Button>
-          ) : null}
+        <CardContent className="flex flex-col gap-2 text-[12px] text-muted-foreground">
+          <span>Activated drafts appear in the matching library and can be reviewed from settings.</span>
+          <div className="flex items-center justify-between gap-2">
+            {onCreateAgentByHand ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 text-[11.5px]"
+                onClick={onCreateAgentByHand}
+              >
+                <Hammer className="h-3 w-3" />
+                ...or build by hand
+              </Button>
+            ) : (
+              <span />
+            )}
+            {onOpenAgentManagement ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 text-[11.5px]"
+                onClick={onOpenAgentManagement}
+              >
+                <Settings className="h-3 w-3" />
+                Manage agents
+                <ArrowRight className="h-3 w-3" />
+              </Button>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     )
@@ -77,7 +96,7 @@ export function AgentCreateDraftSection({
         </CardTitle>
         <CardDescription className="text-[12px]">
           Recent definition tool calls from this run. Approve a save below to activate the
-          custom agent.
+          custom agent or Workflow.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
@@ -121,7 +140,7 @@ function DraftRow({ item }: DraftRowProps) {
           ) : (
             <Sparkles className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
           )}
-          agent_definition
+          {item.toolName}
         </span>
         <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
           {item.toolState}

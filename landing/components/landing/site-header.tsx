@@ -3,18 +3,17 @@
 import Link from "next/link"
 import Image from "next/image"
 import { useEffect, useState } from "react"
-import { Menu, X, Github, Clock } from "lucide-react"
+import { Menu, X, Github, Download, Cloud } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { siteConfig } from "@/lib/site"
 
 const nav = [
   { label: "Product", href: "/#product" },
   { label: "Capabilities", href: "/#capabilities" },
+  { label: "Cloud", href: "/#cloud" },
   { label: "Models", href: "/#models" },
-  { label: "Workflow", href: "/#workflow" },
   { label: "Pricing", href: "/#pricing" },
-  { label: "Docs", href: "/docs" },
-  { label: "Changelog", href: "/changelog" },
 ]
 
 export function SiteHeader() {
@@ -42,9 +41,9 @@ export function SiteHeader() {
           <Image
             src="/icon-logo.svg"
             alt=""
-            width={32}
-            height={32}
-            className="h-7 w-7 opacity-95"
+            width={24}
+            height={24}
+            className="h-5 w-5 opacity-95"
             priority
           />
           <span className="text-base font-semibold tracking-tight text-foreground">Xero</span>
@@ -64,20 +63,30 @@ export function SiteHeader() {
 
         <div className="flex items-center gap-2">
           <Link
-            href="#"
+            href={siteConfig.githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             aria-label="GitHub"
             className="hidden h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:inline-flex"
           >
             <Github className="h-4 w-4" />
           </Link>
+          <Button asChild size="sm" className="gap-1.5 bg-primary text-primary-foreground">
+            <a href="/download">
+              <Download className="h-3.5 w-3.5" />
+              Download
+            </a>
+          </Button>
           <Button
+            asChild
             size="sm"
-            disabled
-            aria-disabled
-            className="gap-1.5 bg-secondary/60 text-muted-foreground disabled:opacity-100 disabled:pointer-events-auto disabled:cursor-not-allowed"
+            variant="secondary"
+            className="hidden gap-1.5 border border-border/70 bg-secondary/70 md:inline-flex"
           >
-            <Clock className="h-3.5 w-3.5" />
-            Coming soon
+            <Link href={siteConfig.cloudUrl}>
+              <Cloud className="h-3.5 w-3.5" />
+              Cloud
+            </Link>
           </Button>
 
           <button

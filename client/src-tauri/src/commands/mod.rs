@@ -1,19 +1,30 @@
+pub mod adrenaline_mode;
+pub mod agent_default_models;
 pub mod agent_definition;
+pub mod agent_extensions;
+pub mod agent_reports;
 pub mod agent_session;
 pub mod agent_session_title;
 pub mod agent_task;
+pub mod agent_tooling_settings;
 pub mod backend_jobs;
 pub mod browser;
 pub mod cancel_autonomous_run;
+pub mod code_rollback;
 pub mod complete_oauth_callback;
 pub mod create_repository;
+pub mod developer_tool_harness;
 pub mod development_storage;
 pub mod dictation;
+pub mod dock_icon;
 pub mod doctor_report;
+pub mod editor_diagnostics;
+pub mod editor_workflows;
 pub mod emulator;
 pub mod environment_discovery;
 pub mod environment_user_tools;
 pub mod get_autonomous_run;
+pub mod get_project_load_bundle;
 pub mod get_project_snapshot;
 pub mod get_project_usage_summary;
 pub mod get_repository_diff;
@@ -23,26 +34,32 @@ pub mod get_runtime_session;
 pub mod get_runtime_settings;
 pub mod git_commit_message;
 pub mod git_operations;
+pub mod global_computer_use;
 pub mod import_mcp_servers;
 pub mod import_repository;
 pub mod list_mcp_servers;
 pub mod list_notification_dispatches;
 pub mod list_notification_routes;
 pub mod list_projects;
+pub mod local_environment;
 pub mod logout_runtime_session;
 pub mod payload_budget;
 pub mod platform;
 pub mod project_assets;
 pub mod project_files;
+pub mod project_records;
+pub mod project_runner;
+pub mod project_state;
 pub mod provider_credentials;
-pub mod provider_diagnostics;
 pub mod provider_model_catalog;
 pub mod provider_preflight;
 pub mod record_notification_dispatch_outcome;
+pub mod remote_bridge;
 pub mod remove_mcp_server;
 pub mod remove_project;
 pub mod resolve_operator_action;
 pub mod resume_operator_run;
+pub(crate) mod runtime_media;
 pub mod search_project;
 pub mod session_history;
 pub mod skills;
@@ -63,13 +80,40 @@ pub mod update_runtime_run_controls;
 pub mod upsert_mcp_server;
 pub mod upsert_notification_route;
 pub mod upsert_notification_route_credentials;
+pub mod wipe_data;
+pub mod workflow_agents;
+pub mod workflows;
 pub mod workspace_index;
+pub mod xai_device_code_login;
 
-mod contracts;
+pub(crate) mod contracts;
 pub(crate) mod runtime_support;
 
+pub use adrenaline_mode::{
+    adrenaline_mode_settings, adrenaline_mode_update_settings, closed_lid_mode_settings,
+    closed_lid_mode_update_settings, AdrenalineModeActiveStatusDto, AdrenalineModeAssertionKindDto,
+    AdrenalineModeSettingsDto, AdrenalineModeState, ClosedLidModeActiveStatusDto,
+    ClosedLidModeSettingsDto, ClosedLidModeState, UpsertAdrenalineModeSettingsRequestDto,
+    UpsertClosedLidModeSettingsRequestDto,
+};
+pub use agent_default_models::set_agent_default_model;
 pub use agent_definition::{
-    archive_agent_definition, get_agent_definition_version, list_agent_definitions,
+    archive_agent_definition, get_agent_definition_version, get_agent_definition_version_diff,
+    list_agent_definitions, preview_agent_definition, save_agent_definition,
+    update_agent_definition,
+};
+pub use agent_extensions::{
+    validate_agent_tool_extension_manifest, AgentToolExtensionManifestValidationDto,
+    AgentToolExtensionPermissionSummaryDto, AgentToolExtensionValidationDiagnosticDto,
+    ValidateAgentToolExtensionManifestRequestDto,
+};
+pub use agent_reports::{
+    get_agent_database_touchpoint_explanation, get_agent_handoff_context_summary,
+    get_agent_knowledge_inspection, get_agent_run_start_explanation,
+    get_agent_support_diagnostics_bundle, get_capability_permission_explanation,
+    GetAgentDatabaseTouchpointExplanationRequestDto, GetAgentHandoffContextSummaryRequestDto,
+    GetAgentKnowledgeInspectionRequestDto, GetAgentRunStartExplanationRequestDto,
+    GetAgentSupportDiagnosticsBundleRequestDto, GetCapabilityPermissionExplanationRequestDto,
 };
 pub use agent_session::{
     archive_agent_session, create_agent_session, delete_agent_session, get_agent_session,
@@ -79,6 +123,11 @@ pub use agent_session_title::auto_name_agent_session;
 pub use agent_task::{
     cancel_agent_run, export_agent_trace, get_agent_run, list_agent_runs, resume_agent_run,
     send_agent_message, start_agent_task, subscribe_agent_stream,
+};
+pub use agent_tooling_settings::{
+    agent_tooling_settings, agent_tooling_update_settings, AgentToolingModelOverrideDto,
+    AgentToolingSettingsDto, UpsertAgentToolingModelOverrideRequestDto,
+    UpsertAgentToolingSettingsRequestDto,
 };
 pub use browser::{
     browser_back, browser_click, browser_control_settings, browser_control_update_settings,
@@ -94,15 +143,33 @@ pub use browser::{
     BROWSER_TAB_PREFIX, BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use cancel_autonomous_run::cancel_autonomous_run;
+pub use code_rollback::{apply_selective_undo, apply_session_rollback};
 pub use complete_oauth_callback::complete_oauth_callback;
 pub use create_repository::create_repository;
+pub use developer_tool_harness::{
+    developer_tool_catalog, developer_tool_dry_run, developer_tool_harness_project,
+    developer_tool_model_run, developer_tool_sequence_delete, developer_tool_sequence_list,
+    developer_tool_sequence_upsert, developer_tool_synthetic_run, HARNESS_FIXTURE_PROJECT_ID,
+};
 pub use development_storage::{developer_storage_overview, developer_storage_read_table};
 pub use dictation::{
     speech_dictation_cancel, speech_dictation_settings, speech_dictation_start,
     speech_dictation_status, speech_dictation_stop, speech_dictation_update_settings,
     DictationState,
 };
+pub use dock_icon::set_theme_dock_icon;
 pub use doctor_report::run_doctor_report;
+pub use editor_diagnostics::{
+    run_project_typecheck, EditorLspInstallCommandDto, EditorLspInstallSuggestionDto,
+    EditorLspServerStatusDto, ProjectDiagnosticDto, ProjectDiagnosticSeverityDto,
+    ProjectTypecheckResponseDto, ProjectTypecheckStatusDto, RunProjectTypecheckRequestDto,
+};
+pub use editor_workflows::{
+    format_project_document, run_project_lint, FormatProjectDocumentRangeDto,
+    FormatProjectDocumentRequestDto, FormatProjectDocumentResponseDto,
+    FormatProjectDocumentStatusDto, ProjectLintResponseDto, ProjectLintStatusDto,
+    RunProjectLintRequestDto,
+};
 pub use emulator::{
     emulator_android_provision, emulator_android_provision_status, emulator_input,
     emulator_ios_open_accessibility_settings, emulator_ios_request_ax_permission,
@@ -118,6 +185,7 @@ pub use environment_user_tools::{
     environment_remove_user_tool, environment_save_user_tool, environment_verify_user_tool,
 };
 pub use get_autonomous_run::get_autonomous_run;
+pub use get_project_load_bundle::get_project_load_bundle;
 pub use get_project_snapshot::get_project_snapshot;
 pub use get_repository_diff::get_repository_diff;
 pub use get_repository_status::get_repository_status;
@@ -125,39 +193,75 @@ pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
 pub use git_commit_message::git_generate_commit_message;
 pub use git_operations::{
-    git_commit, git_discard_changes, git_fetch, git_pull, git_push, git_stage_paths,
-    git_unstage_paths,
+    git_commit, git_discard_changes, git_fetch, git_pull, git_push, git_revert_patch,
+    git_stage_paths, git_unstage_paths,
 };
+pub use global_computer_use::{ensure_global_computer_use_session, GlobalComputerUseSessionDto};
 pub use import_mcp_servers::import_mcp_servers;
 pub use import_repository::import_repository;
 pub use list_mcp_servers::{list_mcp_servers, refresh_mcp_server_statuses};
 pub use list_notification_dispatches::list_notification_dispatches;
 pub use list_notification_routes::list_notification_routes;
 pub use list_projects::list_projects;
+pub use local_environment::{
+    get_launch_mode, get_local_environment_config, regenerate_secret_key_base,
+    save_local_environment_config, LocalEnvironmentConfig, SaveLocalEnvironmentConfigRequest,
+};
 pub use logout_runtime_session::logout_runtime_session;
 pub use platform::desktop_platform;
 pub use project_assets::{revoke_project_asset_tokens, ProjectAssetState};
 pub use project_files::{
-    create_project_entry, delete_project_entry, list_project_files, move_project_entry,
-    open_project_file_external, read_project_file, rename_project_entry, write_project_file,
+    create_project_entry, delete_project_entry, list_project_file_index, list_project_files,
+    move_project_entry, open_project_file_external, read_project_file, rename_project_entry,
+    stat_project_files, write_project_file,
+};
+pub use project_records::{
+    delete_project_context_record, list_project_context_records, supersede_project_context_record,
+    DeleteProjectContextRecordRequestDto, DeleteProjectContextRecordResponseDto,
+    ListProjectContextRecordsRequestDto, ListProjectContextRecordsResponseDto,
+    ProjectContextRecordSummaryDto, SupersedeProjectContextRecordRequestDto,
+    SupersedeProjectContextRecordResponseDto,
+};
+pub use project_runner::{
+    suggest_project_start_targets, terminal_close, terminal_open, terminal_resize, terminal_write,
+    update_project_start_targets, OpenTerminalRequestDto, OpenTerminalResponseDto,
+    StartTargetInputDto, SuggestProjectStartTargetsRequestDto, SuggestedStartTargetDto,
+    SuggestedStartTargetsDto, TerminalIdRequestDto, TerminalResizeRequestDto,
+    TerminalWriteRequestDto, UpdateProjectStartTargetsRequestDto,
+};
+pub use project_state::{
+    create_project_state_backup, list_project_state_backups, read_app_ui_state,
+    read_project_ui_state, repair_project_state, restore_project_state_backup, write_app_ui_state,
+    write_project_ui_state, AppUiStateResponseDto, CreateProjectStateBackupRequestDto,
+    ListProjectStateBackupsRequestDto, ListProjectStateBackupsResponseDto,
+    ProjectStateBackupListingEntryDto, ProjectStateBackupResponseDto,
+    ProjectStateRepairDiagnosticDto, ProjectStateRepairResponseDto, ProjectStateRestoreResponseDto,
+    ProjectUiStateResponseDto, ReadAppUiStateRequestDto, ReadProjectUiStateRequestDto,
+    RepairProjectStateRequestDto, RestoreProjectStateBackupRequestDto, WriteAppUiStateRequestDto,
+    WriteProjectUiStateRequestDto,
 };
 pub use provider_credentials::{
     delete_provider_credential, list_provider_credentials, upsert_provider_credential,
 };
-pub use provider_diagnostics::check_provider_profile;
 pub use provider_model_catalog::get_provider_model_catalog;
 pub use provider_preflight::preflight_provider_profile;
 pub use record_notification_dispatch_outcome::record_notification_dispatch_outcome;
+pub use remote_bridge::{
+    bridge_poll_github_login, bridge_publish_theme, bridge_revoke_device, bridge_sign_in,
+    bridge_sign_out, bridge_status, BridgePollGithubLoginRequestDto, BridgeRevokeDeviceRequestDto,
+    BridgeStatusResponseDto, BridgeThemeSyncRequestDto,
+};
 pub use remove_mcp_server::remove_mcp_server;
 pub use remove_project::remove_project;
 pub use resolve_operator_action::resolve_operator_action;
 pub use resume_operator_run::resume_operator_run;
 pub use search_project::{replace_in_project, search_project};
 pub use session_history::{
-    branch_agent_session, compact_session_history, delete_session_memory,
+    branch_agent_session, compact_session_history, correct_session_memory, delete_session_memory,
     export_session_transcript, extract_session_memory_candidates, get_session_context_snapshot,
-    get_session_transcript, list_session_memories, rewind_agent_session,
-    save_session_transcript_export, search_session_transcripts, update_session_memory,
+    get_session_memory_review_queue, get_session_transcript, list_session_memories,
+    rewind_agent_session, save_session_transcript_export, search_session_transcripts,
+    update_session_memory,
 };
 pub use skills::{
     list_skill_registry, reload_skill_registry, remove_plugin, remove_plugin_root, remove_skill,
@@ -172,14 +276,14 @@ pub use solana::{
     solana_doc_snippets, solana_idl_drift, solana_idl_fetch, solana_idl_get, solana_idl_load,
     solana_idl_publish, solana_idl_unwatch, solana_idl_watch, solana_indexer_run,
     solana_indexer_scaffold, solana_logs_active, solana_logs_recent, solana_logs_subscribe,
-    solana_logs_unsubscribe, solana_pda_analyse_bump, solana_pda_derive, solana_pda_predict,
-    solana_pda_scan, solana_persona_create, solana_persona_delete, solana_persona_export_keypair,
-    solana_persona_fund, solana_persona_import_keypair, solana_persona_list, solana_persona_roles,
-    solana_priority_fee_estimate, solana_program_build, solana_program_deploy,
-    solana_program_rollback, solana_program_upgrade_check, solana_rpc_endpoints_set,
-    solana_rpc_health, solana_scenario_list, solana_scenario_run, solana_secrets_patterns,
-    solana_secrets_scan, solana_secrets_scope_check, solana_snapshot_create,
-    solana_snapshot_delete, solana_snapshot_list, solana_snapshot_restore,
+    solana_logs_unsubscribe, solana_logs_view, solana_pda_analyse_bump, solana_pda_derive,
+    solana_pda_predict, solana_pda_scan, solana_persona_create, solana_persona_delete,
+    solana_persona_export_keypair, solana_persona_fund, solana_persona_import_keypair,
+    solana_persona_list, solana_persona_roles, solana_priority_fee_estimate, solana_program_build,
+    solana_program_deploy, solana_program_rollback, solana_program_upgrade_check,
+    solana_rpc_endpoints_set, solana_rpc_health, solana_scenario_list, solana_scenario_run,
+    solana_secrets_patterns, solana_secrets_scan, solana_secrets_scope_check,
+    solana_snapshot_create, solana_snapshot_delete, solana_snapshot_list, solana_snapshot_restore,
     solana_squads_proposal_create, solana_subscribe_ready, solana_toolchain_install,
     solana_toolchain_install_status, solana_toolchain_status, solana_tx_build, solana_tx_explain,
     solana_tx_send, solana_tx_simulate, solana_verified_build_submit, SolanaState,
@@ -203,14 +307,30 @@ pub use update_runtime_run_controls::update_runtime_run_controls;
 pub use upsert_mcp_server::upsert_mcp_server;
 pub use upsert_notification_route::upsert_notification_route;
 pub use upsert_notification_route_credentials::upsert_notification_route_credentials;
+pub use wipe_data::{
+    wipe_all_xero_data, wipe_project_data, WipeAllDataResponseDto, WipeProjectDataResponseDto,
+};
+pub use workflow_agents::{
+    get_agent_authoring_catalog, get_agent_tool_pack_catalog, get_workflow_agent_detail,
+    get_workflow_agent_graph_projection, list_workflow_agents, resolve_agent_authoring_skill,
+    search_agent_authoring_skills,
+};
+pub use workflows::{
+    cancel_workflow_run, create_workflow_definition, get_workflow_definition, get_workflow_run,
+    list_workflow_definitions, list_workflow_runs, resume_workflow_checkpoint,
+    retry_workflow_node_run, skip_workflow_branch, start_workflow_run, update_workflow_definition,
+    validate_workflow_definition,
+};
 pub use workspace_index::{
     workspace_explain, workspace_index, workspace_query, workspace_reset, workspace_status,
 };
+pub use xai_device_code_login::{poll_xai_device_code_login, start_xai_device_code_login};
 
 pub use crate::environment::service::EnvironmentDiscoveryStatus;
 pub use contracts::{
-    agent::*, autonomous::*, dictation::*, error::*, mcp::*, notifications::*, runtime::*,
-    session_context::*, skills::*, surface::*, usage::*, workflow::*,
+    agent::*, autonomous::*, code_history::*, developer_tool_harness::*, dictation::*, error::*,
+    mcp::*, notifications::*, runtime::*, session_context::*, skills::*, surface::*, usage::*,
+    workflow::*, workflow_agents::*, workflows::*,
 };
 
 pub(crate) use contracts::{

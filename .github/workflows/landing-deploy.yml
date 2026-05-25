@@ -1,4 +1,4 @@
-name: Landing Deploy
+name: Web Deploy
 
 on:
   push:
@@ -10,11 +10,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: landing-deploy-${{ github.ref }}
+  group: web-deploy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  landing:
     name: Deploy landing to Fly.io
     runs-on: ubuntu-latest
     defaults:
@@ -24,10 +24,115 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Hydrate latest TUI downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          download_dir="public/downloads/tui/latest"
+          rm -rf "$download_dir"
+          mkdir -p "$download_dir"
+
+          tag="$(gh release list \
+            --repo "$RELEASE_REPO" \
+            --limit 1 \
+            --json tagName,isDraft \
+            --jq 'map(select(.isDraft == false)) | .[0].tagName // ""')"
+
+          if [ -z "$tag" ]; then
+            echo "No published release found; deploying landing page without TUI downloads."
+            touch "$download_dir/.gitkeep"
+            exit 0
+          fi
+
+          if ! gh release download "$tag" \
+            --repo "$RELEASE_REPO" \
+            --pattern 'xero-*' \
+            --dir "$download_dir" \
+            --clobber; then
+            echo "No TUI assets found on $tag; deploying landing page without TUI downloads."
+            touch "$download_dir/.gitkeep"
+          fi
+
+          version="${tag#v}"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          manifest="$(jq -n \
+            --arg version "$version" \
+            --arg pub_date "$pub_date" \
+            '{schema: "xero.tui.update.v1", version: $version, pub_date: $pub_date, assets: {}}')"
+
+          for archive_path in "$download_dir"/xero-*.tar.gz "$download_dir"/xero-*.zip; do
+            [ -f "$archive_path" ] || continue
+            archive="$(basename "$archive_path")"
+            checksum_file="$archive_path.sha256"
+            if [ ! -f "$checksum_file" ]; then
+              echo "::error::Missing checksum for $archive"
+              exit 1
+            fi
+            target="${archive#xero-}"
+            target="${target%.tar.gz}"
+            target="${target%.zip}"
+            binary="xero"
+            if [[ "$archive" == *.zip ]]; then
+              binary="xero.exe"
+            fi
+            sha256="$(awk '{print $1}' "$checksum_file")"
+            url="https://xeroshell.com/downloads/tui/latest/$archive"
+            manifest="$(jq \
+              --arg target "$target" \
+              --arg url "$url" \
+              --arg sha256 "$sha256" \
+              --arg binary "$binary" \
+              --arg archive "$archive" \
+              '.assets[$target] = {url: $url, sha256: $sha256, binary: $binary, archive: $archive}' \
+              <<<"$manifest")"
+          done
+
+          printf '%s\n' "$manifest" > "$download_dir/manifest.json"
+          jq . "$download_dir/manifest.json"
+
       - name: Set up flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_LANDING_TOKEN || secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only
+
+  cloud:
+    name: Deploy cloud to Fly.io
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CLOUD_TOKEN || secrets.FLY_API_TOKEN }}
+        run: flyctl deploy .. --remote-only --config fly.toml
+
+  server:
+    name: Deploy server to Fly.io
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_SERVER_TOKEN || secrets.FLY_API_TOKEN }}
         run: flyctl deploy --remote-only

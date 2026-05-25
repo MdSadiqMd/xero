@@ -12,6 +12,7 @@ import {
   providerPreflightSnapshotSchema,
   providerModelCatalogSchema,
 } from './provider-models'
+import { getCloudProviderPreset } from './provider-presets'
 
 function makeOpenRouterCapabilities() {
   return {
@@ -134,6 +135,30 @@ function makeOpenRouterCatalog() {
   }
 }
 
+function makeCursorCatalog() {
+  return {
+    profileId: 'external_cursor_sdk-default',
+    providerId: 'external_cursor_sdk' as const,
+    configuredModelId: 'composer-latest',
+    source: 'manual' as const,
+    fetchedAt: '2026-05-23T12:00:00Z',
+    lastSuccessAt: '2026-05-23T12:00:00Z',
+    lastRefreshError: null,
+    models: [
+      {
+        modelId: 'composer-latest',
+        displayName: 'Composer Latest',
+        thinking: {
+          supported: false,
+          effortOptions: [] as const,
+          defaultEffort: null,
+        },
+      },
+    ],
+    contractDiagnostics: [],
+  }
+}
+
 describe('provider-models', () => {
   it('parses a strict provider-model catalog and exposes configured-model helpers', () => {
     const catalog = providerModelCatalogSchema.parse(makeOpenRouterCatalog())
@@ -141,6 +166,7 @@ describe('provider-models', () => {
     expect(getProviderModelCatalogConfiguredModel(catalog)?.modelId).toBe('openai/o4-mini')
     expect(getProviderModelById(catalog, 'anthropic/claude-3.7-sonnet')?.displayName).toBe('Claude 3.7 Sonnet')
     expect(hasProviderModelCatalogSnapshot(catalog)).toBe(true)
+    expect(getProviderModelThinkingEffortLabel('none')).toBe('None')
     expect(getProviderModelThinkingEffortLabel('x_high')).toBe('Very high')
     expect(getProviderModelCatalogFreshnessLabel(catalog)).toContain('2m / 24h TTL')
     expect(catalog.capabilities?.requestPreview.headers[0]).toContain('[redacted]')
@@ -153,6 +179,74 @@ describe('provider-models', () => {
     expect(capabilities.catalogKind).toBe('model_provider')
     expect(capabilities.capabilities.toolCalls.status).toBe('supported')
     expect(capabilities.requestPreview.toolSchemaNames).toEqual(['xero_echo_probe'])
+  })
+
+  it('accepts the Cursor SDK harness manual catalog', () => {
+    const catalog = providerModelCatalogSchema.parse(makeCursorCatalog())
+
+    expect(catalog.providerId).toBe('external_cursor_sdk')
+    expect(catalog.configuredModelId).toBe('composer-latest')
+    expect(getCloudProviderPreset('external_cursor_sdk')?.label).toBe('Cursor')
+    expect(getProviderModelCatalogConfiguredModel(catalog)?.modelId).toBe('composer-latest')
+  })
+
+  it('accepts first-party DeepSeek V4 provider catalogs and preset defaults', () => {
+    const baseCapabilities = makeOpenRouterCapabilities()
+    const deepseekCapabilities = {
+      ...baseCapabilities,
+      providerId: 'deepseek',
+      providerLabel: 'DeepSeek',
+      defaultModelId: 'deepseek-v4-pro',
+      runtimeFamily: 'deepseek',
+      runtimeKind: 'deepseek',
+      endpointShape: 'deepseek_chat_completions',
+      capabilities: {
+        ...baseCapabilities.capabilities,
+        toolCalls: {
+          ...baseCapabilities.capabilities.toolCalls,
+          strictnessBehavior: 'deepseek_strict_beta_opt_in',
+          schemaDialect: 'openai_function_schema',
+        },
+        reasoning: {
+          ...baseCapabilities.capabilities.reasoning,
+          effortLevels: ['high', 'x_high'],
+          defaultEffort: 'high',
+          summarySupport: 'reasoning_content_replay_required',
+        },
+        contextLimits: {
+          ...baseCapabilities.capabilities.contextLimits,
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 384_000,
+        },
+      },
+    }
+    const catalog = providerModelCatalogSchema.parse({
+      ...makeOpenRouterCatalog(),
+      profileId: 'deepseek-default',
+      providerId: 'deepseek',
+      configuredModelId: 'deepseek-v4-pro',
+      capabilities: deepseekCapabilities,
+      models: [
+        {
+          modelId: 'deepseek-v4-pro',
+          displayName: 'DeepSeek V4 Pro',
+          thinking: {
+            supported: true,
+            effortOptions: ['high', 'x_high'],
+            defaultEffort: 'high',
+          },
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 384_000,
+          contextLimitSource: 'built_in_registry',
+          contextLimitConfidence: 'medium',
+          capabilities: deepseekCapabilities,
+        },
+      ],
+    })
+
+    expect(catalog.providerId).toBe('deepseek')
+    expect(catalog.models[0]?.thinking.effortOptions).toEqual(['high', 'x_high'])
+    expect(getCloudProviderPreset('deepseek')?.defaultModelId).toBe('deepseek-v4-pro')
   })
 
   it('parses provider preflight snapshots without treating static metadata as a live probe', () => {
@@ -193,7 +287,7 @@ describe('provider-models', () => {
   it('rejects unknown providers and malformed thinking capability payloads', () => {
     const unknownProvider = providerModelCatalogSchema.safeParse({
       ...makeOpenRouterCatalog(),
-      providerId: 'deepseek',
+      providerId: 'not_a_provider',
     })
     expect(unknownProvider.success).toBe(false)
 

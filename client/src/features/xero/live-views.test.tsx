@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openUrlMock } = vi.hoisted(() => ({
@@ -7,6 +7,14 @@ const { openUrlMock } = vi.hoisted(() => ({
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: openUrlMock,
+}))
+
+vi.mock('@/components/xero/workflow-canvas/agent-visualization', () => ({
+  AgentVisualization: () => null,
+}))
+
+vi.mock('@/components/xero/workflow-canvas/workflow-definition-canvas', () => ({
+  WorkflowDefinitionCanvas: () => <div data-testid="workflow-definition-canvas" />,
 }))
 
 afterEach(() => {
@@ -21,6 +29,7 @@ import type {
   ExecutionPaneView,
   WorkflowPaneView,
 } from '@/src/features/xero/use-xero-desktop-state'
+import { instantiateWorkflowTemplate } from '@/src/lib/xero-model/workflow-templates'
 import type { AgentProviderModelCatalogView } from '@/src/features/xero/use-xero-desktop-state/types'
 import type {
   ProjectDetailView,
@@ -29,6 +38,7 @@ import type {
   RuntimeSessionView,
   RuntimeStreamView,
 } from '@/src/lib/xero-model'
+import type { WorkflowAgentDetailDto } from '@/src/lib/xero-model/workflow-agents'
 
 function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailView {
   return {
@@ -45,6 +55,7 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     branchLabel: 'No branch',
     runtimeLabel: 'Runtime unavailable',
     phaseProgressPercent: 0,
+    startTargets: [],
     repository: {
       id: 'repo-1',
       projectId: 'project-1',
@@ -99,6 +110,46 @@ function makeWorkflow(project = makeProject(), overrides: Partial<WorkflowPaneVi
     selectedProviderLabel: overrides.selectedProviderLabel ?? 'OpenAI Codex',
     selectedModelId: overrides.selectedModelId ?? 'openai_codex',
     providerMismatch: overrides.providerMismatch ?? false,
+    ...overrides,
+  }
+}
+
+function makeWorkflowAgentDetail(
+  overrides: Partial<WorkflowAgentDetailDto> = {},
+): WorkflowAgentDetailDto {
+  return {
+    ref: { kind: 'built_in', runtimeAgentId: 'plan', version: 1 },
+    header: {
+      displayName: 'Plan',
+      shortLabel: 'Planning',
+      description: 'Turns ambiguous work into an accepted implementation plan.',
+      taskPurpose: 'Draft a durable plan before repository mutation.',
+      scope: 'built_in',
+      lifecycleState: 'active',
+      baseCapabilityProfile: 'planning',
+      defaultApprovalMode: 'suggest',
+      allowedApprovalModes: ['suggest'],
+      allowPlanGate: true,
+      allowVerificationGate: false,
+      allowAutoCompact: true,
+    },
+    promptPolicy: 'plan',
+    toolPolicy: 'planning',
+    prompts: [],
+    tools: [],
+    dbTouchpoints: {
+      reads: [],
+      writes: [],
+      encouraged: [],
+    },
+    output: {
+      contract: 'plan_pack',
+      label: 'Plan Pack',
+      description: 'Implementation plan output.',
+      sections: [],
+    },
+    consumes: [],
+    attachedSkills: [],
     ...overrides,
   }
 }
@@ -186,6 +237,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         approvalMode: 'suggest',
         approvalModeLabel: 'Suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00Z',
       },
@@ -203,6 +255,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         approvalMode: 'suggest',
         approvalModeLabel: 'Suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         effectiveAt: '2026-04-15T20:00:00Z',
         queuedPrompt: null,
@@ -287,6 +340,7 @@ function makeRuntimeStream(overrides: Partial<RuntimeStreamView> = {}): RuntimeS
     skillItems: [],
     activityItems: [],
     actionRequired: [],
+    plan: null,
     completion: null,
     failure: null,
     lastIssue: null,
@@ -371,6 +425,8 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
       selectedModelOption?.defaultThinkingEffort ??
       null,
     selectedApprovalMode: overrides.selectedApprovalMode ?? selectedControls?.approvalMode ?? 'suggest',
+    selectedAutoCompactEnabled:
+      overrides.selectedAutoCompactEnabled ?? selectedControls?.autoCompactEnabled ?? true,
     selectedPrompt: overrides.selectedPrompt ?? {
       text: selectedControls?.queuedPrompt ?? null,
       queuedAt: selectedControls?.queuedPromptAt ?? null,
@@ -449,6 +505,47 @@ describe('live views', () => {
     render(<PhaseView workflow={makeWorkflow()} />)
 
     expect(screen.getByLabelText('Workflow canvas')).toBeInTheDocument()
+  })
+
+  it('shows the selected agent name in the workflow header', () => {
+    render(
+      <PhaseView
+        workflow={makeWorkflow()}
+        agentDetail={makeWorkflowAgentDetail()}
+        agentDetailStatus="ready"
+        onClearAgentSelection={vi.fn()}
+        onCreateAgent={vi.fn()}
+      />,
+    )
+
+    const selectedAgent = screen.getByLabelText('Selected agent')
+    expect(within(selectedAgent).getByRole('img', { name: 'Agent' })).toBeVisible()
+    expect(within(selectedAgent).getByText('Plan')).toBeVisible()
+    expect(within(selectedAgent).getByText('system')).toBeVisible()
+    expect(within(selectedAgent).getByText('Planning')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Close agent inspector' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Create workflow' })).not.toBeInTheDocument()
+  })
+
+  it('can close a selected workflow back to the empty canvas state', () => {
+    const onClearWorkflowSelection = vi.fn()
+    const selectedWorkflowDefinition = instantiateWorkflowTemplate({
+      projectId: 'project-1',
+      templateId: 'continuous_delivery',
+    })
+
+    render(
+      <PhaseView
+        workflow={makeWorkflow()}
+        selectedWorkflowDefinition={selectedWorkflowDefinition}
+        onClearWorkflowSelection={onClearWorkflowSelection}
+      />,
+    )
+
+    expect(screen.getByLabelText('Selected workflow')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Close workflow' }))
+
+    expect(onClearWorkflowSelection).toHaveBeenCalledTimes(1)
   })
 
   it('does not render the mock pipeline controls on the workflow tab', () => {
@@ -541,6 +638,16 @@ describe('live views', () => {
     render(
       <ExecutionView
         execution={makeExecution()}
+        listProjectFileIndex={async (request) => ({
+          projectId: request.projectId,
+          files: [
+            { path: '/README.md', name: 'README.md', parentPath: '/', hidden: false },
+            { path: '/src/App.tsx', name: 'App.tsx', parentPath: '/src', hidden: false },
+          ],
+          totalFiles: 2,
+          truncated: false,
+          payloadBudget: null,
+        })}
         listProjectFiles={async () => ({
           projectId: 'project-1',
           path: '/',
@@ -558,9 +665,74 @@ describe('live views', () => {
               },
             ],
           },
+          view: {
+            rootPath: '/',
+            nodesByPath: {
+              '/': {
+                id: '/',
+                name: 'root',
+                path: '/',
+                type: 'folder',
+                childrenLoaded: true,
+                truncated: false,
+                omittedEntryCount: 0,
+              },
+              '/README.md': {
+                id: '/README.md',
+                name: 'README.md',
+                path: '/README.md',
+                type: 'file',
+                childrenLoaded: true,
+                truncated: false,
+                omittedEntryCount: 0,
+              },
+              '/src': {
+                id: '/src',
+                name: 'src',
+                path: '/src',
+                type: 'folder',
+                childrenLoaded: true,
+                truncated: false,
+                omittedEntryCount: 0,
+              },
+              '/src/App.tsx': {
+                id: '/src/App.tsx',
+                name: 'App.tsx',
+                path: '/src/App.tsx',
+                type: 'file',
+                childrenLoaded: true,
+                truncated: false,
+                omittedEntryCount: 0,
+              },
+            },
+            childPathsByPath: {
+              '/': ['/README.md', '/src'],
+              '/src': ['/src/App.tsx'],
+            },
+            loadedPaths: ['/', '/src'],
+            stats: {
+              byteSize: 1,
+              childListCount: 2,
+              nodeCount: 4,
+              unloadedFolderCount: 0,
+            },
+            truncated: false,
+            omittedEntryCount: 0,
+          },
+          truncated: false,
+          omittedEntryCount: 0,
         })}
         readProjectFile={readProjectFile}
-        writeProjectFile={async (projectId: string, path: string) => ({ projectId, path })}
+        writeProjectFile={async (projectId: string, path: string, content = '') => ({
+          projectId,
+          path,
+          byteLength: content.length,
+          modifiedAt: '2026-01-01T00:00:01Z',
+          contentHash: `saved-${path}-${content.length}`,
+          mimeType: 'text/plain; charset=utf-8',
+          rendererKind: 'code',
+          preview: null,
+        })}
         createProjectEntry={async (request) => ({
           projectId: request.projectId,
           path: request.parentPath === '/' ? `/${request.name}` : `${request.parentPath}/${request.name}`,

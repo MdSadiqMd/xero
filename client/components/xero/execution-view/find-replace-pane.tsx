@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils'
 import {
   createBackendRequestCoordinator,
   isStaleBackendRequestError,
-  stableBackendRequestKey,
+  searchProjectRequestKey,
 } from '@/src/lib/backend-request-coordinator'
 import type {
   ReplaceInProjectRequestDto,
@@ -58,6 +58,7 @@ interface FindReplacePaneProps {
   searchProject: (request: SearchProjectRequestDto) => Promise<SearchProjectResponseDto>
   replaceInProject: (request: ReplaceInProjectRequestDto) => Promise<ReplaceInProjectResponseDto>
   initialQuery: string
+  initialScope?: SearchScope
   /** Monotonic token; bump when the user re-triggers Cmd+F so we reset focus/selection. */
   openToken: number
 }
@@ -171,9 +172,10 @@ export function FindReplacePane({
   searchProject,
   replaceInProject,
   initialQuery,
+  initialScope = 'file',
   openToken,
 }: FindReplacePaneProps) {
-  const [scope, setScope] = useState<SearchScope>('file')
+  const [scope, setScope] = useState<SearchScope>(initialScope)
   const [searchText, setSearchText] = useState(initialQuery)
   const [replaceText, setReplaceText] = useState('')
   const [caseSensitive, setCaseSensitive] = useState(false)
@@ -250,8 +252,9 @@ export function FindReplacePane({
     if (!input) return
     input.focus()
     input.select()
+    setScope(initialScope)
     if (initialQuery) setSearchText(initialQuery)
-  }, [openToken, initialQuery])
+  }, [openToken, initialQuery, initialScope])
 
   // ------------------------------------------------------------------
   // File-scope local matches
@@ -341,7 +344,7 @@ export function FindReplacePane({
       try {
         const response = await projectSearchCoordinatorRef.current.runLatest(
           FIND_REPLACE_PROJECT_SEARCH_SCOPE,
-          stableBackendRequestKey(['search_project', request]),
+          searchProjectRequestKey(request),
           () => searchProject(request),
         )
         if (epoch !== searchEpoch.current) return

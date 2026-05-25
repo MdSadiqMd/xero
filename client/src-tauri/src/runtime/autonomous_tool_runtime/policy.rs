@@ -4,14 +4,16 @@ use std::{
 };
 
 use super::{
-    repo_scope::normalize_relative_path, AutonomousBrowserAction, AutonomousCommandPolicyOutcome,
-    AutonomousCommandPolicyTrace, AutonomousCommandRequest, AutonomousMcpAction,
-    AutonomousProcessActionRiskLevel, AutonomousProcessManagerAction,
-    AutonomousProcessManagerPolicyTrace, AutonomousProcessOwnershipScope,
-    AutonomousProjectContextAction, AutonomousSafetyApprovalGrant, AutonomousSafetyPolicyAction,
-    AutonomousSafetyPolicyDecision, AutonomousSystemDiagnosticsAction,
-    AutonomousSystemDiagnosticsPolicyTrace, AutonomousToolRequest, AutonomousToolRuntime,
-    DEFAULT_COMMAND_TIMEOUT_MS,
+    repo_scope::{is_current_directory_path, normalize_relative_path},
+    tool_allowed_for_runtime_agent_with_policy, AutonomousBrowserAction,
+    AutonomousCommandPolicyOutcome, AutonomousCommandPolicyProfile, AutonomousCommandPolicyTrace,
+    AutonomousCommandRequest, AutonomousMcpAction, AutonomousProcessActionRiskLevel,
+    AutonomousProcessManagerAction, AutonomousProcessManagerPolicyTrace,
+    AutonomousProcessOwnershipScope, AutonomousProjectContextAction, AutonomousSafetyApprovalGrant,
+    AutonomousSafetyPolicyAction, AutonomousSafetyPolicyDecision,
+    AutonomousSystemDiagnosticsAction, AutonomousSystemDiagnosticsPolicyTrace,
+    AutonomousToolRequest, AutonomousToolRuntime, AutonomousWorkflowDefinitionAction,
+    AUTONOMOUS_TOOL_COMMAND_PROBE, AUTONOMOUS_TOOL_COMMAND_VERIFY, DEFAULT_COMMAND_TIMEOUT_MS,
 };
 use crate::commands::{
     validate_non_empty, CommandError, CommandErrorClass, CommandResult, RuntimeRunApprovalModeDto,
@@ -63,6 +65,22 @@ impl AutonomousToolRuntime {
             input_sha256,
         };
 
+        if !tool_allowed_for_runtime_agent_with_policy(
+            self.active_runtime_agent_id(),
+            tool_name,
+            self.agent_tool_policy.as_ref(),
+        ) {
+            return Ok(safety_decision(
+                AutonomousSafetyPolicyAction::Deny,
+                "policy_denied_tool_for_agent",
+                format!(
+                    "The {} agent is not allowed to call `{tool_name}`.",
+                    self.active_runtime_agent_id().label()
+                ),
+                &context,
+            ));
+        }
+
         if secret_like_tool_input(raw_input) {
             return Ok(safety_decision(
                 AutonomousSafetyPolicyAction::Deny,
@@ -106,7 +124,7 @@ impl AutonomousToolRuntime {
             ));
         }
 
-        let command_decision = command_family_policy_decision(self, request)?;
+        let command_decision = command_family_policy_decision(self, tool_name, request)?;
         if let Some((action, code, explanation)) = command_decision {
             return Ok(safety_decision(action, code, explanation, &context));
         }
@@ -183,6 +201,7 @@ impl AutonomousToolRuntime {
             let policy = policy_trace(
                 AutonomousCommandPolicyOutcome::Escalated,
                 active.approval_mode.clone(),
+                AutonomousCommandPolicyProfile::GeneralExecution,
                 "policy_escalated_approval_mode",
                 format!(
                     "Active approval mode `{}` requires operator review before autonomous shell commands can run.",
@@ -193,19 +212,24 @@ impl AutonomousToolRuntime {
         }
 
         let policy = match classify_command(&prepared) {
-            CommandClassification::Safe(reason) => policy_trace(
+            CommandClassification::Safe { profile, reason } => policy_trace(
                 AutonomousCommandPolicyOutcome::Allowed,
                 active.approval_mode.clone(),
+                profile,
                 "policy_allowed_repo_scoped_command",
                 reason,
             ),
-            CommandClassification::Destructive { code, reason }
-            | CommandClassification::Ambiguous { code, reason } => {
+            CommandClassification::Escalated {
+                profile,
+                code,
+                reason,
+            } => {
                 return Ok(CommandPolicyDecision::Escalate {
                     prepared,
                     policy: policy_trace(
                         AutonomousCommandPolicyOutcome::Escalated,
                         active.approval_mode.clone(),
+                        profile,
                         code,
                         reason,
                     ),
@@ -366,6 +390,11 @@ fn safety_policy_metadata(request: &AutonomousToolRequest) -> SafetyPolicyMetada
         AutonomousToolRequest::Edit(_)
         | AutonomousToolRequest::Write(_)
         | AutonomousToolRequest::Patch(_)
+        | AutonomousToolRequest::Copy(_)
+        | AutonomousToolRequest::FsTransaction(_)
+        | AutonomousToolRequest::JsonEdit(_)
+        | AutonomousToolRequest::TomlEdit(_)
+        | AutonomousToolRequest::YamlEdit(_)
         | AutonomousToolRequest::Delete(_)
         | AutonomousToolRequest::Rename(_)
         | AutonomousToolRequest::Mkdir(_)
@@ -418,6 +447,23 @@ fn safety_policy_metadata(request: &AutonomousToolRequest) -> SafetyPolicyMetada
                 requires_approval,
                 require_approval_code: "policy_requires_approval_agent_definition_mutation",
                 require_approval_reason: "Saving, updating, archiving, or cloning agent definitions requires explicit operator approval.",
+            }
+        }
+        AutonomousToolRequest::WorkflowDefinition(request) => {
+            let requires_approval = matches!(
+                request.action,
+                AutonomousWorkflowDefinitionAction::Save
+                    | AutonomousWorkflowDefinitionAction::Update
+            );
+            SafetyPolicyMetadata {
+                risk_class: "workflow_definition_state",
+                network_intent: "none",
+                credential_sensitivity: "possible",
+                os_target: None,
+                prior_observation_required: false,
+                requires_approval,
+                require_approval_code: "policy_requires_approval_workflow_definition_mutation",
+                require_approval_reason: "Saving or updating Workflow definitions requires explicit operator approval.",
             }
         }
         AutonomousToolRequest::SolanaDeploy(_)
@@ -514,6 +560,7 @@ fn mcp_action_is_observe(action: AutonomousMcpAction) -> bool {
 
 fn command_family_policy_decision(
     runtime: &AutonomousToolRuntime,
+    tool_name: &str,
     request: &AutonomousToolRequest,
 ) -> CommandResult<Option<(AutonomousSafetyPolicyAction, String, String)>> {
     let command_request = match request {
@@ -547,17 +594,129 @@ fn command_family_policy_decision(
     };
     let prepared = runtime.prepare_command_request(command_request)?;
     Ok(Some(match runtime.evaluate_command_policy(prepared)? {
-        CommandPolicyDecision::Allow { policy, .. } => (
-            AutonomousSafetyPolicyAction::Allow,
-            policy.code,
-            policy.reason,
-        ),
+        CommandPolicyDecision::Allow { prepared, policy } => {
+            if let Some(policy) = command_tool_scope_escalation(tool_name, &prepared, &policy) {
+                (
+                    AutonomousSafetyPolicyAction::RequireApproval,
+                    policy.code,
+                    policy.reason,
+                )
+            } else {
+                (
+                    AutonomousSafetyPolicyAction::Allow,
+                    policy.code,
+                    policy.reason,
+                )
+            }
+        }
         CommandPolicyDecision::Escalate { policy, .. } => (
             AutonomousSafetyPolicyAction::RequireApproval,
             policy.code,
             policy.reason,
         ),
     }))
+}
+
+pub(super) fn command_tool_scope_escalation(
+    tool_name: &str,
+    prepared: &PreparedCommandRequest,
+    policy: &AutonomousCommandPolicyTrace,
+) -> Option<AutonomousCommandPolicyTrace> {
+    match tool_name {
+        AUTONOMOUS_TOOL_COMMAND_PROBE if !command_probe_allows(prepared, policy) => {
+            Some(policy_trace(
+                AutonomousCommandPolicyOutcome::Escalated,
+                policy.approval_mode.clone(),
+                policy.profile,
+                "policy_escalated_command_probe_scope",
+                format!(
+                    "Xero requires operator review for command_probe `{}` because probes are limited to read-only repository discovery commands.",
+                    render_command_for_persistence(&prepared.argv)
+                ),
+            ))
+        }
+        AUTONOMOUS_TOOL_COMMAND_VERIFY if !command_verify_allows(prepared, policy) => {
+            Some(policy_trace(
+                AutonomousCommandPolicyOutcome::Escalated,
+                policy.approval_mode.clone(),
+                policy.profile,
+                "policy_escalated_command_verify_scope",
+                format!(
+                    "Xero requires operator review for command_verify `{}` because verification is limited to known test, lint, typecheck, build, format, and check commands.",
+                    render_command_for_persistence(&prepared.argv)
+                ),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn command_probe_allows(
+    prepared: &PreparedCommandRequest,
+    policy: &AutonomousCommandPolicyTrace,
+) -> bool {
+    if policy.profile != AutonomousCommandPolicyProfile::ReadOnlyVerification {
+        return false;
+    }
+    let program = executable_name(&prepared.argv[0]);
+    match program {
+        "pwd" | "ls" | "dir" | "echo" | "cat" | "type" | "head" | "tail" | "grep" | "rg" => true,
+        "find" => !prepared.argv.iter().any(|argument| argument == "-delete"),
+        "git" => git_subcommand(&prepared.argv).is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "status" | "diff" | "log" | "show" | "rev-parse" | "grep" | "ls-files"
+            )
+        }),
+        "cargo" => git_subcommand(&prepared.argv)
+            .is_some_and(|subcommand| matches!(subcommand, "metadata" | "tree")),
+        _ => false,
+    }
+}
+
+fn command_verify_allows(
+    prepared: &PreparedCommandRequest,
+    policy: &AutonomousCommandPolicyTrace,
+) -> bool {
+    if !matches!(
+        policy.profile,
+        AutonomousCommandPolicyProfile::ReadOnlyVerification
+            | AutonomousCommandPolicyProfile::GeneratedFileMutation
+    ) {
+        return false;
+    }
+    let program = executable_name(&prepared.argv[0]);
+    match program {
+        "cargo" => git_subcommand(&prepared.argv).is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "build" | "check" | "clippy" | "doc" | "fmt" | "test"
+            )
+        }),
+        "npm" | "pnpm" | "yarn" | "bun" => {
+            git_subcommand(&prepared.argv).is_some_and(|subcommand| {
+                matches!(
+                    subcommand,
+                    "test"
+                        | "tests"
+                        | "lint"
+                        | "typecheck"
+                        | "check"
+                        | "build"
+                        | "run"
+                        | "run-script"
+                )
+            })
+        }
+        _ => false,
+    }
+}
+
+fn git_subcommand(argv: &[String]) -> Option<&str> {
+    argv.iter()
+        .skip(1)
+        .find(|argument| !argument.starts_with('-'))
+        .map(String::as_str)
 }
 
 struct SafetyDecisionContext<'a> {
@@ -636,13 +795,22 @@ fn high_confidence_secret_text(text: &str) -> bool {
 fn repo_path_escape(request: &AutonomousToolRequest) -> Option<String> {
     repo_relative_paths(request)
         .into_iter()
-        .find(|path| normalize_relative_path(path, "path").is_err())
+        .find(|path| {
+            matches!(
+                normalize_relative_path(path, "path"),
+                Err(error) if error.class == CommandErrorClass::PolicyDenied
+            )
+        })
         .map(str::to_owned)
 }
 
 fn repo_relative_paths(request: &AutonomousToolRequest) -> Vec<&str> {
     match request {
         AutonomousToolRequest::Read(request) if !request.system_path => vec![request.path.as_str()],
+        AutonomousToolRequest::ReadMany(request) => {
+            request.paths.iter().map(String::as_str).collect()
+        }
+        AutonomousToolRequest::Stat(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Search(request) => {
             optional_repo_relative_path(request.path.as_deref())
         }
@@ -652,6 +820,10 @@ fn repo_relative_paths(request: &AutonomousToolRequest) -> Vec<&str> {
         AutonomousToolRequest::List(request) => {
             optional_repo_relative_path(request.path.as_deref())
         }
+        AutonomousToolRequest::ListTree(request) => {
+            optional_repo_relative_path(request.path.as_deref())
+        }
+        AutonomousToolRequest::DirectoryDigest(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Hash(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Write(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Edit(request) => vec![request.path.as_str()],
@@ -665,6 +837,25 @@ fn repo_relative_paths(request: &AutonomousToolRequest) -> Vec<&str> {
             );
             paths
         }
+        AutonomousToolRequest::Copy(request) => vec![request.from.as_str(), request.to.as_str()],
+        AutonomousToolRequest::FsTransaction(request) => request
+            .operations
+            .iter()
+            .flat_map(|operation| {
+                [
+                    operation.path.as_deref(),
+                    operation.from.as_deref(),
+                    operation.to.as_deref(),
+                    operation.from_path.as_deref(),
+                    operation.to_path.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect(),
+        AutonomousToolRequest::JsonEdit(request)
+        | AutonomousToolRequest::TomlEdit(request)
+        | AutonomousToolRequest::YamlEdit(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Delete(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Rename(request) => {
             vec![request.from_path.as_str(), request.to_path.as_str()]
@@ -677,7 +868,7 @@ fn repo_relative_paths(request: &AutonomousToolRequest) -> Vec<&str> {
 
 fn optional_repo_relative_path(path: Option<&str>) -> Vec<&str> {
     path.map(str::trim)
-        .filter(|path| !path.is_empty())
+        .filter(|path| !path.is_empty() && !is_current_directory_path(path))
         .into_iter()
         .collect()
 }
@@ -974,9 +1165,15 @@ fn map_cwd_policy_error(error: CommandError) -> CommandError {
 
 #[derive(Debug, Clone)]
 enum CommandClassification {
-    Safe(String),
-    Destructive { code: &'static str, reason: String },
-    Ambiguous { code: &'static str, reason: String },
+    Safe {
+        profile: AutonomousCommandPolicyProfile,
+        reason: String,
+    },
+    Escalated {
+        profile: AutonomousCommandPolicyProfile,
+        code: &'static str,
+        reason: String,
+    },
 }
 
 fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification {
@@ -985,7 +1182,8 @@ fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification 
 
     if is_shell_wrapper(program) {
         if shell_wrapper_contains_sensitive_pattern(argv) {
-            return CommandClassification::Ambiguous {
+            return CommandClassification::Escalated {
+                profile: AutonomousCommandPolicyProfile::ExternalNetwork,
                 code: "policy_escalated_sensitive_shell",
                 reason: format!(
                     "Xero requires operator review for shell wrapper command `{}` because the script may expand environment variables, access absolute paths, or contact external network surfaces.",
@@ -994,7 +1192,8 @@ fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification 
             };
         }
         if shell_wrapper_contains_destructive_pattern(argv) {
-            return CommandClassification::Destructive {
+            return CommandClassification::Escalated {
+                profile: AutonomousCommandPolicyProfile::DestructiveOperation,
                 code: "policy_escalated_destructive_shell",
                 reason: format!(
                     "Xero requires operator review for shell wrapper command `{}` because the script text matches the destructive command classifier.",
@@ -1002,15 +1201,13 @@ fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification 
                 ),
             };
         }
-        return CommandClassification::Safe(format!(
-            "Active approval mode `yolo` allowed repo-scoped shell wrapper command `{}` because no destructive shell pattern was detected.",
-            render_command_for_summary(argv)
-        ));
+        return safe_command_with_profile(argv, AutonomousCommandPolicyProfile::GeneralExecution);
     }
 
     match program {
         "curl" | "wget" | "nc" | "netcat" | "ssh" | "scp" | "sftp" | "ftp" | "ping" => {
-            CommandClassification::Ambiguous {
+            CommandClassification::Escalated {
+                profile: AutonomousCommandPolicyProfile::ExternalNetwork,
                 code: "policy_escalated_network_command",
                 reason: format!(
                     "Xero requires operator review for `{}` because it can contact external network surfaces.",
@@ -1019,7 +1216,8 @@ fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification 
             }
         }
         "openssl" if argv.iter().any(|argument| argument == "s_client") => {
-            CommandClassification::Ambiguous {
+            CommandClassification::Escalated {
+                profile: AutonomousCommandPolicyProfile::ExternalNetwork,
                 code: "policy_escalated_network_command",
                 reason: format!(
                     "Xero requires operator review for `{}` because it can contact external network surfaces.",
@@ -1027,14 +1225,12 @@ fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification 
                 ),
             }
         }
-        "pwd" | "ls" | "dir" | "echo" | "cat" | "type" | "head" | "tail" | "grep"
-        | "rg" | "sleep" => CommandClassification::Safe(format!(
-            "Active approval mode `yolo` allowed repo-scoped command `{}` because it matched the non-destructive command classifier.",
-            render_command_for_summary(argv)
-        )),
+        "pwd" | "ls" | "dir" | "echo" | "cat" | "type" | "head" | "tail" | "grep" | "rg"
+        | "sleep" => safe_command(argv),
         "find" => {
             if argv.iter().any(|argument| argument == "-delete") {
-                return CommandClassification::Destructive {
+                return CommandClassification::Escalated {
+                    profile: AutonomousCommandPolicyProfile::DestructiveOperation,
                     code: "policy_escalated_destructive_command",
                     reason: format!(
                         "Xero requires operator review for `{}` because `find -delete` is destructive.",
@@ -1042,23 +1238,22 @@ fn classify_command(prepared: &PreparedCommandRequest) -> CommandClassification 
                     ),
                 };
             }
-            CommandClassification::Safe(format!(
-                "Active approval mode `yolo` allowed repo-scoped command `{}` because it matched the non-destructive command classifier.",
-                render_command_for_summary(argv)
-            ))
+            safe_command(argv)
         }
         "git" => classify_git_command(argv),
         "cargo" => classify_cargo_command(argv),
         "npm" | "pnpm" | "yarn" | "bun" => classify_package_manager_command(argv, &prepared.cwd),
-        "rm" | "rmdir" | "del" | "erase" | "rd" | "mv" | "move" | "chmod" | "chown"
-        | "dd" | "mkfs" | "diskutil" => CommandClassification::Destructive {
+        "rm" | "rmdir" | "del" | "erase" | "rd" | "mv" | "move" | "chmod" | "chown" | "dd"
+        | "mkfs" | "diskutil" => CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::DestructiveOperation,
             code: "policy_escalated_destructive_command",
             reason: format!(
                 "Xero requires operator review for `{}` because it matches the destructive command classifier.",
                 render_command_for_summary(argv)
             ),
         },
-        _ => CommandClassification::Ambiguous {
+        _ => CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_ambiguous_command",
             reason: format!(
                 "Xero could not classify `{}` as a repo-scoped non-destructive command, so operator review is required.",
@@ -1078,40 +1273,32 @@ fn classify_git_command(argv: &[String]) -> CommandClassification {
             safe_command(argv)
         }
         Some("branch") => {
-            if argv.iter().any(|argument| matches!(argument.as_str(), "-d" | "-D" | "--delete")) {
+            if argv
+                .iter()
+                .any(|argument| matches!(argument.as_str(), "-d" | "-D" | "--delete"))
+            {
                 destructive_command(argv, "git branch delete flags are destructive")
             } else {
                 safe_command(argv)
             }
         }
         Some("tag") => {
-            if argv.iter().any(|argument| matches!(argument.as_str(), "-d" | "--delete")) {
+            if argv
+                .iter()
+                .any(|argument| matches!(argument.as_str(), "-d" | "--delete"))
+            {
                 destructive_command(argv, "git tag delete flags are destructive")
             } else {
                 safe_command(argv)
             }
         }
+        Some("add" | "commit" | "mv" | "rm") => safe_command(argv),
         Some(
-            "add"
-            | "commit"
-            | "mv"
-            | "rm",
-        ) => safe_command(argv),
-        Some(
-            "clean"
-            | "reset"
-            | "checkout"
-            | "switch"
-            | "restore"
-            | "stash"
-            | "merge"
-            | "rebase"
-            | "cherry-pick"
-            | "revert"
-            | "push"
-            | "pull",
+            "clean" | "reset" | "checkout" | "switch" | "restore" | "stash" | "merge" | "rebase"
+            | "cherry-pick" | "revert" | "push" | "pull",
         ) => destructive_command(argv, "the git subcommand mutates repository state"),
-        Some(_) | None => CommandClassification::Ambiguous {
+        Some(_) | None => CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_ambiguous_command",
             reason: format!(
                 "Xero could not classify git command `{}` as non-destructive, so operator review is required.",
@@ -1127,10 +1314,12 @@ fn classify_cargo_command(argv: &[String]) -> CommandClassification {
         .skip(1)
         .find(|argument| !argument.starts_with('-'));
     match subcommand.map(String::as_str) {
-        Some("check" | "clippy" | "doc" | "metadata" | "test" | "tree" | "build" | "fmt") => {
-            safe_command(argv)
+        Some("build" | "doc" | "fmt") => {
+            safe_command_with_profile(argv, AutonomousCommandPolicyProfile::GeneratedFileMutation)
         }
-        Some(_) | None => CommandClassification::Ambiguous {
+        Some("check" | "clippy" | "metadata" | "test" | "tree") => safe_command(argv),
+        Some(_) | None => CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_ambiguous_command",
             reason: format!(
                 "Xero could not classify cargo command `{}` as non-destructive, so operator review is required.",
@@ -1147,7 +1336,8 @@ fn classify_package_manager_command(argv: &[String], cwd: &Path) -> CommandClass
         .find(|argument| !argument.starts_with('-'));
     match subcommand.map(String::as_str) {
         Some("install" | "add" | "remove" | "unlink" | "upgrade" | "update") => {
-            CommandClassification::Ambiguous {
+            CommandClassification::Escalated {
+                profile: AutonomousCommandPolicyProfile::DependencyInstallation,
                 code: "policy_escalated_package_manager_mutation",
                 reason: format!(
                     "Xero requires operator review for `{}` because package-manager mutation commands can execute install scripts, change dependency state, or contact external registries.",
@@ -1158,16 +1348,21 @@ fn classify_package_manager_command(argv: &[String], cwd: &Path) -> CommandClass
         Some(script @ ("test" | "lint" | "typecheck" | "build")) => {
             classify_repo_package_script(argv, cwd, script, true)
         }
-        Some("exec") => CommandClassification::Ambiguous {
+        Some("exec") => CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::DependencyInstallation,
             code: "policy_escalated_package_manager_exec",
             reason: format!(
                 "Xero requires operator review for `{}` because package-manager exec commands can run arbitrary local or registry-provided binaries.",
                 render_command_for_summary(argv)
             ),
         },
-        Some("publish") => destructive_command(argv, "package manager publish commands can affect external registries"),
+        Some("publish") => destructive_command(
+            argv,
+            "package manager publish commands can affect external registries",
+        ),
         Some("run" | "run-script") => classify_package_manager_run_script(argv, cwd),
-        Some(_) | None => CommandClassification::Ambiguous {
+        Some(_) | None => CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_ambiguous_command",
             reason: format!(
                 "Xero could not classify package-manager command `{}` as non-destructive, so operator review is required.",
@@ -1179,7 +1374,8 @@ fn classify_package_manager_command(argv: &[String], cwd: &Path) -> CommandClass
 
 fn classify_package_manager_run_script(argv: &[String], cwd: &Path) -> CommandClassification {
     let Some(script_name) = package_manager_run_script_name(argv) else {
-        return CommandClassification::Ambiguous {
+        return CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_package_manager_run",
             reason: format!(
                 "Xero requires operator review for `{}` because the package-manager script name could not be identified.",
@@ -1215,7 +1411,8 @@ fn classify_repo_package_script(
     direct_script_command: bool,
 ) -> CommandClassification {
     if !is_safe_package_script_name(script_name) {
-        return CommandClassification::Ambiguous {
+        return CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_package_manager_run",
             reason: format!(
                 "Xero requires operator review for `{}` because package script `{script_name}` is not in the repo-local verification allowlist.",
@@ -1226,9 +1423,10 @@ fn classify_repo_package_script(
 
     let Some(script) = package_json_script(cwd, script_name) else {
         if direct_script_command {
-            return safe_command(argv);
+            return safe_package_script_command(argv, script_name, false);
         }
-        return CommandClassification::Ambiguous {
+        return CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::GeneralExecution,
             code: "policy_escalated_package_manager_run_missing_script",
             reason: format!(
                 "Xero requires operator review for `{}` because package.json in `{}` does not define script `{script_name}`.",
@@ -1240,7 +1438,8 @@ fn classify_repo_package_script(
 
     let shell_argv = vec!["sh".to_string(), "-c".to_string(), script];
     if shell_wrapper_contains_destructive_pattern(&shell_argv) {
-        return CommandClassification::Destructive {
+        return CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::DestructiveOperation,
             code: "policy_escalated_destructive_package_script",
             reason: format!(
                 "Xero requires operator review for `{}` because package script `{script_name}` contains destructive shell patterns.",
@@ -1249,7 +1448,8 @@ fn classify_repo_package_script(
         };
     }
     if shell_wrapper_contains_sensitive_pattern(&shell_argv) {
-        return CommandClassification::Ambiguous {
+        return CommandClassification::Escalated {
+            profile: AutonomousCommandPolicyProfile::ExternalNetwork,
             code: "policy_escalated_sensitive_package_script",
             reason: format!(
                 "Xero requires operator review for `{}` because package script `{script_name}` may expand secrets, access absolute paths, or contact external network surfaces.",
@@ -1258,10 +1458,13 @@ fn classify_repo_package_script(
         };
     }
 
-    CommandClassification::Safe(format!(
-        "Active approval mode `yolo` allowed repo-local package script `{script_name}` via `{}` after package.json introspection classified the script as verification-safe.",
-        render_command_for_summary(argv)
-    ))
+    CommandClassification::Safe {
+        profile: package_script_profile(script_name),
+        reason: format!(
+            "Active approval mode `yolo` allowed repo-local package script `{script_name}` via `{}` after package.json introspection classified the script as verification-safe.",
+            render_command_for_summary(argv)
+        ),
+    }
 }
 
 fn is_safe_package_script_name(script_name: &str) -> bool {
@@ -1284,14 +1487,53 @@ fn package_json_script(cwd: &Path, script_name: &str) -> Option<String> {
 }
 
 fn safe_command(argv: &[String]) -> CommandClassification {
-    CommandClassification::Safe(format!(
-        "Active approval mode `yolo` allowed repo-scoped command `{}` because it matched the non-destructive command classifier.",
-        render_command_for_summary(argv)
-    ))
+    safe_command_with_profile(argv, AutonomousCommandPolicyProfile::ReadOnlyVerification)
+}
+
+fn safe_command_with_profile(
+    argv: &[String],
+    profile: AutonomousCommandPolicyProfile,
+) -> CommandClassification {
+    CommandClassification::Safe {
+        profile,
+        reason: format!(
+            "Active approval mode `yolo` allowed repo-scoped command `{}` because it matched the non-destructive command classifier.",
+            render_command_for_summary(argv)
+        ),
+    }
+}
+
+fn safe_package_script_command(
+    argv: &[String],
+    script_name: &str,
+    introspected: bool,
+) -> CommandClassification {
+    let profile = package_script_profile(script_name);
+    let reason = if introspected {
+        format!(
+            "Active approval mode `yolo` allowed repo-local package script `{script_name}` via `{}` after package.json introspection classified the script as verification-safe.",
+            render_command_for_summary(argv)
+        )
+    } else {
+        format!(
+            "Active approval mode `yolo` allowed package-manager verification command `{}` because script `{script_name}` is in the safe script allowlist.",
+            render_command_for_summary(argv)
+        )
+    };
+    CommandClassification::Safe { profile, reason }
+}
+
+fn package_script_profile(script_name: &str) -> AutonomousCommandPolicyProfile {
+    if script_name == "build" {
+        AutonomousCommandPolicyProfile::GeneratedFileMutation
+    } else {
+        AutonomousCommandPolicyProfile::ReadOnlyVerification
+    }
 }
 
 fn destructive_command(argv: &[String], reason: &str) -> CommandClassification {
-    CommandClassification::Destructive {
+    CommandClassification::Escalated {
+        profile: AutonomousCommandPolicyProfile::DestructiveOperation,
         code: "policy_escalated_destructive_command",
         reason: format!(
             "Xero requires operator review for `{}` because {reason}.",
@@ -1423,12 +1665,14 @@ fn approval_mode_label(mode: &RuntimeRunApprovalModeDto) -> &'static str {
 fn policy_trace(
     outcome: AutonomousCommandPolicyOutcome,
     approval_mode: RuntimeRunApprovalModeDto,
+    profile: AutonomousCommandPolicyProfile,
     code: impl Into<String>,
     reason: impl Into<String>,
 ) -> AutonomousCommandPolicyTrace {
     AutonomousCommandPolicyTrace {
         outcome,
         approval_mode,
+        profile,
         code: code.into(),
         reason: reason.into(),
     }
@@ -1456,7 +1700,11 @@ mod tests {
         let decision = classify_command(&prepared);
 
         match decision {
-            CommandClassification::Safe(reason) => {
+            CommandClassification::Safe { profile, reason } => {
+                assert_eq!(
+                    profile,
+                    AutonomousCommandPolicyProfile::ReadOnlyVerification
+                );
                 assert!(reason.contains("package.json introspection"));
                 assert!(reason.contains("test"));
             }
@@ -1477,7 +1725,15 @@ mod tests {
         let decision = classify_command(&prepared);
 
         match decision {
-            CommandClassification::Destructive { code, reason } => {
+            CommandClassification::Escalated {
+                profile,
+                code,
+                reason,
+            } => {
+                assert_eq!(
+                    profile,
+                    AutonomousCommandPolicyProfile::DestructiveOperation
+                );
                 assert_eq!(code, "policy_escalated_destructive_package_script");
                 assert!(reason.contains("build"));
             }
@@ -1498,7 +1754,12 @@ mod tests {
         let decision = classify_command(&prepared);
 
         match decision {
-            CommandClassification::Ambiguous { code, reason } => {
+            CommandClassification::Escalated {
+                profile,
+                code,
+                reason,
+            } => {
+                assert_eq!(profile, AutonomousCommandPolicyProfile::GeneralExecution);
                 assert_eq!(code, "policy_escalated_package_manager_run");
                 assert!(reason.contains("verification allowlist"));
             }
@@ -1539,6 +1800,10 @@ mod tests {
         let request = AutonomousToolRequest::Write(super::super::AutonomousWriteRequest {
             path: "../outside.txt".into(),
             content: "hello".into(),
+            expected_hash: None,
+            create_only: false,
+            overwrite: None,
+            preview: false,
         });
 
         let decision = runtime
@@ -1559,22 +1824,28 @@ mod tests {
     fn safety_policy_allows_blank_optional_observe_scope_as_repo_root() {
         let tempdir = tempdir().expect("tempdir");
         let runtime = test_runtime(tempdir.path(), RuntimeRunApprovalModeDto::Yolo);
-        let request = AutonomousToolRequest::List(super::super::AutonomousListRequest {
-            path: Some("".into()),
-            max_depth: Some(2),
-        });
+        for path in ["", "."] {
+            let request = AutonomousToolRequest::List(super::super::AutonomousListRequest {
+                path: Some(path.into()),
+                max_depth: Some(2),
+                max_results: None,
+                sort_by: None,
+                sort_direction: None,
+                cursor: None,
+            });
 
-        let decision = runtime
-            .evaluate_safety_policy(
-                "list",
-                &json!({"path": "", "maxDepth": 2}),
-                &request,
-                false,
-                "input-hash",
-            )
-            .expect("policy");
+            let decision = runtime
+                .evaluate_safety_policy(
+                    "list",
+                    &json!({"path": path, "maxDepth": 2}),
+                    &request,
+                    false,
+                    "input-hash",
+                )
+                .expect("policy");
 
-        assert_eq!(decision.action, AutonomousSafetyPolicyAction::Allow);
+            assert_eq!(decision.action, AutonomousSafetyPolicyAction::Allow);
+        }
     }
 
     #[test]
@@ -1604,6 +1875,45 @@ mod tests {
         assert_eq!(decision.code, "policy_escalated_approval_mode");
     }
 
+    #[test]
+    fn safety_policy_keeps_command_probe_readonly_and_verify_scoped() {
+        let tempdir = tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path(), RuntimeRunApprovalModeDto::Yolo);
+        let probe_request = AutonomousToolRequest::Command(AutonomousCommandRequest {
+            argv: vec!["cargo".into(), "test".into()],
+            cwd: None,
+            timeout_ms: None,
+        });
+
+        let probe_decision = runtime
+            .evaluate_safety_policy(
+                AUTONOMOUS_TOOL_COMMAND_PROBE,
+                &json!({"argv": ["cargo", "test"]}),
+                &probe_request,
+                false,
+                "input-hash",
+            )
+            .expect("probe policy");
+
+        assert_eq!(
+            probe_decision.action,
+            AutonomousSafetyPolicyAction::RequireApproval
+        );
+        assert_eq!(probe_decision.code, "policy_escalated_command_probe_scope");
+
+        let verify_decision = runtime
+            .evaluate_safety_policy(
+                AUTONOMOUS_TOOL_COMMAND_VERIFY,
+                &json!({"argv": ["cargo", "test"]}),
+                &probe_request,
+                false,
+                "input-hash",
+            )
+            .expect("verify policy");
+
+        assert_eq!(verify_decision.action, AutonomousSafetyPolicyAction::Allow);
+    }
+
     fn prepared_command<const N: usize>(cwd: &Path, argv: [&str; N]) -> PreparedCommandRequest {
         PreparedCommandRequest {
             argv: argv.into_iter().map(str::to_owned).collect(),
@@ -1629,6 +1939,7 @@ mod tests {
                     thinking_effort: None,
                     approval_mode,
                     plan_mode_required: false,
+                    auto_compact_enabled: true,
                     revision: 1,
                     applied_at: "2026-04-30T00:00:00Z".into(),
                 },

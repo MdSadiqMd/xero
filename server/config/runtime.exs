@@ -1,9 +1,15 @@
 import Config
 
 # Load .env files for non-prod environments. In production, env vars are
-# expected to be provided by the host (systemd, fly.io, k8s, etc.). The
-# `source/1` (non-bang) variant tolerates missing files.
-if config_env() != :prod do
+# expected to be provided by the host (systemd, fly.io, k8s, etc.) — except
+# when running via `pnpm start` from a source checkout, signalled by
+# `XERO_LAUNCH_MODE=local-source`. That path auto-generates `server/.env`
+# with sensible defaults so first-time users don't hand-edit anything; real
+# prod deploys never set the var, so they remain unaffected.
+load_dotenv? =
+  config_env() != :prod or System.get_env("XERO_LAUNCH_MODE") == "local-source"
+
+if load_dotenv? do
   import Dotenvy
 
   {:ok, parsed_env} =
@@ -41,7 +47,13 @@ config :xero, XeroWeb.Endpoint, http: [port: String.to_integer(System.get_env("P
 
 # --- CORS (cors_plug) ---
 # Comma-separated list of allowed origins. "*" is allowed for dev only.
-default_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "tauri://localhost"]
+default_cors_origins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3002",
+  "http://127.0.0.1:3002",
+  "tauri://localhost"
+]
 
 cors_origins =
   System.get_env("CORS_ORIGINS", "")
@@ -60,22 +72,32 @@ config :cors_plug,
 config :xero, Xero.RateLimiter,
   per_minute: String.to_integer(System.get_env("RATE_LIMIT_PER_MINUTE", "60"))
 
-# --- Oban background jobs ---
-oban_queues =
-  System.get_env("OBAN_QUEUES", "default:10,mailers:5")
-  |> String.split(",", trim: true)
-  |> Enum.map(fn pair ->
-    [name, limit] = String.split(pair, ":", parts: 2)
-    {String.to_atom(String.trim(name)), String.to_integer(String.trim(limit))}
-  end)
+if remote_jwt_signing_key = System.get_env("XERO_REMOTE_JWT_SIGNING_KEY") do
+  config :xero, Xero.Remote.Jwt, signing_key: remote_jwt_signing_key
+end
 
-config :xero, Oban,
-  repo: Xero.Repo,
-  queues: oban_queues,
-  plugins: [
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
-    Oban.Plugins.Reindexer
-  ]
+# --- Oban background jobs ---
+if config_env() == :test do
+  config :xero, Oban,
+    repo: Xero.Repo,
+    testing: :manual
+else
+  oban_queues =
+    System.get_env("OBAN_QUEUES", "default:10,mailers:5")
+    |> String.split(",", trim: true)
+    |> Enum.map(fn pair ->
+      [name, limit] = String.split(pair, ":", parts: 2)
+      {String.to_atom(String.trim(name)), String.to_integer(String.trim(limit))}
+    end)
+
+  config :xero, Oban,
+    repo: Xero.Repo,
+    queues: oban_queues,
+    plugins: [
+      {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+      Oban.Plugins.Reindexer
+    ]
+end
 
 if config_env() == :prod do
   database_url =

@@ -1,18 +1,21 @@
 use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 
 use crate::db::project_store::{
-    agent_run_status_sql_value, AgentCompactionRecord, AgentCompactionTrigger, AgentMemoryKind,
-    AgentMemoryRecord, AgentMemoryReviewState, AgentMemoryScope, AgentRunEventKind, AgentRunRecord,
+    agent_memory_retrieval_reason, agent_run_status_sql_value, source_fingerprint_paths,
+    AgentCompactionRecord, AgentCompactionTrigger, AgentMemoryKind, AgentMemoryRecord,
+    AgentMemoryReviewState, AgentMemoryScope, AgentRunEventKind, AgentRunRecord,
     AgentRunSnapshotRecord, AgentRunStatus, AgentSessionRecord, AgentSessionStatus,
     AgentToolCallState, AgentUsageRecord,
 };
 
+use super::code_history::CodePatchAvailabilityDto;
 use super::runtime::{
     AgentSessionDto, AgentSessionLineageBoundaryKindDto, AgentSessionLineageDto,
-    RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeToolCallState,
+    RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeStreamMediaAttachmentDto,
+    RuntimeToolCallState,
 };
 
 pub const XERO_SESSION_CONTEXT_CONTRACT_VERSION: u32 = 1;
@@ -50,6 +53,8 @@ pub enum SessionTranscriptItemKindDto {
     ToolCall,
     ToolResult,
     FileChange,
+    CodeRollback,
+    CodeHistoryOperation,
     Checkpoint,
     ActionRequest,
     Activity,
@@ -176,9 +181,19 @@ pub struct SessionTranscriptItemDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_change_group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_commit_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_workspace_epoch: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_patch_availability: Option<CodePatchAvailabilityDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_attachments: Vec<RuntimeStreamMediaAttachmentDto>,
     pub redaction: SessionContextRedactionDto,
 }
 
@@ -374,6 +389,10 @@ pub enum SessionContextContributorKindDto {
     ToolSummary,
     ToolDescriptor,
     FileObservation,
+    CodeRollback,
+    CodeHistoryOperation,
+    CodeHistoryNotice,
+    CodeHistoryMailboxNotice,
     CodeSymbol,
     DependencyMetadata,
     RunArtifact,
@@ -758,6 +777,25 @@ pub struct SessionMemoryRecordDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<SessionMemoryDiagnosticDto>,
     pub redaction: SessionContextRedactionDto,
+    pub freshness_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_checked_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalidated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_key: Option<String>,
+    pub retrievable: bool,
+    pub retrievability_reason: String,
+    pub promotion_status: String,
+    pub provenance: JsonValue,
+    pub retrieval_impact: JsonValue,
+    pub conflict: JsonValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -770,6 +808,26 @@ pub struct ListSessionMemoriesRequestDto {
     pub include_disabled: bool,
     #[serde(default)]
     pub include_rejected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<SessionMemoryReviewStateDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<SessionMemoryScopeDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<SessionMemoryKindDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_confidence: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrievable: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -779,6 +837,16 @@ pub struct ListSessionMemoriesResponseDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session_id: Option<String>,
     pub memories: Vec<SessionMemoryRecordDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetSessionMemoryReviewQueueRequestDto {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -811,6 +879,24 @@ pub struct UpdateSessionMemoryRequestDto {
     pub review_state: Option<SessionMemoryReviewStateDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CorrectSessionMemoryRequestDto {
+    pub project_id: String,
+    pub memory_id: String,
+    pub corrected_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CorrectSessionMemoryResponseDto {
+    pub schema: String,
+    pub project_id: String,
+    pub original_memory: SessionMemoryRecordDto,
+    pub corrected_memory: SessionMemoryRecordDto,
+    pub ui_deferred: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -965,7 +1051,99 @@ pub fn session_memory_record_dto(record: &AgentMemoryRecord) -> SessionMemoryRec
         updated_at: record.updated_at.clone(),
         diagnostic,
         redaction: strongest_redaction(&text_redaction, &diagnostic_redaction),
+        freshness_state: record.freshness_state.clone(),
+        freshness_checked_at: record.freshness_checked_at.clone(),
+        stale_reason: record.stale_reason.clone(),
+        supersedes_id: record.supersedes_id.clone(),
+        superseded_by_id: record.superseded_by_id.clone(),
+        invalidated_at: record.invalidated_at.clone(),
+        fact_key: record.fact_key.clone(),
+        retrievable: agent_memory_retrieval_reason(record) == "retrievable",
+        retrievability_reason: agent_memory_retrieval_reason(record).into(),
+        promotion_status: session_memory_promotion_status(record),
+        provenance: session_memory_provenance_json(record),
+        retrieval_impact: session_memory_retrieval_impact_json(record),
+        conflict: session_memory_conflict_json(record),
     }
+}
+
+pub fn session_memory_promotion_status(record: &AgentMemoryRecord) -> String {
+    record
+        .diagnostic
+        .as_ref()
+        .and_then(|diagnostic| serde_json::from_str::<JsonValue>(&diagnostic.message).ok())
+        .and_then(|value| {
+            value
+                .get("decision")
+                .and_then(JsonValue::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| match record.review_state {
+            AgentMemoryReviewState::Candidate => "candidate".into(),
+            AgentMemoryReviewState::Approved if record.enabled => "approved_enabled".into(),
+            AgentMemoryReviewState::Approved => "approved_disabled".into(),
+            AgentMemoryReviewState::Rejected => "rejected".into(),
+        })
+}
+
+fn session_memory_provenance_json(record: &AgentMemoryRecord) -> JsonValue {
+    let source_paths = source_fingerprint_paths(&record.source_fingerprints_json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| !path.trim().is_empty())
+        .collect::<Vec<_>>();
+    let source_fingerprint_count = source_paths.len();
+    let promotion_gate = record
+        .diagnostic
+        .as_ref()
+        .and_then(|diagnostic| serde_json::from_str::<JsonValue>(&diagnostic.message).ok())
+        .filter(|value| {
+            value
+                .get("schema")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|schema| schema == "xero.memory_promotion_gate.decision.v1")
+        });
+    json!({
+        "sourceRunId": record.source_run_id,
+        "sourceItemIds": record.source_item_ids,
+        "sourcePaths": source_paths,
+        "sourceFingerprintCount": source_fingerprint_count,
+        "promotionGate": promotion_gate,
+    })
+}
+
+fn session_memory_retrieval_impact_json(record: &AgentMemoryRecord) -> JsonValue {
+    json!({
+        "eligibleByDefault": agent_memory_retrieval_reason(record) == "retrievable",
+        "eligibilityReason": agent_memory_retrieval_reason(record),
+        "scope": match record.scope {
+            AgentMemoryScope::Project => "project",
+            AgentMemoryScope::Session => "session",
+        },
+        "kind": match record.kind {
+            AgentMemoryKind::ProjectFact => "project_fact",
+            AgentMemoryKind::UserPreference => "user_preference",
+            AgentMemoryKind::Decision => "decision",
+            AgentMemoryKind::SessionSummary => "session_summary",
+            AgentMemoryKind::Troubleshooting => "troubleshooting",
+        },
+        "searchModes": if agent_memory_retrieval_reason(record) == "retrievable" {
+            json!(["approved_memory", "hybrid_context", "first_turn_working_set"])
+        } else {
+            json!(["diagnostic_historical"])
+        },
+    })
+}
+
+fn session_memory_conflict_json(record: &AgentMemoryRecord) -> JsonValue {
+    json!({
+        "factKey": record.fact_key,
+        "supersedesId": record.supersedes_id,
+        "supersededById": record.superseded_by_id,
+        "invalidatedAt": record.invalidated_at,
+        "freshnessState": record.freshness_state,
+        "staleReason": record.stale_reason,
+    })
 }
 
 pub fn session_memory_diagnostic_dto(
@@ -1019,8 +1197,13 @@ pub fn run_transcript_from_agent_snapshot(
             tool_name: None,
             tool_state: None,
             file_path: None,
+            code_change_group_id: None,
+            code_commit_id: None,
+            code_workspace_epoch: None,
+            code_patch_availability: None,
             checkpoint_kind: None,
             action_id: None,
+            media_attachments: Vec::new(),
             redaction: prompt_redaction,
         },
     });
@@ -1047,14 +1230,19 @@ pub fn run_transcript_from_agent_snapshot(
                 kind: SessionTranscriptItemKindDto::Message,
                 actor: actor_from_message_role(&message.role),
                 title: Some(format!("{:?} message", message.role)),
-                text: Some(text),
+                text: non_empty_optional_text(text),
                 summary: None,
                 tool_call_id: None,
                 tool_name: None,
                 tool_state: None,
                 file_path: None,
+                code_change_group_id: None,
+                code_commit_id: None,
+                code_workspace_epoch: None,
+                code_patch_availability: None,
                 checkpoint_kind: None,
                 action_id: None,
+                media_attachments: Vec::new(),
                 redaction,
             },
         });
@@ -1064,6 +1252,7 @@ pub fn run_transcript_from_agent_snapshot(
         let payload =
             serde_json::from_str::<JsonValue>(&event.payload_json).unwrap_or(JsonValue::Null);
         let (title, text, summary, redaction) = transcript_parts_from_event(event, &payload);
+        let code_change_group_id = code_change_group_id_from_payload(&payload);
         candidates.push(TimelineCandidate {
             created_at: event.created_at.clone(),
             source_rank: 20,
@@ -1090,8 +1279,13 @@ pub fn run_transcript_from_agent_snapshot(
                 tool_name: payload_string(&payload, "toolName"),
                 tool_state: transcript_tool_state_from_event(event, &payload),
                 file_path: sanitize_optional_path(payload_string(&payload, "path")).0,
+                code_change_group_id: code_change_group_id.clone(),
+                code_commit_id: code_commit_id_from_payload(&payload),
+                code_workspace_epoch: code_workspace_epoch_from_payload(&payload),
+                code_patch_availability: code_patch_availability_from_payload(&payload),
                 checkpoint_kind: None,
                 action_id: payload_string(&payload, "actionId"),
+                media_attachments: Vec::new(),
                 redaction,
             },
         });
@@ -1125,8 +1319,13 @@ pub fn run_transcript_from_agent_snapshot(
                 tool_name: Some(tool_call.tool_name.clone()),
                 tool_state: Some(tool_state_from_agent_tool_call(&tool_call.state)),
                 file_path: None,
+                code_change_group_id: None,
+                code_commit_id: None,
+                code_workspace_epoch: None,
+                code_patch_availability: None,
                 checkpoint_kind: None,
                 action_id: None,
+                media_attachments: Vec::new(),
                 redaction,
             },
         });
@@ -1160,8 +1359,13 @@ pub fn run_transcript_from_agent_snapshot(
                 tool_name: None,
                 tool_state: None,
                 file_path: Some(path),
+                code_change_group_id: file_change.change_group_id.clone(),
+                code_commit_id: None,
+                code_workspace_epoch: None,
+                code_patch_availability: None,
                 checkpoint_kind: None,
                 action_id: None,
+                media_attachments: Vec::new(),
                 redaction: path_redaction,
             },
         });
@@ -1195,8 +1399,13 @@ pub fn run_transcript_from_agent_snapshot(
                 tool_name: None,
                 tool_state: None,
                 file_path: None,
+                code_change_group_id: None,
+                code_commit_id: None,
+                code_workspace_epoch: None,
+                code_patch_availability: None,
                 checkpoint_kind: Some(checkpoint.checkpoint_kind.clone()),
                 action_id: None,
+                media_attachments: Vec::new(),
                 redaction,
             },
         });
@@ -1230,8 +1439,13 @@ pub fn run_transcript_from_agent_snapshot(
                 tool_name: None,
                 tool_state: None,
                 file_path: None,
+                code_change_group_id: None,
+                code_commit_id: None,
+                code_workspace_epoch: None,
+                code_patch_availability: None,
                 checkpoint_kind: None,
                 action_id: Some(action.action_id.clone()),
+                media_attachments: Vec::new(),
                 redaction,
             },
         });
@@ -1561,6 +1775,8 @@ pub fn approved_memory_context_contributors(
 const DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS: u64 = 4_096;
 const DEFAULT_CONTEXT_LIMIT_SAFETY_RESERVE_PERCENT: u64 = 15;
 const OPENAI_CODEX_CONTEXT_WINDOW_TOKENS: u64 = 272_000;
+const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: u64 = 1_000_000;
+const DEEPSEEK_V4_MAX_OUTPUT_TOKENS: u64 = 384_000;
 
 pub fn context_budget(
     estimated_tokens: u64,
@@ -1629,11 +1845,12 @@ pub fn resolve_context_limit(
         return unknown_context_limit_resolution(provider_id, model_id);
     }
 
-    if let Some(window) = built_in_context_window_tokens(&provider, &model) {
-        return context_limit_resolution(
+    if let Some((window, max_output_tokens)) = built_in_context_limits(&provider, &model) {
+        return context_limit_resolution_with_output(
             provider_id,
             model_id,
             window,
+            max_output_tokens,
             SessionContextLimitSourceDto::BuiltInRegistry,
             SessionContextLimitConfidenceDto::Medium,
             format!(
@@ -1674,9 +1891,7 @@ fn legacy_context_limit_resolution(budget_tokens: Option<u64>) -> SessionContext
             safety_reserve_tokens: 0,
             source: SessionContextLimitSourceDto::Heuristic,
             confidence: SessionContextLimitConfidenceDto::Low,
-            diagnostic: Some(
-                "Legacy budget value supplied without context-window metadata.".into(),
-            ),
+            diagnostic: Some("Budget value supplied without context-window metadata.".into()),
             fetched_at: None,
         },
         None => unknown_context_limit_resolution("legacy", "legacy"),
@@ -1713,7 +1928,27 @@ fn context_limit_resolution(
     confidence: SessionContextLimitConfidenceDto,
     diagnostic: String,
 ) -> SessionContextLimitResolutionDto {
-    let output_reserve_tokens = DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS.min(context_window_tokens);
+    context_limit_resolution_with_output(
+        provider_id,
+        model_id,
+        context_window_tokens,
+        DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS,
+        source,
+        confidence,
+        diagnostic,
+    )
+}
+
+fn context_limit_resolution_with_output(
+    provider_id: &str,
+    model_id: &str,
+    context_window_tokens: u64,
+    max_output_tokens: u64,
+    source: SessionContextLimitSourceDto,
+    confidence: SessionContextLimitConfidenceDto,
+    diagnostic: String,
+) -> SessionContextLimitResolutionDto {
+    let output_reserve_tokens = max_output_tokens.min(context_window_tokens);
     let budget_after_output = context_window_tokens.saturating_sub(output_reserve_tokens);
     let safety_reserve_tokens = budget_after_output
         .saturating_mul(DEFAULT_CONTEXT_LIMIT_SAFETY_RESERVE_PERCENT)
@@ -1726,7 +1961,7 @@ fn context_limit_resolution(
         model_id: model_id.trim().to_string(),
         context_window_tokens: Some(context_window_tokens),
         effective_input_budget_tokens: Some(effective_input_budget_tokens),
-        max_output_tokens: Some(DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS),
+        max_output_tokens: Some(max_output_tokens),
         output_reserve_tokens,
         safety_reserve_tokens,
         source,
@@ -1746,15 +1981,24 @@ fn context_pressure_from_percent(percent: Option<u64>) -> SessionContextBudgetPr
     }
 }
 
-fn built_in_context_window_tokens(provider: &str, model: &str) -> Option<u64> {
+fn built_in_context_limits(provider: &str, model: &str) -> Option<(u64, u64)> {
+    if provider == "xai" && is_supported_xai_context_model(model) {
+        return Some((1_000_000, DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS));
+    }
+    if provider == "deepseek" && model.starts_with("deepseek-v4-") {
+        return Some((
+            DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS,
+            DEEPSEEK_V4_MAX_OUTPUT_TOKENS,
+        ));
+    }
     if model.contains("gemini-1.5-pro")
         || model.contains("gemini-1.5-flash")
         || model.contains("gemini-2.")
     {
-        return Some(1_000_000);
+        return Some((1_000_000, DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS));
     }
     if model.contains("claude") {
-        return Some(200_000);
+        return Some((200_000, DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS));
     }
     if [
         "gpt-5.2",
@@ -1767,7 +2011,10 @@ fn built_in_context_window_tokens(provider: &str, model: &str) -> Option<u64> {
     .iter()
     .any(|model_marker| model.contains(model_marker))
     {
-        return Some(OPENAI_CODEX_CONTEXT_WINDOW_TOKENS);
+        return Some((
+            OPENAI_CODEX_CONTEXT_WINDOW_TOKENS,
+            DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS,
+        ));
     }
     if model.contains("gpt-5")
         || model.contains("gpt-4.1")
@@ -1778,10 +2025,20 @@ fn built_in_context_window_tokens(provider: &str, model: &str) -> Option<u64> {
         || model.contains("mistral-large")
         || model.contains("codestral")
     {
-        return Some(128_000);
+        return Some((128_000, DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS));
     }
 
     None
+}
+
+fn is_supported_xai_context_model(model: &str) -> bool {
+    let model = model
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    matches!(model.as_str(), "grok-4.3" | "grok-4.3-latest")
 }
 
 fn heuristic_context_window_tokens(provider: &str, model: &str) -> Option<u64> {
@@ -1823,6 +2080,7 @@ pub fn validate_run_transcript_contract(transcript: &RunTranscriptDto) -> Result
         if item.sequence <= previous_sequence {
             return Err("transcript item sequences must be strictly increasing".into());
         }
+        validate_transcript_item_optional_text(item)?;
         previous_sequence = item.sequence;
     }
     ensure_secret_free_json(transcript)
@@ -1854,6 +2112,7 @@ pub fn validate_session_transcript_contract(
         if item.sequence <= previous_sequence {
             return Err("transcript item sequences must be strictly increasing".into());
         }
+        validate_transcript_item_optional_text(item)?;
         previous_sequence = item.sequence;
     }
     ensure_secret_free_json(transcript)
@@ -1908,6 +2167,14 @@ pub fn validate_context_snapshot_contract(
         if contributor.sequence <= previous_sequence {
             return Err("context contributor sequences must be strictly increasing".into());
         }
+        if optional_text_is_empty(contributor.summary.as_deref())
+            || optional_text_is_empty(contributor.omitted_reason.as_deref())
+            || optional_text_is_empty(contributor.text.as_deref())
+        {
+            return Err(
+                "context contributor optional text fields must be omitted or non-empty".into(),
+            );
+        }
         previous_sequence = contributor.sequence;
         if contributor.model_visible && !contributor.included {
             return Err("model-visible contributors must also be included".into());
@@ -1928,6 +2195,31 @@ pub fn validate_context_snapshot_contract(
         return Err("context snapshot deferred token estimate must match contributors".into());
     }
     ensure_secret_free_json(snapshot)
+}
+
+fn optional_text_is_empty(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.trim().is_empty())
+}
+
+fn validate_transcript_item_optional_text(item: &SessionTranscriptItemDto) -> Result<(), String> {
+    let optional_text_fields = [
+        item.title.as_deref(),
+        item.text.as_deref(),
+        item.summary.as_deref(),
+        item.tool_call_id.as_deref(),
+        item.tool_name.as_deref(),
+        item.file_path.as_deref(),
+        item.code_change_group_id.as_deref(),
+        item.code_commit_id.as_deref(),
+        item.checkpoint_kind.as_deref(),
+        item.action_id.as_deref(),
+    ];
+
+    if optional_text_fields.into_iter().any(optional_text_is_empty) {
+        return Err("transcript item optional text fields must be omitted or non-empty".into());
+    }
+
+    Ok(())
 }
 
 pub fn validate_session_compaction_record_contract(
@@ -2057,6 +2349,7 @@ fn transcript_kind_from_event(kind: &AgentRunEventKind) -> SessionTranscriptItem
         | AgentRunEventKind::ToolPermissionGrant
         | AgentRunEventKind::ProviderModelChanged
         | AgentRunEventKind::RuntimeSettingsChanged
+        | AgentRunEventKind::SubagentLifecycle
         | AgentRunEventKind::VerificationGate => SessionTranscriptItemKindDto::Activity,
     }
 }
@@ -2115,6 +2408,7 @@ fn transcript_parts_from_event(
         AgentRunEventKind::RunPaused => Some("Run paused".into()),
         AgentRunEventKind::RunCompleted => Some("Run completed".into()),
         AgentRunEventKind::RunFailed => Some("Run failed".into()),
+        AgentRunEventKind::SubagentLifecycle => Some("Subagent".into()),
     };
     let raw_text = payload_string(payload, "text")
         .or_else(|| payload_string(payload, "summary"))
@@ -2178,13 +2472,13 @@ fn runtime_stream_transcript_item(
         .or(item.message.as_deref());
     let (text, text_redaction) = raw_text
         .map(sanitize_context_text)
-        .map(|(text, redaction)| (Some(text), redaction))
+        .map(|(text, redaction)| (non_empty_optional_text(text), redaction))
         .unwrap_or_else(|| (None, SessionContextRedactionDto::public()));
     let title = item
         .title
         .as_deref()
         .map(sanitize_context_text)
-        .map(|(value, _)| value);
+        .and_then(|(value, _)| non_empty_optional_text(value));
     let redaction = text_redaction;
     SessionTranscriptItemDto {
         contract_version: XERO_SESSION_CONTEXT_CONTRACT_VERSION,
@@ -2208,8 +2502,13 @@ fn runtime_stream_transcript_item(
         tool_name: item.tool_name.clone(),
         tool_state: item.tool_state.as_ref().map(tool_state_from_runtime_stream),
         file_path: None,
+        code_change_group_id: item.code_change_group_id.clone(),
+        code_commit_id: item.code_commit_id.clone(),
+        code_workspace_epoch: item.code_workspace_epoch,
+        code_patch_availability: item.code_patch_availability.clone(),
         checkpoint_kind: None,
         action_id: item.action_id.clone(),
+        media_attachments: item.media_attachments.clone(),
         redaction,
     }
 }
@@ -2224,8 +2523,10 @@ fn transcript_kind_from_runtime_stream(
             SessionTranscriptItemKindDto::Activity
         }
         RuntimeStreamItemKind::ActionRequired => SessionTranscriptItemKindDto::ActionRequest,
+        RuntimeStreamItemKind::Plan => SessionTranscriptItemKindDto::Activity,
         RuntimeStreamItemKind::Complete => SessionTranscriptItemKindDto::Complete,
         RuntimeStreamItemKind::Failure => SessionTranscriptItemKindDto::Failure,
+        RuntimeStreamItemKind::SubagentLifecycle => SessionTranscriptItemKindDto::Activity,
     }
 }
 
@@ -2293,6 +2594,30 @@ fn payload_string(payload: &JsonValue, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn code_commit_id_from_payload(payload: &JsonValue) -> Option<String> {
+    payload_string(payload, "codeCommitId")
+}
+
+fn code_change_group_id_from_payload(payload: &JsonValue) -> Option<String> {
+    payload_string(payload, "codeChangeGroupId")
+}
+
+fn code_workspace_epoch_from_payload(payload: &JsonValue) -> Option<u64> {
+    payload
+        .get("codeWorkspaceEpoch")
+        .and_then(JsonValue::as_u64)
+}
+
+fn code_patch_availability_from_payload(payload: &JsonValue) -> Option<CodePatchAvailabilityDto> {
+    if let Some(value) = payload.get("codePatchAvailability") {
+        if let Ok(availability) = serde_json::from_value::<CodePatchAvailabilityDto>(value.clone())
+        {
+            return Some(availability);
+        }
+    }
+    None
+}
+
 fn sanitize_context_text(value: &str) -> (String, SessionContextRedactionDto) {
     if let Some(reason) = find_session_context_sensitive_content(value) {
         let class = if reason.contains("prompt-injection") || reason.contains("transcript") {
@@ -2317,6 +2642,14 @@ fn sanitize_context_text(value: &str) -> (String, SessionContextRedactionDto) {
         );
     }
     (value.into(), SessionContextRedactionDto::public())
+}
+
+fn non_empty_optional_text(value: String) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn sanitize_path(value: &str) -> (String, SessionContextRedactionDto) {

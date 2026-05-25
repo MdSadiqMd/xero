@@ -1,6 +1,10 @@
 import { z } from 'zod'
-import { isoTimestampSchema, nonEmptyOptionalTextSchema } from './shared'
-import { runtimeProviderIdSchema, type RuntimeProviderIdDto } from './runtime'
+import { isoTimestampSchema, nonEmptyOptionalTextSchema } from '@xero/ui/model/shared'
+import {
+  runtimeAuthPhaseSchema,
+  runtimeProviderIdSchema,
+  type RuntimeProviderIdDto,
+} from '@xero/ui/model/runtime'
 
 export const providerCredentialKindSchema = z.preprocess(
   (value) => (value === 'o_auth_session' ? 'oauth_session' : value),
@@ -103,6 +107,47 @@ export const completeOAuthCallbackRequestSchema = z
   })
   .strict()
 
+const xaiDeviceCodeProviderSchema = z.literal('xai')
+
+export const startXaiDeviceCodeLoginRequestSchema = z
+  .object({
+    providerId: xaiDeviceCodeProviderSchema,
+  })
+  .strict()
+
+export const pollXaiDeviceCodeLoginRequestSchema = z
+  .object({
+    providerId: xaiDeviceCodeProviderSchema,
+    flowId: z.string().trim().min(1),
+  })
+  .strict()
+
+export const xaiDeviceCodeLoginSchema = z
+  .object({
+    providerId: xaiDeviceCodeProviderSchema,
+    flowId: z.string().trim().min(1),
+    userCode: z.string().trim().min(1),
+    verificationUri: z.string().url(),
+    verificationUriComplete: z.string().url().nullable().optional(),
+    intervalSeconds: z.number().int().positive(),
+    expiresAt: z.number().int(),
+    phase: runtimeAuthPhaseSchema,
+    sessionId: nonEmptyOptionalTextSchema,
+    accountId: nonEmptyOptionalTextSchema,
+    lastErrorCode: nonEmptyOptionalTextSchema,
+    lastError: z
+      .object({
+        code: z.string().trim().min(1),
+        message: z.string(),
+        retryable: z.boolean(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    updatedAt: isoTimestampSchema,
+  })
+  .strict()
+
 export type ProviderCredentialKindDto = z.infer<typeof providerCredentialKindSchema>
 export type ProviderCredentialReadinessProofDto = z.infer<typeof providerCredentialReadinessProofSchema>
 export type ProviderCredentialDto = z.infer<typeof providerCredentialSchema>
@@ -111,6 +156,9 @@ export type UpsertProviderCredentialRequestDto = z.infer<typeof upsertProviderCr
 export type DeleteProviderCredentialRequestDto = z.infer<typeof deleteProviderCredentialRequestSchema>
 export type StartOAuthLoginRequestDto = z.infer<typeof startOAuthLoginRequestSchema>
 export type CompleteOAuthCallbackRequestDto = z.infer<typeof completeOAuthCallbackRequestSchema>
+export type StartXaiDeviceCodeLoginRequestDto = z.infer<typeof startXaiDeviceCodeLoginRequestSchema>
+export type PollXaiDeviceCodeLoginRequestDto = z.infer<typeof pollXaiDeviceCodeLoginRequestSchema>
+export type XaiDeviceCodeLoginDto = z.infer<typeof xaiDeviceCodeLoginSchema>
 
 export function findProviderCredential(
   snapshot: ProviderCredentialsSnapshotDto | null | undefined,

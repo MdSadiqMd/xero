@@ -118,7 +118,6 @@ export const IPC_PAYLOAD_BUDGETS = {
 const COMMAND_BUDGET_KEYS: Record<string, IpcPayloadBudgetKey | undefined> = {
   browser_control_settings: 'settingsRegistry',
   browser_tab_list: 'browserTabEvent',
-  check_provider_profile: 'notificationDiagnosticsPage',
   get_environment_discovery_status: 'notificationDiagnosticsPage',
   get_environment_profile_summary: 'notificationDiagnosticsPage',
   get_provider_model_catalog: 'providerRegistry',
@@ -197,6 +196,98 @@ export function estimateIpcPayloadBytes(payload: unknown): number {
   }
 }
 
+function estimateRuntimeStreamItemPayloadBytes(payload: unknown): number {
+  if (payload === null || payload === undefined) {
+    return 0
+  }
+
+  if (typeof payload === 'string') {
+    return payload.length * 2
+  }
+
+  if (typeof payload !== 'object') {
+    return 16
+  }
+
+  const seen = new Set<object>()
+  const stack: unknown[] = [payload]
+  let estimatedBytes = 64
+  let visitedNodes = 0
+
+  while (stack.length > 0 && visitedNodes < 96) {
+    const value = stack.pop()
+    if (!value || typeof value !== 'object') {
+      continue
+    }
+
+    if (seen.has(value)) {
+      continue
+    }
+    seen.add(value)
+    visitedNodes += 1
+
+    if (Array.isArray(value)) {
+      estimatedBytes += 16
+      const inspectedLength = Math.min(value.length, 64)
+      for (let index = 0; index < inspectedLength; index += 1) {
+        stack.push(value[index])
+      }
+      if (value.length > inspectedLength) {
+        estimatedBytes += (value.length - inspectedLength) * 16
+      }
+      continue
+    }
+
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      estimatedBytes += key.length * 2 + 8
+      if (typeof nestedValue === 'string') {
+        estimatedBytes += nestedValue.length * 2
+      } else if (typeof nestedValue === 'number' || typeof nestedValue === 'boolean') {
+        estimatedBytes += 16
+      } else if (nestedValue === null || nestedValue === undefined) {
+        estimatedBytes += 4
+      } else {
+        stack.push(nestedValue)
+      }
+    }
+  }
+
+  if (stack.length > 0) {
+    estimatedBytes += stack.length * 16
+  }
+
+  return estimatedBytes
+}
+
+function estimatePayloadBytesForBudget(payload: unknown, budgetKey: IpcPayloadBudgetKey): number {
+  if (budgetKey === 'runtimeStreamItem') {
+    return estimateRuntimeStreamItemPayloadBytes(payload)
+  }
+
+  const observedBytes = observedPayloadBudgetBytes(payload)
+  if (observedBytes !== null) {
+    return observedBytes
+  }
+
+  return estimateIpcPayloadBytes(payload)
+}
+
+function observedPayloadBudgetBytes(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+
+  const payloadBudget = (payload as { payloadBudget?: unknown }).payloadBudget
+  if (!payloadBudget || typeof payloadBudget !== 'object') {
+    return null
+  }
+
+  const observedBytes = (payloadBudget as { observedBytes?: unknown }).observedBytes
+  return typeof observedBytes === 'number' && Number.isFinite(observedBytes) && observedBytes >= 0
+    ? observedBytes
+    : null
+}
+
 export function recordIpcPayloadSample(sample: IpcPayloadSample): RecordedIpcPayloadSample | null {
   const budgetKey = resolveBudgetKey(sample)
   if (!budgetKey) {
@@ -208,7 +299,7 @@ export function recordIpcPayloadSample(sample: IpcPayloadSample): RecordedIpcPay
     return null
   }
 
-  const observedBytes = estimateIpcPayloadBytes(sample.payload)
+  const observedBytes = estimatePayloadBytesForBudget(sample.payload, budgetKey)
   const overWarnBudget = observedBytes > budget.warnBytes
   const overMaxBudget = observedBytes > budget.maxBytes
   const current = metrics.get(budgetKey)

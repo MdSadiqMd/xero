@@ -93,7 +93,16 @@ vi.mock('../components/xero/code-editor', async () => {
     )
   }
 
-  return { CodeEditor: MockCodeEditor }
+  return {
+    CodeEditor: MockCodeEditor,
+    DEFAULT_EDITOR_RENDER_PREFERENCES: {
+      fontSize: 13,
+      tabSize: 2,
+      insertSpaces: true,
+      lineWrapping: true,
+    },
+    EDITOR_SNAPSHOT_DEBOUNCE_MS: 250,
+  }
 })
 
 afterEach(() => {
@@ -109,7 +118,7 @@ afterEach(() => {
   }
 })
 
-import { XeroApp, useActivatedSurface } from './App'
+import { XeroApp, useActivatedSurface, useStickyPrewarmedSurface } from './App'
 import { XeroDesktopError, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import {
   createXeroDoctorReport,
@@ -126,6 +135,7 @@ import type {
   EnvironmentDiscoveryStatusDto,
   ImportMcpServersResponseDto,
   ImportRepositoryResponseDto,
+  ListProjectFileIndexResponseDto,
   ListNotificationDispatchesResponseDto,
   ListNotificationRoutesResponseDto,
   ListProjectFilesResponseDto,
@@ -155,7 +165,13 @@ import type {
   SyncNotificationAdaptersResponseDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
+  XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
+import type {
+  AgentRefDto,
+  WorkflowAgentDetailDto,
+  WorkflowAgentSummaryDto,
+} from '@/src/lib/xero-model/workflow-agents'
 import {
   getCloudProviderPreset,
   type CloudProviderPreset,
@@ -179,16 +195,32 @@ function makeAgentSession(projectId = 'project-1') {
   return {
     projectId,
     agentSessionId: 'agent-session-main',
+    sessionKind: 'standard' as const,
     title: 'Main session',
     summary: 'Primary project session',
     status: 'active' as const,
     selected: true,
+    remoteVisible: false,
     createdAt: '2026-04-15T20:00:00Z',
     updatedAt: '2026-04-15T20:00:00Z',
     archivedAt: null,
     lastRunId: null,
     lastRuntimeKind: null,
     lastProviderId: null,
+  }
+}
+
+const GLOBAL_COMPUTER_USE_PROJECT_ID = 'global-computer-use'
+const GLOBAL_COMPUTER_USE_AGENT_SESSION_ID = 'agent-session-global-computer-use'
+
+function makeComputerUseAgentSession() {
+  return {
+    ...makeAgentSession(GLOBAL_COMPUTER_USE_PROJECT_ID),
+    agentSessionId: GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
+    sessionKind: 'computer_use' as const,
+    title: 'Computer Use',
+    summary: '',
+    remoteVisible: false,
   }
 }
 
@@ -209,6 +241,20 @@ function makeSnapshot(projectId = 'project-1', name = 'Xero'): ProjectSnapshotRe
     verificationRecords: [],
     resumeHistory: [],
     agentSessions: [makeAgentSession(projectId)],
+    notificationDispatches: [],
+    notificationReplyClaims: [],
+  }
+}
+
+function makeComputerUseSnapshot(): ProjectSnapshotResponseDto {
+  return {
+    project: makeProjectSummary(GLOBAL_COMPUTER_USE_PROJECT_ID, 'Computer Use'),
+    repository: null,
+    phases: [],
+    approvalRequests: [],
+    verificationRecords: [],
+    resumeHistory: [],
+    agentSessions: [makeComputerUseAgentSession()],
     notificationDispatches: [],
     notificationReplyClaims: [],
   }
@@ -246,39 +292,125 @@ function makeDiff(projectId = 'project-1', scope: RepositoryDiffResponseDto['sco
     },
     scope,
     patch: '',
+    files: [],
     truncated: false,
     baseRevision: null,
   }
 }
 
+type ProjectFileNode = ListProjectFilesResponseDto['root']
+
+function makeProjectFileTreeView(root: ProjectFileNode): ListProjectFilesResponseDto['view'] {
+  const nodesByPath: ListProjectFilesResponseDto['view']['nodesByPath'] = {}
+  const childPathsByPath: ListProjectFilesResponseDto['view']['childPathsByPath'] = {}
+
+  const ingest = (node: ProjectFileNode) => {
+    nodesByPath[node.path] = {
+      id: node.path,
+      name: node.name,
+      path: node.path,
+      type: node.type,
+      childrenLoaded: node.type === 'file' ? true : node.childrenLoaded ?? Boolean(node.children),
+      truncated: node.truncated ?? false,
+      omittedEntryCount: node.omittedEntryCount ?? 0,
+    }
+    if (node.type === 'folder') {
+      childPathsByPath[node.path] = node.children?.map((child) => child.path) ?? []
+      node.children?.forEach(ingest)
+    }
+  }
+  ingest(root)
+
+  return {
+    rootPath: root.path,
+    nodesByPath,
+    childPathsByPath,
+    loadedPaths: Object.values(nodesByPath)
+      .filter((node) => node.type === 'folder' && node.childrenLoaded)
+      .map((node) => node.path),
+    stats: {
+      byteSize: 1,
+      childListCount: Object.keys(childPathsByPath).length,
+      nodeCount: Object.keys(nodesByPath).length,
+      unloadedFolderCount: Object.values(nodesByPath).filter(
+        (node) => node.type === 'folder' && !node.childrenLoaded,
+      ).length,
+    },
+    truncated: root.truncated ?? false,
+    omittedEntryCount: root.omittedEntryCount ?? 0,
+  }
+}
+
 function makeProjectFiles(projectId = 'project-1'): ListProjectFilesResponseDto {
+  const root: ProjectFileNode = {
+    name: 'root',
+    path: '/',
+    type: 'folder',
+    childrenLoaded: true,
+    children: [
+      {
+        name: 'README.md',
+        path: '/README.md',
+        type: 'file',
+      },
+      {
+        name: 'src',
+        path: '/src',
+        type: 'folder',
+        childrenLoaded: true,
+        children: [
+          {
+            name: 'App.tsx',
+            path: '/src/App.tsx',
+            type: 'file',
+          },
+        ],
+      },
+    ],
+  }
+
   return {
     projectId,
     path: '/',
-    root: {
-      name: 'root',
-      path: '/',
-      type: 'folder',
-      children: [
-        {
-          name: 'README.md',
-          path: '/README.md',
-          type: 'file',
-        },
-        {
-          name: 'src',
-          path: '/src',
-          type: 'folder',
-          children: [
-            {
-              name: 'App.tsx',
-              path: '/src/App.tsx',
-              type: 'file',
-            },
-          ],
-        },
-      ],
-    },
+    root,
+    view: makeProjectFileTreeView(root),
+    truncated: false,
+    omittedEntryCount: 0,
+  }
+}
+
+function makeProjectFileIndex(
+  projectId: string,
+  root: ProjectFileNode,
+  includeHidden = false,
+): ListProjectFileIndexResponseDto {
+  const files: ListProjectFileIndexResponseDto['files'] = []
+  const visit = (node: ProjectFileNode) => {
+    if (node.type === 'file') {
+      const hidden = node.path.split('/').filter(Boolean).some((segment) => segment.startsWith('.'))
+      if (includeHidden || !hidden) {
+        const segments = node.path.split('/').filter(Boolean)
+        files.push({
+          path: node.path,
+          name: node.name,
+          parentPath: segments.length <= 1 ? '/' : `/${segments.slice(0, -1).join('/')}`,
+          hidden,
+        })
+      }
+      return
+    }
+
+    node.children?.forEach(visit)
+  }
+  visit(root)
+  files.sort((left, right) => left.path.localeCompare(right.path))
+
+  return {
+    projectId,
+    files,
+    totalFiles: files.length,
+    truncated: false,
+    payloadBudget: null,
   }
 }
 
@@ -312,6 +444,27 @@ function makeProviderAuthSession(overrides: Partial<ProviderAuthSessionDto> = {}
     callbackBound: true,
     authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=test',
     redirectUri: 'http://127.0.0.1:1455/auth/callback',
+    lastErrorCode: null,
+    lastError: null,
+    updatedAt: '2026-04-15T20:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeXaiDeviceCodeLogin(
+  overrides: Partial<XaiDeviceCodeLoginDto> = {},
+): XaiDeviceCodeLoginDto {
+  return {
+    providerId: 'xai',
+    flowId: 'xai-device-flow-1',
+    userCode: 'GROK-1234',
+    verificationUri: 'https://auth.x.ai/device',
+    verificationUriComplete: 'https://auth.x.ai/device?user_code=GROK-1234',
+    intervalSeconds: 5,
+    expiresAt: 1_779_984_000,
+    phase: 'awaiting_manual_input',
+    sessionId: null,
+    accountId: null,
     lastErrorCode: null,
     lastError: null,
     updatedAt: '2026-04-15T20:00:00Z',
@@ -367,6 +520,7 @@ function makeMcpRegistry(overrides: Partial<McpRegistryDto> = {}): McpRegistryDt
 
 function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegistryDto {
   return {
+    contractVersion: 1,
     projectId: 'project-1',
     entries: [],
     plugins: [],
@@ -385,6 +539,7 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
       updatedAt: '2026-04-24T04:00:00Z',
     },
     diagnostics: [],
+    contractDiagnostics: [],
     reloadedAt: '2026-04-24T04:00:00Z',
     ...overrides,
   }
@@ -882,6 +1037,7 @@ function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDt
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00Z',
       },
@@ -907,6 +1063,59 @@ function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDt
   }
 
   return runtimeRun
+}
+
+function makeRuntimeCompletionEvent(
+  projectId = 'project-1',
+  overrides: Omit<Partial<RuntimeStreamEventDto>, 'item'> & {
+    item?: Partial<RuntimeStreamEventDto['item']>
+  } = {},
+): RuntimeStreamEventDto {
+  const runId = overrides.runId ?? overrides.item?.runId ?? 'run-1'
+  const sessionId = overrides.sessionId ?? overrides.item?.sessionId ?? 'session-1'
+  const flowId = overrides.flowId ?? overrides.item?.flowId ?? null
+
+  return {
+    projectId,
+    agentSessionId: overrides.agentSessionId ?? 'agent-session-main',
+    runtimeKind: overrides.runtimeKind ?? 'openai_codex',
+    runId,
+    sessionId,
+    flowId,
+    subscribedItemKinds:
+      overrides.subscribedItemKinds ??
+      ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+    item: {
+      kind: 'complete',
+      runId,
+      sequence: overrides.item?.sequence ?? 10,
+      sessionId,
+      flowId,
+      text: null,
+      transcriptRole: null,
+      toolCallId: null,
+      toolName: null,
+      toolState: null,
+      toolSummary: null,
+      toolResultPreview: null,
+      skillId: null,
+      skillStage: null,
+      skillResult: null,
+      skillSource: null,
+      skillCacheStatus: null,
+      skillDiagnostic: null,
+      actionId: null,
+      boundaryId: null,
+      actionType: null,
+      title: null,
+      detail: 'Agent response complete.',
+      code: null,
+      message: null,
+      retryable: null,
+      createdAt: '2026-04-16T13:30:10Z',
+      ...overrides.item,
+    },
+  }
 }
 
 function makeAutonomousRunState(projectId = 'project-1', runId = 'auto-run-1'): AutonomousRunStateDto {
@@ -1117,6 +1326,8 @@ function createAdapter(options?: {
     const thinkingEffort = options.nextControls?.thinkingEffort ?? options.base.thinkingEffort
     const approvalMode = options.nextControls?.approvalMode ?? options.base.approvalMode
     const planModeRequired = options.nextControls?.planModeRequired ?? options.base.planModeRequired
+    const autoCompactEnabled =
+      options.nextControls?.autoCompactEnabled ?? options.base.autoCompactEnabled ?? true
 
     return {
       active: {
@@ -1126,6 +1337,7 @@ function createAdapter(options?: {
         thinkingEffort,
         approvalMode,
         planModeRequired,
+        autoCompactEnabled,
         revision: options.revision,
         appliedAt: options.appliedAt ?? options.base.appliedAt,
       },
@@ -1138,6 +1350,7 @@ function createAdapter(options?: {
               thinkingEffort,
               approvalMode,
               planModeRequired,
+              autoCompactEnabled,
               revision: options.revision,
               queuedAt: options.queuedAt ?? options.appliedAt ?? options.base.appliedAt,
               queuedPrompt: options.queuedPrompt ?? null,
@@ -1165,30 +1378,48 @@ function createAdapter(options?: {
     })
   }
 
-  const queuePendingRuntimeRunSnapshot = (request?: { controls?: RuntimeRunControlInputDto | null; prompt?: string | null }) => {
+  const queuePendingRuntimeRunSnapshot = (request?: {
+    projectId?: string
+    agentSessionId?: string
+    controls?: RuntimeRunControlInputDto | null
+    prompt?: string | null
+  }) => {
     const activeProfile = getActiveProviderProfileSnapshot()
+    const projectId = request?.projectId ?? currentRuntimeRun?.projectId ?? 'project-1'
+    const agentSessionId =
+      request?.agentSessionId ??
+      currentRuntimeRun?.agentSessionId ??
+      (projectId === GLOBAL_COMPUTER_USE_PROJECT_ID
+        ? GLOBAL_COMPUTER_USE_AGENT_SESSION_ID
+        : 'agent-session-main')
 
     currentRuntimeRun = currentRuntimeRun
-      ? makeRuntimeRun('project-1', {
+      ? makeRuntimeRun(projectId, {
           ...currentRuntimeRun,
+          projectId,
+          agentSessionId,
           runtimeKind: getRuntimeKindForProvider(activeProfile.providerId),
           providerId: activeProfile.providerId,
           controls: mergePendingRuntimeRunControls(currentRuntimeRun, request),
           lastHeartbeatAt: '2026-04-22T12:05:30Z',
           updatedAt: '2026-04-22T12:05:30Z',
         })
-      : makeRuntimeRun('project-1', {
+      : makeRuntimeRun(projectId, {
+          agentSessionId,
           runtimeKind: getRuntimeKindForProvider(activeProfile.providerId),
           providerId: activeProfile.providerId,
           controls: buildRuntimeRunControls({
-            base: makeRuntimeRun('project-1').controls.active,
+            base: makeRuntimeRun(projectId).controls.active,
             nextControls: {
               providerProfileId: request?.controls?.providerProfileId ?? activeProfile.profileId,
-              runtimeAgentId: request?.controls?.runtimeAgentId ?? 'ask',
+              runtimeAgentId:
+                request?.controls?.runtimeAgentId ??
+                (projectId === GLOBAL_COMPUTER_USE_PROJECT_ID ? 'computer_use' : 'ask'),
               modelId: request?.controls?.modelId ?? activeProfile.modelId,
               thinkingEffort: request?.controls?.thinkingEffort ?? 'medium',
               approvalMode: request?.controls?.approvalMode ?? 'suggest',
               planModeRequired: request?.controls?.planModeRequired ?? false,
+              autoCompactEnabled: true,
             },
             revision: 1,
             appliedAt: '2026-04-22T12:05:30Z',
@@ -1203,17 +1434,24 @@ function createAdapter(options?: {
     return currentRuntimeRun
   }
 
-  const startRuntimeRunSnapshot = (options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) => {
+  const startRuntimeRunSnapshot = (
+    projectId = 'project-1',
+    agentSessionId = 'agent-session-main',
+    options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null },
+  ) => {
     const activeProfile = getActiveProviderProfileSnapshot()
     const activeControls = buildRuntimeRunControls({
-      base: makeRuntimeRun('project-1').controls.active,
+      base: makeRuntimeRun(projectId).controls.active,
       nextControls: {
         providerProfileId: options?.initialControls?.providerProfileId ?? activeProfile.profileId,
-        runtimeAgentId: options?.initialControls?.runtimeAgentId ?? 'ask',
+        runtimeAgentId:
+          options?.initialControls?.runtimeAgentId ??
+          (projectId === GLOBAL_COMPUTER_USE_PROJECT_ID ? 'computer_use' : 'ask'),
         modelId: options?.initialControls?.modelId ?? activeProfile.modelId,
         thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
         approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
         planModeRequired: options?.initialControls?.planModeRequired ?? false,
+        autoCompactEnabled: true,
       },
       revision: 1,
       appliedAt: '2026-04-22T12:00:00Z',
@@ -1222,7 +1460,8 @@ function createAdapter(options?: {
       queuedPromptAt: options?.initialPrompt ? '2026-04-22T12:00:30Z' : null,
     })
 
-    currentRuntimeRun = makeRuntimeRun('project-1', {
+    currentRuntimeRun = makeRuntimeRun(projectId, {
+      agentSessionId,
       runtimeKind: getRuntimeKindForProvider(activeProfile.providerId),
       providerId: activeProfile.providerId,
       controls: activeControls,
@@ -1486,8 +1725,8 @@ function createAdapter(options?: {
     return { route }
   })
 
-  const startRuntimeRun = vi.fn(async (_projectId: string, _agentSessionId: string, options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) =>
-    startRuntimeRunSnapshot(options),
+  const startRuntimeRun = vi.fn(async (projectId: string, agentSessionId: string, options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) =>
+    startRuntimeRunSnapshot(projectId, agentSessionId, options),
   )
 
   const updateRuntimeRunControls = vi.fn(async (request?: {
@@ -1592,7 +1831,10 @@ function createAdapter(options?: {
       currentProjects = currentProjects.filter((project) => project.id !== projectId)
       return { projects: currentProjects }
     },
-    getProjectSnapshot: async () => currentSnapshot,
+    getProjectSnapshot: async (projectId) =>
+      projectId === GLOBAL_COMPUTER_USE_PROJECT_ID
+        ? makeComputerUseSnapshot()
+        : currentSnapshot,
     getProjectUsageSummary: async (projectId: string) => ({
       ...currentUsageSummary,
       projectId,
@@ -1601,9 +1843,48 @@ function createAdapter(options?: {
     }),
     getRepositoryStatus: async () => currentStatus,
     getRepositoryDiff: async (_projectId, scope) => ({ ...currentDiff, scope }),
+    applySelectiveUndo: async () => ({
+      operation: {
+        projectId: 'project-1',
+        operationId: 'code-undo-test',
+        mode: 'selective_undo' as const,
+        status: 'completed' as const,
+        target: {
+          targetKind: 'change_group' as const,
+          targetId: 'code-change-1',
+          hunkIds: [],
+        },
+        affectedPaths: ['client/src/file.ts'],
+        conflicts: [],
+        resultCommitId: 'code-commit-undo-test',
+        resultChangeGroupId: 'code-change-undo-test',
+        createdAt: '2026-05-06T12:00:00Z',
+        updatedAt: '2026-05-06T12:00:01Z',
+      },
+    }),
+    returnSessionToHere: async () => ({
+      operation: {
+        projectId: 'project-1',
+        operationId: 'return-session-test',
+        mode: 'session_rollback' as const,
+        status: 'completed' as const,
+        target: {
+          targetKind: 'run_boundary' as const,
+          targetId: 'run-1:boundary-1',
+          hunkIds: [],
+        },
+        affectedPaths: ['client/src/file.ts'],
+        conflicts: [],
+        resultCommitId: 'code-commit-return-session-test',
+        resultChangeGroupId: 'code-change-return-session-test',
+        createdAt: '2026-05-06T12:00:00Z',
+        updatedAt: '2026-05-06T12:00:01Z',
+      },
+    }),
     gitStagePaths: async () => undefined,
     gitUnstagePaths: async () => undefined,
     gitDiscardChanges: async () => undefined,
+    gitRevertPatch: async () => undefined,
     gitCommit: async () => ({ sha: 'abc1234', summary: 'mock commit', signature: { name: 'Mock', email: 'mock@example.com' } }),
     gitGenerateCommitMessage: async () => ({
       message: 'feat: mock generated commit',
@@ -1614,6 +1895,8 @@ function createAdapter(options?: {
     gitFetch: async () => ({ remote: 'origin', refspecs: [] }),
     gitPull: async () => ({ remote: 'origin', branch: 'main', updated: false, summary: 'already up to date', newHeadSha: null }),
     gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),
+    listProjectFileIndex: async (request) =>
+      makeProjectFileIndex(request.projectId, currentProjectFiles.root, request.includeHidden ?? false),
     listProjectFiles: async () => currentProjectFiles,
     readProjectFile: async (projectId, path) => ({
       kind: 'text' as const,
@@ -1628,7 +1911,16 @@ function createAdapter(options?: {
     }),
     writeProjectFile: async (projectId, path, content) => {
       currentFileContents[path] = content
-      return { projectId, path }
+      return {
+        projectId,
+        path,
+        byteLength: content.length,
+        modifiedAt: '2026-01-01T00:00:01Z',
+        contentHash: `saved-${path}-${content.length}`,
+        mimeType: 'text/plain; charset=utf-8',
+        rendererKind: 'code' as const,
+        preview: null,
+      }
     },
     createProjectEntry: async (request) => {
       currentFileContents[request.parentPath === '/' ? `/${request.name}` : `${request.parentPath}/${request.name}`] = ''
@@ -1760,11 +2052,67 @@ function createAdapter(options?: {
       updatedAt: null,
       diagnostics: [],
     }),
+    listProjectContextRecords: async ({ projectId }) => ({
+      schema: 'xero.project_context_record_list_command.v1' as const,
+      projectId,
+      records: [],
+      uiDeferred: true,
+    }),
+    deleteProjectContextRecord: async ({ projectId, recordId }) => ({
+      schema: 'xero.project_context_record_delete_command.v1' as const,
+      projectId,
+      recordId,
+      retrievalRemoved: true,
+      uiDeferred: true,
+    }),
+    supersedeProjectContextRecord: async ({
+      projectId,
+      supersededRecordId,
+      supersedingRecordId,
+    }) => ({
+      schema: 'xero.project_context_record_supersede_command.v1' as const,
+      projectId,
+      supersededRecordId,
+      supersedingRecordId,
+      retrievalChanged: true,
+      uiDeferred: true,
+    }),
     listAgentDefinitions: async () => ({ definitions: [] }),
     archiveAgentDefinition: async () => {
       throw new Error('archiveAgentDefinition not stubbed in test adapter')
     },
     getAgentDefinitionVersion: async () => null,
+    getAgentDefinitionVersionDiff: async () => {
+      throw new Error('getAgentDefinitionVersionDiff not stubbed in test adapter')
+    },
+    saveAgentDefinition: async () => {
+      throw new Error('saveAgentDefinition not stubbed in test adapter')
+    },
+    updateAgentDefinition: async () => {
+      throw new Error('updateAgentDefinition not stubbed in test adapter')
+    },
+    previewAgentDefinition: async () => {
+      throw new Error('previewAgentDefinition not stubbed in test adapter')
+    },
+    setAgentDefaultModel: async () => ({ defaultModel: null }),
+    listWorkflowAgents: async () => ({ agents: [] }),
+    getWorkflowAgentDetail: async () => {
+      throw new Error('getWorkflowAgentDetail not stubbed in test adapter')
+    },
+    getAgentAuthoringCatalog: async () => ({
+      contractVersion: 1,
+      tools: [],
+      toolCategories: [],
+      dbTables: [],
+      upstreamArtifacts: [],
+      attachableSkills: [],
+      policyControls: [],
+      templates: [],
+      creationFlows: [],
+      profileAvailability: [],
+      constraintExplanations: [],
+      diagnostics: [],
+    }),
     createAgentSession: async (request) => {
       const now = '2026-04-23T12:00:00Z'
       const selected = request.selected ?? true
@@ -1901,7 +2249,13 @@ function createAdapter(options?: {
       )
     },
     getAutonomousRun: async () => currentAutonomousState ?? { run: null },
-    getRuntimeRun: async () => currentRuntimeRun,
+    ensureGlobalComputerUseSession: async () => ({
+      projectId: GLOBAL_COMPUTER_USE_PROJECT_ID,
+      agentSessionId: GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
+      session: makeComputerUseAgentSession(),
+    }),
+    getRuntimeRun: async (projectId) =>
+      currentRuntimeRun?.projectId === projectId ? currentRuntimeRun : null,
     listMcpServers,
     upsertMcpServer,
     removeMcpServer,
@@ -1951,24 +2305,6 @@ function createAdapter(options?: {
         requiredFeatures: options?.requiredFeatures,
       })
     },
-    checkProviderProfile: async (profileId) => {
-      const currentProfile = currentProviderProfiles.profiles.find((profile) => profile.profileId === profileId)
-      if (!currentProfile) {
-        throw new Error(`Missing provider profile ${profileId}`)
-      }
-
-      const modelCatalog = currentProviderModelCatalogs[profileId] ?? buildProviderModelCatalog(currentProfile)
-      currentProviderModelCatalogs[profileId] = modelCatalog
-      return {
-        checkedAt: '2026-04-26T12:00:00Z',
-        profileId,
-        providerId: currentProfile.providerId,
-        validationChecks: [],
-        reachabilityChecks: [],
-        capabilityChecks: [],
-        modelCatalog,
-      }
-    },
     runDoctorReport: async (request) =>
       createXeroDoctorReport({
         reportId: 'doctor-test',
@@ -1980,7 +2316,10 @@ function createAdapter(options?: {
           runtimeProtocolVersion: 'supervisor-v1',
         },
       }),
-    getRuntimeSession: async () => currentRuntimeSession,
+    getRuntimeSession: async (projectId) =>
+      currentRuntimeSession.projectId === projectId
+        ? currentRuntimeSession
+        : makeRuntimeSession(projectId),
     startOpenAiLogin: async (_options) => {
       return makeProviderAuthSession({
         phase: 'awaiting_browser_callback',
@@ -2002,12 +2341,16 @@ function createAdapter(options?: {
     completeOAuthCallback: async () => {
       return makeProviderAuthSession()
     },
-    startRuntimeSession: async () => {
-      currentRuntimeSession = makeRuntimeSession('project-1')
+    startXaiDeviceCodeLogin: async () => makeXaiDeviceCodeLogin(),
+    pollXaiDeviceCodeLogin: async (request) =>
+      makeXaiDeviceCodeLogin({ flowId: request.flowId }),
+    startRuntimeSession: async (projectId) => {
+      currentRuntimeSession = makeRuntimeSession(projectId)
       return currentRuntimeSession
     },
     stopRuntimeRun: async (_projectId, _agentSessionId, runId) => {
-      currentRuntimeRun = makeRuntimeRun('project-1', {
+      currentRuntimeRun = makeRuntimeRun(_projectId, {
+        agentSessionId: _agentSessionId,
         runId,
         status: 'stopped',
         stoppedAt: '2026-04-15T20:10:00Z',
@@ -2038,8 +2381,8 @@ function createAdapter(options?: {
       }
       return currentAutonomousState
     },
-    logoutRuntimeSession: async () => {
-      currentRuntimeSession = makeRuntimeSession('project-1', {
+    logoutRuntimeSession: async (projectId) => {
+      currentRuntimeSession = makeRuntimeSession(projectId, {
         phase: 'idle',
         sessionId: null,
         accountId: null,
@@ -2311,6 +2654,17 @@ function ActivatedSurfaceProbe({
   return <div data-mounted={mounted ? 'true' : 'false'}>surface</div>
 }
 
+function StickyPrewarmedSurfaceProbe({
+  active,
+  prewarm,
+}: {
+  active: boolean
+  prewarm?: boolean
+}) {
+  const mounted = useStickyPrewarmedSurface(active, prewarm)
+  return <div data-mounted={mounted ? 'true' : 'false'}>sticky surface</div>
+}
+
 describe('useActivatedSurface', () => {
   it('mounts a prewarmed surface only during the warmup window', () => {
     const { rerender } = render(<ActivatedSurfaceProbe active={false} prewarm />)
@@ -2333,6 +2687,18 @@ describe('useActivatedSurface', () => {
   })
 })
 
+describe('useStickyPrewarmedSurface', () => {
+  it('keeps a prewarmed heavy surface mounted after the warmup window', () => {
+    const { rerender } = render(<StickyPrewarmedSurfaceProbe active={false} prewarm />)
+
+    expect(screen.getByText('sticky surface')).toHaveAttribute('data-mounted', 'true')
+
+    rerender(<StickyPrewarmedSurfaceProbe active={false} prewarm={false} />)
+
+    expect(screen.getByText('sticky surface')).toHaveAttribute('data-mounted', 'true')
+  })
+})
+
 describe('XeroApp current UI', () => {
   it('shows the onboarding flow on a cold-start empty state', async () => {
     const { adapter, getEnvironmentDiscoveryStatus, startEnvironmentDiscovery } = createAdapter({
@@ -2347,7 +2713,7 @@ describe('XeroApp current UI', () => {
     render(<XeroApp adapter={adapter} />)
 
     expect(await screen.findByRole('heading', { name: /Welcome to Xero/i })).toBeVisible()
-    expect(screen.getByText('OpenAI, Anthropic, Ollama, Bedrock, Vertex, and more')).toBeVisible()
+    expect(screen.getByText('OpenAI, Cursor, Anthropic, Ollama, Bedrock, Vertex, and more')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Get started' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Skip setup' })).toBeVisible()
     expect(screen.queryByLabelText('Status bar')).not.toBeInTheDocument()
@@ -2502,6 +2868,10 @@ describe('XeroApp current UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: 'Review environment access' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByRole('heading', { name: 'Early beta' })).toBeVisible()
+    expect(screen.getByText('Xero is still early. You may hit rough edges or unexpected issues.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Enter Xero' })).toBeVisible()
     expect(getEnvironmentDiscoveryStatus).toHaveBeenCalledTimes(1)
     expect(startEnvironmentDiscovery).not.toHaveBeenCalled()
   })
@@ -2570,12 +2940,11 @@ describe('XeroApp current UI', () => {
     expect(await screen.findByRole('button', { name: 'Workflow' })).toBeVisible()
     expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByText('Orchestra').closest('button') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Orchestra' }))
 
     await waitFor(() => expect(adapter.getProjectSnapshot).toHaveBeenCalledWith('project-2'))
     expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Workflow' })).toBeVisible()
-    expect(screen.getByText('Refreshing…')).toBeInTheDocument()
 
     await act(async () => {
       resolveProjectTwo(makeSnapshot('project-2', 'Orchestra'))
@@ -2749,6 +3118,100 @@ describe('XeroApp current UI', () => {
     expect(screen.queryByText('Xero Desktop')).not.toBeInTheDocument()
   })
 
+  it('starts hand authoring and opens Agent Create from the workflow empty state', async () => {
+    const { adapter } = createAdapter()
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
+
+    // The "Create agent" affordance now opens a dialog so the user can pick
+    // between starting blank and copying a template. The blank path should
+    // land on the authoring canvas.
+    expect(await screen.findByRole('heading', { name: 'Create agent' })).toBeVisible()
+    fireEvent.click(await screen.findByRole('button', { name: /New agent/ }))
+
+    expect(await screen.findByLabelText('Agent authoring canvas')).toBeVisible()
+    const dock = await screen.findByLabelText('Agent dock')
+    await waitFor(() => expect(dock).toHaveAttribute('aria-hidden', 'false'))
+  })
+
+  it('opens the add-project dialog from the project rail', async () => {
+    const { adapter } = createAdapter()
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    const projectRail = screen.getByRole('complementary', { name: 'Projects' })
+    fireEvent.click(within(projectRail).getByRole('button', { name: 'Import repository' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Add a project' })
+
+    expect(within(dialog).getByRole('heading', { name: 'Add a project' })).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: /Open existing/ })).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: /Create new/ })).toBeVisible()
+  })
+
+  it('defaults the agent dock composer to Agent Create when opened from Workflow', async () => {
+    const { adapter } = createAdapter()
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open agent dock' }))
+
+    const dock = await screen.findByLabelText('Agent dock')
+    await waitFor(() => expect(dock).toHaveAttribute('aria-hidden', 'false'))
+    await waitFor(() =>
+      expect(within(dock).getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent(
+        'Agent Create',
+      ),
+    )
+    expect(screen.queryByLabelText('Agent authoring canvas')).not.toBeInTheDocument()
+  })
+
+  it('opens Computer Use without selecting the agent dock or changing the active project chrome', async () => {
+    const { adapter } = createAdapter({
+      projects: [makeProjectSummary('project-1', 'mesh-lang')],
+      snapshot: makeSnapshot('project-1', 'mesh-lang'),
+      status: makeStatus('project-1', 'mesh-lang'),
+    })
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+    expect(screen.getAllByText('mesh-lang')[0]).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Computer Use' }))
+
+    const dock = await screen.findByLabelText('Agent dock')
+    await waitFor(() => expect(dock).toHaveAttribute('aria-hidden', 'false'))
+    expect(screen.getByRole('button', { name: 'Open agent dock' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    const computerUseTitlebarButton = screen
+      .getAllByRole('button', { name: 'Close Computer Use' })
+      .find((button) => button.getAttribute('aria-pressed') === 'true')
+    expect(computerUseTitlebarButton).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getAllByText('mesh-lang')[0]).toBeVisible()
+  })
+
   it('lazy-activates the agent pane only after the Agent view is opened', async () => {
     const { adapter } = createAdapter()
 
@@ -2768,6 +3231,64 @@ describe('XeroApp current UI', () => {
 
     await waitFor(() =>
       expect(screen.getByLabelText('Agent conversation viewport')).not.toBeVisible(),
+    )
+  })
+
+  it('opens to the persisted main view from app UI state', async () => {
+    const { adapter } = createAdapter()
+    const readAppUiState = vi.fn(async (request: { key: string }) => ({
+      schema: 'xero.app_ui_state.v1' as const,
+      key: request.key,
+      value: request.key === 'app.activeView.v1' ? 'editor' : null,
+      storageScope: 'os_app_data' as const,
+      uiDeferred: true,
+    }))
+    adapter.readAppUiState = readAppUiState
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    expect(screen.getByRole('button', { name: 'Editor' })).toHaveClass('bg-secondary')
+    expect(screen.getByRole('button', { name: 'Workflow' })).not.toHaveClass('bg-secondary')
+    expect(readAppUiState).toHaveBeenCalledWith({ key: 'app.activeView.v1' })
+  })
+
+  it('persists main view changes to app UI state', async () => {
+    const { adapter } = createAdapter()
+    const writeAppUiState = vi.fn(async (request: { key: string; value?: unknown | null }) => ({
+      schema: 'xero.app_ui_state.v1' as const,
+      key: request.key,
+      value: request.value ?? null,
+      storageScope: 'os_app_data' as const,
+      uiDeferred: true,
+    }))
+    adapter.writeAppUiState = writeAppUiState
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+
+    await waitFor(() =>
+      expect(writeAppUiState).toHaveBeenCalledWith({
+        key: 'app.activeView.v1',
+        value: 'agent',
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
+
+    await waitFor(() =>
+      expect(writeAppUiState).toHaveBeenCalledWith({
+        key: 'app.activeView.v1',
+        value: 'editor',
+      }),
     )
   })
 
@@ -2878,7 +3399,7 @@ describe('XeroApp current UI', () => {
     )
   })
 
-  it('opens the sessions peek from the project rail in compact and expanded states', async () => {
+  it('opens the sessions peek from the compact project rail', async () => {
     window.localStorage.setItem('xero.explorer.collapsed', 'collapsed')
     const { adapter } = createAdapter()
 
@@ -2900,14 +3421,9 @@ describe('XeroApp current UI', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Main session' })).not.toBeInTheDocument(),
     )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Expand project sidebar' }))
-    await waitFor(() => expect(getProjectRail()).toHaveAttribute('data-collapsed', 'false'))
-    fireEvent.pointerEnter(getProjectRail())
-    expect(await screen.findByRole('button', { name: 'Main session' })).toBeVisible()
   })
 
-  it('lazy-mounts the workflows sidebar and preserves its local search state while hidden', async () => {
+  it('lazy-mounts the library sidebar and preserves its local agent search state while hidden', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -2916,26 +3432,168 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    expect(document.querySelector('aside[aria-label="Workflows"]')).toBeNull()
+    expect(document.querySelector('aside[aria-label="Library"]')).toBeNull()
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Open workflows' })[0])
 
-    const workflowsPanel = await screen.findByLabelText('Workflows')
-    fireEvent.click(within(workflowsPanel).getByRole('button', { name: 'Search workflows' }))
-    fireEvent.change(within(workflowsPanel).getByRole('searchbox', { name: 'Search workflows' }), {
+    const workflowsPanel = await screen.findByLabelText('Library')
+    fireEvent.click(within(workflowsPanel).getByRole('tab', { name: 'Agents' }))
+    fireEvent.click(within(workflowsPanel).getByRole('button', { name: 'Search agents' }))
+    fireEvent.change(within(workflowsPanel).getByRole('searchbox', { name: 'Search agents' }), {
       target: { value: 'review' },
     })
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Close workflows' })[0])
 
     await waitFor(() =>
-      expect(screen.queryByRole('complementary', { name: 'Workflows' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('complementary', { name: 'Library' })).not.toBeInTheDocument(),
     )
-    expect(document.querySelector('aside[aria-label="Workflows"]')).toHaveAttribute('aria-hidden', 'true')
+    expect(document.querySelector('aside[aria-label="Library"]')).toHaveAttribute('aria-hidden', 'true')
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Open workflows' })[0])
 
-    expect(await screen.findByRole('searchbox', { name: 'Search workflows' })).toHaveValue('review')
+    expect(await screen.findByRole('searchbox', { name: 'Search agents' })).toHaveValue('review')
+  })
+
+  it('reveals the Workflow view when inspecting an agent from the library outside Workflow', async () => {
+    const agentRef = {
+      kind: 'built_in',
+      runtimeAgentId: 'engineer',
+      version: 1,
+    } satisfies AgentRefDto
+    const agentSummary: WorkflowAgentSummaryDto = {
+      ref: agentRef,
+      displayName: 'Engineer',
+      shortLabel: 'Build',
+      description: 'Implements repository changes.',
+      scope: 'built_in',
+      lifecycleState: 'active',
+      baseCapabilityProfile: 'engineering',
+      lastUsedAt: null,
+      useCount: 0,
+    }
+    const agentDetail: WorkflowAgentDetailDto = {
+      ref: agentRef,
+      header: {
+        displayName: 'Engineer',
+        shortLabel: 'Build',
+        description: 'Implements repository changes.',
+        taskPurpose: 'Inspect, plan, edit, verify.',
+        scope: 'built_in',
+        lifecycleState: 'active',
+        baseCapabilityProfile: 'engineering',
+        defaultApprovalMode: 'suggest',
+        allowedApprovalModes: ['suggest'],
+        allowPlanGate: true,
+        allowVerificationGate: true,
+        allowAutoCompact: true,
+      },
+      promptPolicy: 'engineer',
+      toolPolicy: 'engineering',
+      prompts: [],
+      tools: [],
+      dbTouchpoints: {
+        reads: [],
+        writes: [],
+        encouraged: [],
+      },
+      output: {
+        contract: 'engineering_summary',
+        label: 'Engineering Summary',
+        description: 'Summary text.',
+        sections: [],
+      },
+      consumes: [],
+      attachedSkills: [],
+      graphProjection: {
+        schema: 'xero.workflow_agent_graph_projection.v1',
+        nodes: [],
+        edges: [],
+        groups: [],
+      },
+    }
+    const { adapter } = createAdapter()
+    const getWorkflowAgentDetail = vi.fn(async () => agentDetail)
+    adapter.listWorkflowAgents = vi.fn(async () => ({ agents: [agentSummary] }))
+    adapter.getWorkflowAgentDetail = getWorkflowAgentDetail
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
+    expect(await screen.findByText('README.md')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Editor' })).toHaveClass('bg-secondary')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open workflows' }))
+
+    const library = await screen.findByLabelText('Library')
+    fireEvent.click(within(library).getByRole('tab', { name: 'Agents' }))
+    fireEvent.click(await within(library).findByLabelText('Inspect Engineer'))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Workflow' })).toHaveClass('bg-secondary'),
+    )
+    expect(screen.getByRole('button', { name: 'Editor' })).not.toHaveClass('bg-secondary')
+    expect(getWorkflowAgentDetail).toHaveBeenCalledWith({ projectId: 'project-1', ref: agentRef })
+
+    const selectedAgentHeader = await screen.findByLabelText('Selected agent')
+    expect(within(selectedAgentHeader).getByText('Engineer')).toBeVisible()
+    expect(library).toHaveAttribute('aria-hidden', 'false')
+  })
+
+  it('uses an agent from the library menu in the Agent chat composer', async () => {
+    const agentRef = {
+      kind: 'built_in',
+      runtimeAgentId: 'engineer',
+      version: 1,
+    } satisfies AgentRefDto
+    const agentSummary: WorkflowAgentSummaryDto = {
+      ref: agentRef,
+      displayName: 'Engineer',
+      shortLabel: 'Build',
+      description: 'Implements repository changes.',
+      scope: 'built_in',
+      lifecycleState: 'active',
+      baseCapabilityProfile: 'engineering',
+      lastUsedAt: null,
+      useCount: 0,
+    }
+    const { adapter } = createAdapter()
+    adapter.listWorkflowAgents = vi.fn(async () => ({ agents: [agentSummary] }))
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
+    expect(await screen.findByText('README.md')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open workflows' }))
+    const library = await screen.findByLabelText('Library')
+    fireEvent.click(within(library).getByRole('tab', { name: 'Agents' }))
+    fireEvent.pointerDown(
+      await within(library).findByRole('button', { name: 'More actions for Engineer' }),
+      {
+        button: 0,
+        ctrlKey: false,
+      },
+    )
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Use in Chat' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Agent' })).toHaveClass('bg-secondary'),
+    )
+    expect(screen.getByRole('button', { name: 'Editor' })).not.toHaveClass('bg-secondary')
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent(
+        'Engineer',
+      ),
+    )
   })
 
   it('renders live git footer data from desktop state while leaving mock-only fields untouched', async () => {
@@ -3070,6 +3728,31 @@ describe('XeroApp current UI', () => {
     })
   })
 
+  it('shows completed session notifications in the footer until the session is viewed', async () => {
+    const { adapter, emitRuntimeStream, streamSubscriptions } = createAdapter({
+      runtimeRun: makeRuntimeRun('project-1', { runId: 'run-1' }),
+    })
+
+    render(<XeroApp adapter={adapter} />)
+
+    expect(await screen.findByRole('button', { name: 'Workflow' })).toBeVisible()
+    await waitFor(() => expect(streamSubscriptions).toHaveLength(1))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByLabelText('0 unread notifications')).toBeVisible()
+
+    act(() => {
+      emitRuntimeStream(0, makeRuntimeCompletionEvent('project-1'))
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('1 unread notifications')).toBeVisible())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByLabelText('Agent conversation viewport')).toBeVisible()
+    await waitFor(() => expect(screen.getByLabelText('0 unread notifications')).toBeVisible())
+  })
+
   it('opens the project usage sidebar from the footer spend button on the first click', async () => {
     const { adapter } = createAdapter()
 
@@ -3093,13 +3776,13 @@ describe('XeroApp current UI', () => {
     const panel = await screen.findByRole('complementary', {
       name: 'Project usage statistics',
     })
-    expect(panel).not.toHaveClass('invisible')
-    expect(panel.style.transform).toBe('')
-    expect(panel.style.transition).toBe('')
+    expect(panel).toHaveAttribute('data-slot', 'floating-right-sidebar-panel')
+    expect(panel).toHaveClass('gpu-layer')
+    expect(document.querySelector('[data-slot="floating-right-sidebar-overlay"]')).toBeInTheDocument()
     expect(screen.getByText('No agent runs recorded for this project yet.')).toBeVisible()
   })
 
-  it('collapses the project rail into a compact icon strip from the titlebar toggle', async () => {
+  it('renders the project rail as a compact icon strip', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -3108,16 +3791,12 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    const collapseButton = screen.getByRole('button', { name: 'Collapse project sidebar' })
-    fireEvent.click(collapseButton)
-
-    expect(screen.getByRole('button', { name: 'Expand project sidebar' })).toBeVisible()
     expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull()
     expect(screen.queryByRole('button', { name: 'Project actions for xero' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /xero/i })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Open Xero (active)' })).toBeVisible()
   })
 
-  it('keeps the project rail animated on the workflow canvas view', async () => {
+  it('keeps the compact project rail on the workflow canvas view', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -3129,7 +3808,8 @@ describe('XeroApp current UI', () => {
     const rail = document.querySelector('aside[data-collapsed]') as HTMLElement
 
     expect(screen.getByLabelText('Workflow canvas')).toBeInTheDocument()
-    expect(rail.style.transition).toContain('width')
+    expect(rail).toHaveAttribute('data-collapsed', 'true')
+    expect(rail).toHaveClass('sidebar-layout-island')
   })
 
   it('opens the Solana workbench from the titlebar in the normal app shell', async () => {
@@ -3141,11 +3821,10 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Open Solana workbench' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open Solana workbench' }))
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Tools' })).toHaveAttribute('aria-pressed', 'true'),
+      expect(screen.getByRole('button', { name: 'Close Solana workbench' })).toHaveAttribute('aria-pressed', 'true'),
     )
     const breadcrumb = await screen.findByRole('navigation', {
       name: 'Solana Workbench breadcrumb',
@@ -3155,7 +3834,7 @@ describe('XeroApp current UI', () => {
     expect(within(breadcrumb).getByText('Cluster')).toBeVisible()
   })
 
-  it('opens the preloaded Solana workbench without waiting for an animation frame', async () => {
+  it('shows the Solana opening shell before mounting the heavy workbench chunk', async () => {
     const { adapter } = createAdapter()
     await import('@/components/xero/solana-workbench-sidebar')
     const originalRequestAnimationFrame = window.requestAnimationFrame
@@ -3181,14 +3860,14 @@ describe('XeroApp current UI', () => {
         expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
       )
 
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Open Solana workbench' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Open Solana workbench' }))
 
-      const breadcrumb = screen.getByRole('navigation', {
-        name: 'Solana Workbench breadcrumb',
-      })
-      expect(within(breadcrumb).getByText('Solana Workbench')).toBeVisible()
-      expect(screen.queryByLabelText('Loading Solana Workbench')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Loading Solana Workbench')).toBeInTheDocument()
+      expect(
+        screen.queryByRole('navigation', {
+          name: 'Solana Workbench breadcrumb',
+        }),
+      ).not.toBeInTheDocument()
     } finally {
       Object.defineProperty(window, 'requestAnimationFrame', {
         configurable: true,
@@ -3201,7 +3880,7 @@ describe('XeroApp current UI', () => {
     }
   })
 
-  it('auto-collapses the project rail for a non-floating right sidebar but allows manual expansion', async () => {
+  it('keeps the project rail compact while a non-floating right sidebar is open', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -3210,26 +3889,18 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    expect(document.querySelector('aside[data-collapsed="false"]')).not.toBeNull()
+    expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull()
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
 
     await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
-    expect(screen.getByRole('button', { name: 'Expand project sidebar' })).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand project sidebar' }))
-    await waitFor(() => expect(document.querySelector('aside[data-collapsed="false"]')).not.toBeNull())
-    expect(screen.getByRole('button', { name: 'Collapse project sidebar' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Close browser' }))
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Close browser' }))
-
-    await waitFor(() => expect(document.querySelector('aside[data-collapsed="false"]')).not.toBeNull())
-    expect(screen.getByRole('button', { name: 'Collapse project sidebar' })).toBeVisible()
+    await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
   })
 
-  it('starts GitHub auth from the titlebar without opening Account settings', async () => {
+  it('omits the GitHub account button from the titlebar', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -3238,14 +3909,14 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in with GitHub' }))
-
-    await waitFor(() => expect(githubLoginMock).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open browser' })).toBeVisible()
+    expect(githubLoginMock).not.toHaveBeenCalled()
     expect(screen.queryByRole('heading', { name: 'Account' })).not.toBeInTheDocument()
     expect(screen.queryByText('Connect your GitHub account to identify this install.')).not.toBeInTheDocument()
   })
 
-  it('auto-collapses the project rail in Editor and restores it when leaving if it started expanded', async () => {
+  it('keeps the project rail compact in Editor and after returning to Workflow', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -3254,20 +3925,18 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    expect(document.querySelector('aside[data-collapsed="false"]')).not.toBeNull()
+    expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
 
     await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
-    expect(screen.getByRole('button', { name: 'Expand project sidebar' })).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Workflow' }))
 
-    await waitFor(() => expect(document.querySelector('aside[data-collapsed="false"]')).not.toBeNull())
-    expect(screen.getByRole('button', { name: 'Collapse project sidebar' })).toBeVisible()
+    await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
   })
 
-  it('keeps the project rail collapsed after leaving Editor when it was already collapsed', async () => {
+  it('keeps the project rail compact after leaving Editor for Agent', async () => {
     const { adapter } = createAdapter()
 
     render(<XeroApp adapter={adapter} />)
@@ -3276,7 +3945,6 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse project sidebar' }))
     await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
 
     fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
@@ -3284,7 +3952,6 @@ describe('XeroApp current UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
     await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
-    expect(screen.getByRole('button', { name: 'Expand project sidebar' })).toBeVisible()
   })
 
 
@@ -3375,7 +4042,7 @@ describe('XeroApp current UI', () => {
     )
     await act(async () => {})
     await waitFor(() => expect(setup.onProjectUpdated).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('button', { name: 'Xero' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Open Xero (active)' })).toBeVisible()
 
     act(() => {
       setup.emitProjectUpdated({
@@ -3385,9 +4052,9 @@ describe('XeroApp current UI', () => {
     })
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Xero Prime' })).toBeVisible(),
+      expect(screen.getByRole('button', { name: 'Open Xero Prime (active)' })).toBeVisible(),
     )
-    expect(screen.queryByRole('button', { name: 'Xero' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open Xero (active)' })).not.toBeInTheDocument()
   })
 
 
@@ -3422,9 +4089,10 @@ describe('XeroApp current UI', () => {
 
     fireEvent.click(screen.getByLabelText('Settings'))
     expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
+    const openAiCodexCard = getProviderCard('OpenAI Codex')
+    expect(within(openAiCodexCard).getByRole('button', { name: 'Sign in' })).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    fireEvent.click(within(openAiCodexCard).getByRole('button', { name: 'Sign in' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
     expect(await screen.findByText('Telegram')).toBeVisible()

@@ -3,8 +3,9 @@
 //! On non-macOS hosts the struct is returned empty — the iOS pipeline is
 //! gated by `cfg(target_os = "macos")` everywhere else.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::{path::Path, process::Command};
 
 use serde::Serialize;
 
@@ -64,6 +65,7 @@ pub fn probe_with_app<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> IosSdk {
     IosSdk::default()
 }
 
+#[cfg(target_os = "macos")]
 fn which_binary(name: &str) -> Option<PathBuf> {
     let locator = if cfg!(windows) { "where" } else { "which" };
     if let Ok(out) = Command::new(locator).arg(name).output() {
@@ -107,6 +109,7 @@ fn locate_simctl() -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "macos")]
 fn find_idb_companion() -> Option<PathBuf> {
     // Check standard install locations from `brew install facebook/fb/idb-companion`
     // as well as any locally-bundled sidecar path. The Tauri app will set the

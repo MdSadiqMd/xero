@@ -24,17 +24,22 @@ if (!HTMLElement.prototype.releasePointerCapture) {
 
 import {
   AgentRuntime,
+  type AgentRuntimeDesktopAdapter,
   isRuntimeConversationNearBottom,
 } from '@/components/xero/agent-runtime'
 import type { SpeechDictationAdapter } from '@/components/xero/agent-runtime/use-speech-dictation'
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type { DictationEventDto, DictationStatusDto } from '@/src/lib/xero-model/dictation'
 import type {
+  AgentDefinitionSummaryDto,
   ProjectDetailView,
   RuntimeRunView,
+  RuntimeStreamActivityItemView,
   RuntimeSessionView,
   RuntimeStreamToolItemView,
 } from '@/src/lib/xero-model'
+
+const COMPOSER_SETTINGS_STORAGE_KEY = 'xero.agent.composer.settings.v1'
 
 function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailView {
   return {
@@ -51,6 +56,7 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     branchLabel: 'No branch',
     runtimeLabel: 'Runtime unavailable',
     phaseProgressPercent: 0,
+    startTargets: [],
     repository: {
       id: 'repo-1',
       projectId: 'project-1',
@@ -153,6 +159,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         approvalMode: 'suggest',
         approvalModeLabel: 'Suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00Z',
       },
@@ -170,6 +177,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         approvalMode: 'suggest',
         approvalModeLabel: 'Suggest',
         planModeRequired: false,
+        autoCompactEnabled: true,
         revision: 1,
         effectiveAt: '2026-04-15T20:00:00Z',
         queuedPrompt: null,
@@ -259,6 +267,23 @@ function makeProviderModelCatalog(
   }
 }
 
+function makeComposerModelOption(
+  overrides: Partial<NonNullable<AgentPaneView['composerModelOptions']>[number]> = {},
+): NonNullable<AgentPaneView['composerModelOptions']>[number] {
+  return {
+    selectionKey: 'openai_codex:openai_codex',
+    profileId: 'openai_codex-default',
+    providerId: 'openai_codex',
+    providerLabel: 'OpenAI Codex',
+    modelId: 'openai_codex',
+    displayName: 'openai_codex',
+    thinking: { supported: true, effortOptions: ['medium'], defaultEffort: 'medium' },
+    thinkingEffortOptions: ['medium'],
+    defaultThinkingEffort: 'medium',
+    ...overrides,
+  }
+}
+
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
   const project = overrides.project ?? makeProject()
   const runtimeSession = overrides.runtimeSession ?? null
@@ -308,6 +333,7 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     selectedModelId,
     selectedThinkingEffort: overrides.selectedThinkingEffort ?? selectedModelOption?.defaultThinkingEffort ?? null,
     selectedApprovalMode: overrides.selectedApprovalMode ?? 'suggest',
+    selectedAutoCompactEnabled: overrides.selectedAutoCompactEnabled ?? true,
     selectedPrompt:
       overrides.selectedPrompt ??
       ({
@@ -457,12 +483,14 @@ function createDictationAdapter(options: {
 function makeTranscriptItem(options: {
   sequence: number
   role?: 'user' | 'assistant'
+  runId?: string
   text: string
 }) {
+  const runId = options.runId ?? 'run-1'
   return {
-    id: `transcript:run-1:${options.sequence}`,
+    id: `transcript:${runId}:${options.sequence}`,
     kind: 'transcript' as const,
-    runId: 'run-1',
+    runId,
     sequence: options.sequence,
     createdAt: `2026-04-29T00:48:${String(options.sequence).padStart(2, '0')}Z`,
     role: options.role ?? 'assistant',
@@ -511,6 +539,81 @@ function makeReasoningItem(options: {
   }
 }
 
+function makeFileChangeItem(
+  options: Partial<RuntimeStreamActivityItemView> & {
+    sequence: number
+    detail?: string | null
+    codeChangeGroupId?: string | null
+  },
+): RuntimeStreamActivityItemView {
+  const { sequence, ...rest } = options
+
+  return {
+    id: `activity:run-1:${sequence}`,
+    kind: 'activity',
+    runId: 'run-1',
+    sequence,
+    createdAt: `2026-04-29T00:48:${String(sequence).padStart(2, '0')}Z`,
+    code: 'owned_agent_file_changed',
+    title: 'File changed',
+    text: null,
+    detail: 'modify: client/src/file.ts',
+    codeChangeGroupId: 'code-change-1',
+    ...rest,
+  }
+}
+
+type CodeUndoResponse = Awaited<ReturnType<NonNullable<AgentRuntimeDesktopAdapter['applySelectiveUndo']>>>
+type ReturnSessionToHereResponse = Awaited<ReturnType<NonNullable<AgentRuntimeDesktopAdapter['returnSessionToHere']>>>
+
+function makeCodeUndoResponse(overrides: Partial<CodeUndoResponse['operation']> = {}): CodeUndoResponse {
+  return {
+    operation: {
+      projectId: 'project-1',
+      operationId: 'code-undo-operation-1',
+      mode: 'selective_undo',
+      status: 'completed',
+      target: {
+        targetKind: 'change_group',
+        targetId: 'code-change-1',
+        hunkIds: [],
+      },
+      affectedPaths: ['client/src/file.ts'],
+      conflicts: [],
+      resultCommitId: 'code-commit-undo-1',
+      resultChangeGroupId: 'code-change-undo-1',
+      createdAt: '2026-05-06T12:00:00Z',
+      updatedAt: '2026-05-06T12:00:01Z',
+      ...overrides,
+    },
+  }
+}
+
+function makeReturnSessionToHereResponse(
+  overrides: Partial<ReturnSessionToHereResponse['operation']> = {},
+): ReturnSessionToHereResponse {
+  return {
+    operation: {
+      projectId: 'project-1',
+      operationId: 'code-return-session-operation-1',
+      mode: 'session_rollback',
+      status: 'completed',
+      target: {
+        targetKind: 'run_boundary',
+        targetId: 'run-1:change_group:code-change-1',
+        hunkIds: [],
+      },
+      affectedPaths: ['client/src/file.ts'],
+      conflicts: [],
+      resultCommitId: 'code-commit-return-session-1',
+      resultChangeGroupId: 'code-change-return-session-1',
+      createdAt: '2026-05-06T12:00:00Z',
+      updatedAt: '2026-05-06T12:00:01Z',
+      ...overrides,
+    },
+  }
+}
+
 function setScrollMetrics(
   element: HTMLElement,
   metrics: { scrollTop: number; scrollHeight: number; clientHeight: number },
@@ -530,9 +633,13 @@ function setScrollMetrics(
   })
 }
 
-function renderRuntimeStreamItems(runtimeStreamItems: NonNullable<AgentPaneView['runtimeStreamItems']>) {
+function renderRuntimeStreamItems(
+  runtimeStreamItems: NonNullable<AgentPaneView['runtimeStreamItems']>,
+  props: Omit<Partial<ComponentProps<typeof AgentRuntime>>, 'agent'> = {},
+) {
   return render(
     <AgentRuntime
+      {...props}
       agent={makeAgent({
         runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
         runtimeRun: makeRuntimeRun(),
@@ -542,6 +649,28 @@ function renderRuntimeStreamItems(runtimeStreamItems: NonNullable<AgentPaneView[
       })}
     />,
   )
+}
+
+function openUndoMenu(path = 'client/src/file.ts') {
+  fireEvent.pointerDown(screen.getByRole('button', { name: `Open undo menu for ${path}` }), {
+    button: 0,
+    ctrlKey: false,
+  })
+}
+
+function clickUndoFileChange(path = 'client/src/file.ts') {
+  openUndoMenu(path)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Undo this file change' }))
+}
+
+function clickUndoChangeGroup(path = 'client/src/file.ts') {
+  openUndoMenu(path)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Undo entire change group' }))
+}
+
+function clickReturnSessionToHere(path = 'client/src/file.ts') {
+  openUndoMenu(path)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Return this session to here' }))
 }
 
 function installClipboardWriteMock() {
@@ -623,6 +752,36 @@ describe('AgentRuntime current UI', () => {
     expect(exportAgentTrace).not.toHaveBeenCalled()
   })
 
+  it('turns the composer send control into a stop control while an agent run is active', async () => {
+    const onStopRuntimeRun = vi.fn(async () =>
+      makeRuntimeRun({
+        status: 'stopped',
+        statusLabel: 'Run stopped',
+        isActive: false,
+        isTerminal: true,
+        stoppedAt: '2026-04-29T00:48:09Z',
+      }),
+    )
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+        })}
+        onStopRuntimeRun={onStopRuntimeRun}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Send message' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop agent run' }))
+
+    await waitFor(() => expect(onStopRuntimeRun).toHaveBeenCalledWith('run-1'))
+  })
+
   it('does not render worker lifecycle cards on the Agent tab', () => {
     render(
       <AgentRuntime
@@ -666,11 +825,13 @@ describe('AgentRuntime current UI', () => {
             selectedAgentSession: {
               projectId: 'project-1',
               agentSessionId: 'agent-session-main',
+              sessionKind: 'standard',
               title: 'Main chat',
               summary: '',
               status: 'active',
               statusLabel: 'Active',
               selected: true,
+              remoteVisible: false,
               createdAt: '2026-05-01T11:00:00Z',
               updatedAt: '2026-05-01T11:00:00Z',
               archivedAt: null,
@@ -680,6 +841,7 @@ describe('AgentRuntime current UI', () => {
               lineage: null,
               isActive: true,
               isArchived: false,
+              isComputerUse: false,
             },
           }),
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
@@ -753,6 +915,7 @@ describe('AgentRuntime current UI', () => {
           thinkingEffort: null,
           approvalMode: 'suggest',
           planModeRequired: false,
+          autoCompactEnabled: true,
         },
         prompt: '1+1',
       }),
@@ -790,6 +953,7 @@ describe('AgentRuntime current UI', () => {
             skillItems: [],
             activityItems: [],
             actionRequired: [],
+            plan: null,
             completion: {
               id: 'complete:run-1:9',
               kind: 'complete',
@@ -823,6 +987,156 @@ describe('AgentRuntime current UI', () => {
       screen.getByText(/handed this conversation off to a new same-type run/i),
     ).toBeVisible()
     expect(screen.queryByText('Latest saved run failed')).not.toBeInTheDocument()
+  })
+
+  it('prepends historicalConversationTurns ahead of live stream turns and renders the inline handoff notice', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            {
+              id: 'transcript:run-2:1',
+              kind: 'transcript',
+              runId: 'run-2',
+              sequence: 1,
+              createdAt: '2026-04-29T00:48:10Z',
+              role: 'assistant',
+              text: 'Continuing in a fresh run.',
+            },
+          ],
+        })}
+        historicalConversationTurns={[
+          {
+            id: 'history:run-1:1',
+            kind: 'message',
+            role: 'user',
+            sequence: 1,
+            text: 'First-run prompt',
+          },
+          {
+            id: 'history:run-1:2',
+            kind: 'message',
+            role: 'assistant',
+            sequence: 2,
+            text: 'First-run reply',
+          },
+          {
+            id: 'handoff_notice:run-1->run-2',
+            kind: 'handoff_notice',
+            sequence: 3,
+            sourceRunId: 'run-1',
+            targetRunId: 'run-2',
+          },
+        ]}
+      />,
+    )
+
+    const conversation = screen.getByRole('list', { name: 'Agent conversation turns' })
+    expect(within(conversation).getByText('First-run prompt')).toBeVisible()
+    expect(within(conversation).getByText('First-run reply')).toBeVisible()
+    expect(within(conversation).getByText('Continuing in a fresh run.')).toBeVisible()
+    expect(
+      within(conversation).getByRole('note', { name: 'Run continued in a fresh session' }),
+    ).toBeVisible()
+
+    const items = within(conversation).getAllByRole('listitem')
+    const textIndex = (text: string) =>
+      items.findIndex((item) => item.textContent?.includes(text) ?? false)
+    const firstPromptIdx = textIndex('First-run prompt')
+    const firstReplyIdx = textIndex('First-run reply')
+    const noticeIdx = items.findIndex((item) => Boolean(item.querySelector('[role="note"]')))
+    const continuationIdx = textIndex('Continuing in a fresh run.')
+    expect(firstPromptIdx).toBeGreaterThanOrEqual(0)
+    expect(firstReplyIdx).toBeGreaterThan(firstPromptIdx)
+    expect(noticeIdx).toBeGreaterThan(firstReplyIdx)
+    expect(continuationIdx).toBeGreaterThan(noticeIdx)
+  })
+
+  it('dedupes replayed raw live fragments when historical messages already cover that run', () => {
+    const answerText = [
+      'FizzBuzz in Rust is a simple loop.',
+      '',
+      '```rust',
+      'fn main() {',
+      '    println!("FizzBuzz");',
+      '}',
+      '```',
+      '',
+      'How it works',
+    ].join('\n')
+    const replayedFragment = [
+      'println!("FizzBuzz");',
+      '}',
+      '```',
+      '',
+      'How it works',
+    ].join('\n')
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({ runId: 'run-1' }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            {
+              id: 'transcript:run-1:12',
+              kind: 'transcript',
+              runId: 'run-1',
+              sequence: 12,
+              createdAt: '2026-04-29T00:48:02Z',
+              role: 'user',
+              text: 'How do I write fizz buzz in rust?',
+            },
+            {
+              id: 'transcript:run-1:18',
+              kind: 'transcript',
+              runId: 'run-1',
+              sequence: 18,
+              createdAt: '2026-04-29T00:48:09Z',
+              role: 'assistant',
+              text: replayedFragment,
+            },
+          ],
+        })}
+        historicalConversationTurns={[
+          {
+            id: 'history:run-1:1',
+            kind: 'message',
+            role: 'user',
+            sequence: 1,
+            text: 'How do I write fizz buzz in rust?',
+          },
+          {
+            id: 'history:run-1:2',
+            kind: 'message',
+            role: 'assistant',
+            sequence: 2,
+            text: answerText,
+          },
+        ]}
+      />,
+    )
+
+    const conversation = screen.getByRole('list', { name: 'Agent conversation turns' })
+    const items = within(conversation).getAllByRole('listitem')
+    expect(
+      items.filter((item) =>
+        item.textContent?.includes('How do I write fizz buzz in rust?') ?? false,
+      ),
+    ).toHaveLength(1)
+    expect(
+      items.filter((item) => item.textContent?.includes('FizzBuzz in Rust is a simple loop.') ?? false),
+    ).toHaveLength(1)
+    expect(
+      items.filter((item) => item.textContent?.includes('println!("FizzBuzz");') ?? false),
+    ).toHaveLength(1)
+    expect(within(conversation).getAllByText('rust')).toHaveLength(1)
   })
 
   it('renders runtime stream messages as chronological conversation turns', () => {
@@ -884,7 +1198,599 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByLabelText('Agent conversation', { selector: 'section' })).toHaveClass('select-text')
   })
 
-  it('copies user prompts, agent responses, and the visible conversation', async () => {
+  it('enables the undo action menu on changed file entries with captured change groups', () => {
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo: vi.fn(async () => makeCodeUndoResponse()),
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    expect(screen.getByText('client/src/file.ts')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Open undo menu for client/src/file.ts' })).toBeEnabled()
+
+    openUndoMenu()
+
+    expect(screen.getByRole('menuitem', { name: 'Undo this file change' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: 'Undo entire change group' })).toBeVisible()
+  })
+
+  it('disables the undo action menu when a changed file entry has no undoable change group', () => {
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo: vi.fn(async () => makeCodeUndoResponse()),
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: null,
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Undo unavailable for client/src/file.ts' })).toBeDisabled()
+  })
+
+  it('calls the selective file undo command from the changed file entry menu', async () => {
+    const applySelectiveUndo = vi.fn(async () => makeCodeUndoResponse())
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+              codeWorkspaceEpoch: 7,
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    clickUndoFileChange()
+
+    await waitFor(() =>
+      expect(applySelectiveUndo).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        operationId: expect.stringMatching(/^code-undo-/),
+        target: {
+          targetKind: 'file_change',
+          targetId: 'client/src/file.ts',
+          changeGroupId: 'code-change-1',
+          filePath: 'client/src/file.ts',
+          hunkIds: [],
+        },
+        expectedWorkspaceEpoch: 7,
+      }),
+    )
+  })
+
+  it('calls the whole-change undo command from the changed file entry menu', async () => {
+    const applySelectiveUndo = vi.fn(async () => makeCodeUndoResponse())
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+              codeWorkspaceEpoch: 7,
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    clickUndoChangeGroup()
+
+    await waitFor(() =>
+      expect(applySelectiveUndo).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        operationId: expect.stringMatching(/^code-undo-/),
+        target: {
+          targetKind: 'change_group',
+          targetId: 'code-change-1',
+          changeGroupId: 'code-change-1',
+          hunkIds: [],
+        },
+        expectedWorkspaceEpoch: 7,
+      }),
+    )
+  })
+
+  it('calls return session to here from the changed file entry menu with a run boundary target', async () => {
+    const applySelectiveUndo = vi.fn(async () => makeCodeUndoResponse())
+    const returnSessionToHere = vi.fn(async () => makeReturnSessionToHereResponse())
+    const onCodeUndoApplied = vi.fn(async () => undefined)
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+      returnSessionToHere,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+              codeWorkspaceEpoch: 7,
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+        onCodeUndoApplied={onCodeUndoApplied}
+      />,
+    )
+
+    clickReturnSessionToHere()
+
+    await waitFor(() =>
+      expect(returnSessionToHere).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        operationId: expect.stringMatching(/^code-return-session-/),
+        target: {
+          targetKind: 'run_boundary',
+          targetId: 'run-1:change_group:code-change-1',
+          agentSessionId: 'agent-session-main',
+          boundaryId: 'change_group:code-change-1',
+          runId: 'run-1',
+          changeGroupId: 'code-change-1',
+        },
+        expectedWorkspaceEpoch: 7,
+      }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Return session history event added. Other sessions are unchanged.')).toBeVisible(),
+    )
+    expect(applySelectiveUndo).not.toHaveBeenCalled()
+    expect(onCodeUndoApplied).toHaveBeenCalled()
+  })
+
+  it('calls the hunk-level undo command with selected diff hunks', async () => {
+    const applySelectiveUndo = vi.fn(async () => makeCodeUndoResponse())
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+              codeWorkspaceEpoch: 7,
+              codePatchAvailability: {
+                projectId: 'project-1',
+                targetChangeGroupId: 'code-change-1',
+                available: true,
+                affectedPaths: ['client/src/file.ts'],
+                fileChangeCount: 1,
+                textHunkCount: 2,
+                textHunks: [
+                  {
+                    hunkId: 'hunk-first',
+                    patchFileId: 'patch-file-1',
+                    filePath: 'client/src/file.ts',
+                    hunkIndex: 0,
+                    baseStartLine: 10,
+                    baseLineCount: 2,
+                    resultStartLine: 12,
+                    resultLineCount: 2,
+                  },
+                  {
+                    hunkId: 'hunk-second',
+                    patchFileId: 'patch-file-1',
+                    filePath: 'client/src/file.ts',
+                    hunkIndex: 1,
+                    baseStartLine: 30,
+                    baseLineCount: 1,
+                    resultStartLine: 33,
+                    resultLineCount: 1,
+                  },
+                ],
+                unavailableReason: null,
+              },
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    openUndoMenu()
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Hunk 1.*new lines 12-13/ }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Hunk 2.*new line 33/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Undo selected hunks/ }))
+
+    await waitFor(() =>
+      expect(applySelectiveUndo).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        operationId: expect.stringMatching(/^code-undo-/),
+        target: {
+          targetKind: 'hunks',
+          targetId: 'code-change-1:client/src/file.ts:hunks',
+          changeGroupId: 'code-change-1',
+          filePath: 'client/src/file.ts',
+          hunkIds: ['hunk-first', 'hunk-second'],
+        },
+        expectedWorkspaceEpoch: 7,
+      }),
+    )
+  })
+
+  it('shows undo success and refreshes after undo resolves', async () => {
+    const applySelectiveUndo = vi.fn(async () => makeCodeUndoResponse())
+    const onCodeUndoApplied = vi.fn(async () => undefined)
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+        onCodeUndoApplied={onCodeUndoApplied}
+      />,
+    )
+
+    clickUndoFileChange()
+
+    expect(screen.getByRole('button', { name: 'Undoing client/src/file.ts' })).toBeDisabled()
+    await waitFor(() => expect(screen.getByText('Undid 1 path.')).toBeVisible())
+    expect(onCodeUndoApplied).toHaveBeenCalled()
+  })
+
+  it('preserves conversation scroll position after undo succeeds', async () => {
+    const applySelectiveUndo = vi.fn(async () => makeCodeUndoResponse())
+    const originalRequestAnimationFrame = Object.getOwnPropertyDescriptor(window, 'requestAnimationFrame')
+    Object.defineProperty(window, 'requestAnimationFrame', {
+      configurable: true,
+      writable: true,
+      value: (callback: FrameRequestCallback) => {
+        callback(0)
+        return 1
+      },
+    })
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    try {
+      render(
+        <AgentRuntime
+          agent={makeAgent({
+            runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+            runtimeRun: makeRuntimeRun(),
+            runtimeStreamStatus: 'live',
+            runtimeStreamStatusLabel: 'Live stream',
+            runtimeStreamItems: [
+              makeTranscriptItem({ sequence: 1, role: 'user', text: 'Keep my place.' }),
+              makeFileChangeItem({
+                sequence: 2,
+                detail: 'modify: client/src/file.ts',
+                codeChangeGroupId: 'code-change-1',
+              }),
+            ],
+          })}
+          desktopAdapter={desktopAdapter}
+        />,
+      )
+
+      const viewport = screen.getByLabelText('Agent conversation viewport')
+      setScrollMetrics(viewport, {
+        scrollTop: 128,
+        scrollHeight: 1_000,
+        clientHeight: 360,
+      })
+
+      clickUndoFileChange()
+
+      await waitFor(() => expect(screen.getByText('Undid 1 path.')).toBeVisible())
+      expect(viewport.scrollTop).toBe(128)
+    } finally {
+      if (originalRequestAnimationFrame) {
+        Object.defineProperty(window, 'requestAnimationFrame', originalRequestAnimationFrame)
+      } else {
+        Reflect.deleteProperty(window, 'requestAnimationFrame')
+      }
+    }
+  })
+
+  it('shows undo failure on the changed file entry', async () => {
+    const applySelectiveUndo = vi.fn(async () => {
+      throw new Error('Patch data is missing.')
+    })
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    clickUndoFileChange()
+
+    await waitFor(() => expect(screen.getByText('Patch data is missing.')).toBeVisible())
+    expect(screen.getByRole('button', { name: 'Open undo menu for client/src/file.ts' })).toBeEnabled()
+
+    openUndoMenu()
+
+    expect(screen.getByRole('menuitem', { name: 'Retry undo for this file change' })).toBeVisible()
+  })
+
+  it('shows selective undo conflicts with user-facing conflict details', async () => {
+    const applySelectiveUndo = vi.fn(async () =>
+      makeCodeUndoResponse({
+        status: 'conflicted',
+        target: {
+          targetKind: 'file_change',
+          targetId: 'client/src/file.ts',
+          hunkIds: [],
+        },
+        conflicts: [
+          {
+            operationId: 'code-undo-operation-1',
+            targetId: 'client/src/file.ts',
+            path: 'client/src/file.ts',
+            kind: 'text_overlap',
+            message: 'Current content changed lines selected for undo.',
+            baseHash: null,
+            selectedHash: null,
+            currentHash: null,
+            hunkIds: [],
+          },
+        ],
+      }),
+    )
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    clickUndoFileChange()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'Undo blocked by conflict in client/src/file.ts. Current content changed lines selected for undo.',
+        ),
+      ).toBeVisible(),
+    )
+    expect(screen.getByRole('alert', { name: 'Undo conflict' })).toBeVisible()
+    expect(screen.getByText('Selected file: client/src/file.ts')).toBeVisible()
+    expect(screen.getByText('Affected paths')).toBeVisible()
+    expect(screen.getByText('Overlapping text')).toBeVisible()
+    expect(screen.getByText('Current content changed lines selected for undo.')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Hide conflict details for Selected file: client/src/file.ts' }),
+    ).toBeVisible()
+  })
+
+  it('shows selected hunk ids inside hunk-level undo conflicts', async () => {
+    const applySelectiveUndo = vi.fn(async () =>
+      makeCodeUndoResponse({
+        status: 'conflicted',
+        target: {
+          targetKind: 'hunks',
+          targetId: 'code-change-1:client/src/file.ts:hunks',
+          hunkIds: ['hunk-first', 'hunk-second'],
+        },
+        conflicts: [
+          {
+            operationId: 'code-undo-operation-1',
+            targetId: 'code-change-1:client/src/file.ts:hunks',
+            path: 'client/src/file.ts',
+            kind: 'text_overlap',
+            message: 'A later edit changed one of the selected hunks.',
+            baseHash: null,
+            selectedHash: null,
+            currentHash: null,
+            hunkIds: ['hunk-second'],
+          },
+        ],
+      }),
+    )
+    const dictation = createDictationAdapter()
+    const desktopAdapter: AgentRuntimeDesktopAdapter = {
+      ...dictation.adapter,
+      applySelectiveUndo,
+    }
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            makeFileChangeItem({
+              sequence: 2,
+              detail: 'modify: client/src/file.ts',
+              codeChangeGroupId: 'code-change-1',
+              codePatchAvailability: {
+                projectId: 'project-1',
+                targetChangeGroupId: 'code-change-1',
+                available: true,
+                affectedPaths: ['client/src/file.ts'],
+                fileChangeCount: 1,
+                textHunkCount: 2,
+                textHunks: [
+                  {
+                    hunkId: 'hunk-first',
+                    patchFileId: 'patch-file-1',
+                    filePath: 'client/src/file.ts',
+                    hunkIndex: 0,
+                    baseStartLine: 10,
+                    baseLineCount: 2,
+                    resultStartLine: 12,
+                    resultLineCount: 2,
+                  },
+                  {
+                    hunkId: 'hunk-second',
+                    patchFileId: 'patch-file-1',
+                    filePath: 'client/src/file.ts',
+                    hunkIndex: 1,
+                    baseStartLine: 30,
+                    baseLineCount: 1,
+                    resultStartLine: 33,
+                    resultLineCount: 1,
+                  },
+                ],
+                unavailableReason: null,
+              },
+            }),
+          ],
+        })}
+        desktopAdapter={desktopAdapter}
+      />,
+    )
+
+    openUndoMenu()
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Hunk 1.*new lines 12-13/ }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Hunk 2.*new line 33/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Undo selected hunks/ }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert', { name: 'Undo conflict' })).toBeVisible(),
+    )
+    expect(screen.getByText('Selected hunks: hunk-first, hunk-second')).toBeVisible()
+    expect(screen.getByText('A later edit changed one of the selected hunks.')).toBeVisible()
+    expect(screen.getByText('hunk-second')).toBeVisible()
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Hide conflict details for Selected hunks: hunk-first, hunk-second',
+      }),
+    )
+    expect(screen.queryByText('Affected paths')).not.toBeInTheDocument()
+  })
+
+  it('copies user prompts and agent responses without a conversation copy action', async () => {
     const writeText = installClipboardWriteMock()
     renderRuntimeStreamItems([
       makeTranscriptItem({ sequence: 2, role: 'user', text: 'Please inspect the renderer.' }),
@@ -901,16 +1807,7 @@ describe('AgentRuntime current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy agent response' }))
     await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('The renderer is selectable now.'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy visible conversation' }))
-    await waitFor(() =>
-      expect(writeText).toHaveBeenLastCalledWith(
-        [
-          'You:\nPlease inspect the renderer.',
-          'Thoughts:\nChecking the transcript controls.',
-          'Agent:\nThe renderer is selectable now.',
-        ].join('\n\n'),
-      ),
-    )
+    expect(screen.queryByRole('button', { name: 'Copy visible conversation' })).not.toBeInTheDocument()
   })
 
   it('shows an agent thinking row immediately while a submitted prompt is starting', () => {
@@ -926,7 +1823,6 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(screen.getByRole('status', { name: 'Agent is thinking' })).toBeVisible()
-    expect(screen.getByText('Thinking')).toBeVisible()
     expect(screen.queryByText(/What can we build together/i)).not.toBeInTheDocument()
   })
 
@@ -994,6 +1890,197 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('You')).toBeVisible()
   })
 
+  it('keeps a submitted prompt singular when queued run truth replaces the optimistic turn', () => {
+    const submittedPrompt = 'Please inspect the flaky test.'
+    const onUpdateRuntimeRunControls = vi.fn(() => new Promise<RuntimeRunView>(() => undefined))
+    const baseAgent = {
+      runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+      runtimeRun: makeRuntimeRun(),
+      runtimeStreamStatus: 'live' as const,
+      runtimeStreamStatusLabel: 'Live stream',
+      runtimeStreamItems: [],
+    }
+
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent(baseAgent)}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: submittedPrompt },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    const conversation = screen.getByRole('list', { name: 'Agent conversation turns' })
+    expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          ...baseAgent,
+          selectedPrompt: {
+            text: submittedPrompt,
+            queuedAt: '2026-04-20T12:05:00Z',
+            hasQueuedPrompt: true,
+          },
+        })}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
+  })
+
+  it('keeps the submitted prompt row mounted when the runtime echo replaces queued truth', async () => {
+    const submittedPrompt = 'Please inspect the flaky test.'
+    const onUpdateRuntimeRunControls = vi.fn(() => new Promise<RuntimeRunView>(() => undefined))
+    const baseAgent = {
+      runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+      runtimeRun: makeRuntimeRun(),
+      runtimeStreamStatus: 'live' as const,
+      runtimeStreamStatusLabel: 'Live stream',
+      runtimeStreamItems: [],
+    }
+    const queuedPrompt = {
+      text: submittedPrompt,
+      queuedAt: '2026-04-20T12:05:00Z',
+      hasQueuedPrompt: true,
+    }
+
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent(baseAgent)}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: submittedPrompt },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    const conversation = screen.getByRole('list', { name: 'Agent conversation turns' })
+    const promptRow = within(conversation).getByText(submittedPrompt)
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          ...baseAgent,
+          selectedPrompt: queuedPrompt,
+        })}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
+    expect(within(conversation).getByText(submittedPrompt)).toBe(promptRow)
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          ...baseAgent,
+          selectedPrompt: queuedPrompt,
+          runtimeStreamItems: [
+            {
+              ...makeTranscriptItem({
+                sequence: 2,
+                role: 'user',
+                text: submittedPrompt,
+              }),
+              createdAt: new Date(Date.now() + 1_000).toISOString(),
+            },
+          ],
+        })}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
+    expect(within(conversation).getByText(submittedPrompt)).toBe(promptRow)
+  })
+
+  it('keeps the first submitted prompt row mounted when the started run echoes it', async () => {
+    const submittedPrompt = 'Kick off the first run.'
+    const onStartRuntimeRun = vi.fn(() => new Promise<RuntimeRunView>(() => undefined))
+    const baseAgent = {
+      runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+      runtimeRun: null,
+      runtimeStreamStatus: 'idle' as const,
+      runtimeStreamStatusLabel: 'No live stream',
+      runtimeStreamItems: [],
+    }
+    const queuedPrompt = {
+      text: submittedPrompt,
+      queuedAt: '2026-04-20T12:05:00Z',
+      hasQueuedPrompt: true,
+    }
+
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent(baseAgent)}
+        onStartRuntimeRun={onStartRuntimeRun}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: submittedPrompt },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    const conversation = screen.getByRole('list', { name: 'Agent conversation turns' })
+    const promptRow = within(conversation).getByText(submittedPrompt)
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          ...baseAgent,
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          selectedPrompt: queuedPrompt,
+        })}
+        onStartRuntimeRun={onStartRuntimeRun}
+      />,
+    )
+
+    expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
+    expect(within(conversation).getByText(submittedPrompt)).toBe(promptRow)
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          ...baseAgent,
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          selectedPrompt: queuedPrompt,
+          runtimeStreamItems: [
+            {
+              ...makeTranscriptItem({
+                sequence: 2,
+                role: 'user',
+                text: submittedPrompt,
+              }),
+              createdAt: new Date(Date.now() + 1_000).toISOString(),
+            },
+          ],
+        })}
+        onStartRuntimeRun={onStartRuntimeRun}
+      />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
+    expect(within(conversation).getByText(submittedPrompt)).toBe(promptRow)
+  })
+
   it('pauses auto-follow when the user scrolls away and resumes from the latest button', () => {
     const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView)
     const initialItems: NonNullable<AgentPaneView['runtimeStreamItems']> = [
@@ -1050,6 +2137,121 @@ describe('AgentRuntime current UI', () => {
       behavior: 'smooth',
     })
     expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument()
+  })
+
+  it('does not auto-follow to the tail when mounting a restored terminal conversation', () => {
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView)
+    scrollIntoView.mockClear()
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-04-29T00:49:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            makeTranscriptItem({ sequence: 1, role: 'user', text: 'What is this project about?' }),
+            makeTranscriptItem({ sequence: 2, text: 'This project is Xero.' }),
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('This project is Xero.')).toBeVisible()
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('resets restored conversation scroll when switching projects', () => {
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-04-29T00:49:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            makeTranscriptItem({ sequence: 1, role: 'user', text: 'What is this project about?' }),
+            makeTranscriptItem({ sequence: 2, text: 'This project is Xero.' }),
+          ],
+        })}
+      />,
+    )
+
+    const viewport = screen.getByLabelText('Agent conversation viewport')
+    setScrollMetrics(viewport, {
+      scrollTop: 520,
+      scrollHeight: 1_200,
+      clientHeight: 360,
+    })
+    fireEvent.scroll(viewport)
+
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible()
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          project: makeProject({
+            id: 'project-2',
+            name: 'Orchestra',
+            selectedAgentSessionId: 'agent-session-other',
+            repository: {
+              id: 'repo-2',
+              projectId: 'project-2',
+              rootPath: '/tmp/Orchestra',
+              displayName: 'Orchestra',
+              branch: null,
+              branchLabel: 'No branch',
+              headSha: null,
+              headShaLabel: 'No HEAD',
+              isGitRepo: true,
+            },
+          }),
+          runtimeSession: makeRuntimeSession({
+            projectId: 'project-2',
+            sessionId: 'session-2',
+            isSignedOut: false,
+          }),
+          runtimeRun: makeRuntimeRun({
+            projectId: 'project-2',
+            agentSessionId: 'agent-session-other',
+            runId: 'run-2',
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-04-29T00:50:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            makeTranscriptItem({
+              runId: 'run-2',
+              sequence: 1,
+              role: 'user',
+              text: 'Summarize this repository.',
+            }),
+            makeTranscriptItem({ runId: 'run-2', sequence: 2, text: 'Fresh project overview.' }),
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Fresh project overview.')).toBeVisible()
+    expect(screen.queryByText('This project is Xero.')).not.toBeInTheDocument()
+    expect(viewport.scrollTop).toBe(0)
   })
 
   it('pauses auto-follow immediately when the user wheels upward during streaming', () => {
@@ -1270,6 +2472,88 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('Loaded project context 0.')).toBeVisible()
   })
 
+  it('shows adjacent tool calls individually when grouping is disabled', () => {
+    const toolBurst = Array.from({ length: 4 }, (_, index) =>
+      makeToolItem({
+        sequence: index + 3,
+        toolCallId: `call-read-${index}`,
+        toolName: 'read',
+        toolState: 'succeeded',
+        detail: `Read tool ${index}.`,
+        toolSummary: {
+          kind: 'file',
+          path: `client/src/tool-${index}.ts`,
+          scope: null,
+          lineCount: 12,
+          matchCount: null,
+          truncated: false,
+        },
+      }),
+    )
+
+    renderRuntimeStreamItems(
+      [
+        makeTranscriptItem({ sequence: 2, role: 'user', text: 'Inspect several files.' }),
+        ...toolBurst,
+      ],
+      { toolCallGroupingPreference: 'separate' },
+    )
+
+    expect(screen.queryByText('4 tool calls')).not.toBeInTheDocument()
+    expect(screen.getByText('read tool-0.ts')).toBeVisible()
+    expect(screen.getByText('read tool-3.ts')).toBeVisible()
+  })
+
+  it('replaces grouped tool rows in place when grouping is disabled after render', () => {
+    const runtimeStreamItems = [
+      makeTranscriptItem({ sequence: 2, role: 'user', text: 'Inspect several files.' }),
+      ...Array.from({ length: 4 }, (_, index) =>
+        makeToolItem({
+          sequence: index + 3,
+          toolCallId: `call-read-${index}`,
+          toolName: 'read',
+          toolState: 'succeeded',
+          detail: `Read tool ${index}.`,
+          toolSummary: {
+            kind: 'file' as const,
+            path: `client/src/tool-${index}.ts`,
+            scope: null,
+            lineCount: 12,
+            matchCount: null,
+            truncated: false,
+          },
+        }),
+      ),
+      makeTranscriptItem({ sequence: 10, text: 'Inspection complete.' }),
+    ]
+    const agent = makeAgent({
+      runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+      runtimeRun: makeRuntimeRun(),
+      runtimeStreamStatus: 'complete',
+      runtimeStreamStatusLabel: 'Complete',
+      runtimeStreamItems,
+    })
+
+    const { rerender } = render(
+      <AgentRuntime agent={agent} toolCallGroupingPreference="grouped" />,
+    )
+
+    expect(screen.getByText('4 tool calls')).toBeVisible()
+    expect(screen.queryByText('read tool-0.ts')).not.toBeInTheDocument()
+
+    rerender(<AgentRuntime agent={agent} toolCallGroupingPreference="separate" />)
+
+    expect(screen.queryByText('4 tool calls')).not.toBeInTheDocument()
+    expect(screen.getByText('read tool-0.ts')).toBeVisible()
+    expect(screen.getByText('read tool-3.ts')).toBeVisible()
+
+    const conversationText =
+      screen.getByRole('list', { name: 'Agent conversation turns' }).textContent ?? ''
+    expect(conversationText.indexOf('read tool-0.ts')).toBeLessThan(
+      conversationText.indexOf('Inspection complete.'),
+    )
+  })
+
   it('splits tool groups around edit tool calls and shows the edit diff', () => {
     renderRuntimeStreamItems([
       makeToolItem({
@@ -1408,9 +2692,15 @@ describe('AgentRuntime current UI', () => {
     ])
 
     expect(screen.queryByText('Running')).not.toBeInTheDocument()
-    expect(container.querySelector('.animate-spin')).not.toBeNull()
+    const toolDetailsButton = screen.getByRole('button', { name: /show tool details/i })
+    const spinner = toolDetailsButton.querySelector('.animate-spin')
+    const spinnerIcon = spinner?.querySelector('svg')
+    expect(spinner?.tagName.toLowerCase()).toBe('span')
+    expect(spinnerIcon).not.toBeNull()
+    expect(spinnerIcon).not.toHaveClass('animate-spin')
+    expect(spinnerIcon).toHaveClass('motion-safe:animate-in')
 
-    fireEvent.click(screen.getByRole('button', { name: /show tool details/i }))
+    fireEvent.click(toolDetailsButton)
 
     expect(screen.queryByText('Output')).not.toBeInTheDocument()
     const output = screen.getByText((content) =>
@@ -1463,14 +2753,14 @@ describe('AgentRuntime current UI', () => {
         sequence: 2,
         toolCallId: 'call-find',
         toolName: 'find',
-        toolState: 'running',
+        toolState: 'succeeded',
         detail: 'pattern: appendTranscriptDelta, path: client/components/xero',
       }),
       makeToolItem({
         sequence: 3,
         toolCallId: 'call-list',
         toolName: 'list',
-        toolState: 'running',
+        toolState: 'succeeded',
         detail: 'path: client/components/xero, maxDepth: 2',
       }),
     ])
@@ -1479,6 +2769,49 @@ describe('AgentRuntime current UI', () => {
 
     expect(screen.getByText('find appendTranscriptDelta')).toBeVisible()
     expect(screen.getByText('list client/components/xero')).toBeVisible()
+  })
+
+  it('keeps in-flight tool calls outside completed tool groups', () => {
+    renderRuntimeStreamItems([
+      makeToolItem({
+        sequence: 2,
+        toolCallId: 'call-read-complete',
+        toolName: 'read',
+        toolState: 'succeeded',
+        detail: 'Read package.json.',
+        toolSummary: {
+          kind: 'file',
+          path: 'package.json',
+          scope: null,
+          lineCount: 12,
+          matchCount: null,
+          truncated: false,
+        },
+      }),
+      makeToolItem({
+        sequence: 3,
+        toolCallId: 'call-find-complete',
+        toolName: 'find',
+        toolState: 'succeeded',
+        detail: 'Found matching files.',
+      }),
+      makeToolItem({
+        sequence: 4,
+        toolCallId: 'call-read-running',
+        toolName: 'read',
+        toolState: 'running',
+        detail: 'path: client/components/xero/agent-runtime.tsx, startLine: 1, lineCount: 80',
+      }),
+    ])
+
+    expect(screen.getByText('2 tool calls')).toBeVisible()
+    expect(screen.queryByText('3 tool calls')).not.toBeInTheDocument()
+    expect(screen.getByText('read agent-runtime.tsx')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: /show grouped tool details for 2 tool calls/i }))
+
+    expect(screen.getByText('read package.json')).toBeVisible()
+    expect(screen.getByText('find')).toBeVisible()
   })
 
   it('renders long tool bursts without evicting the surrounding transcript turns', () => {
@@ -1610,34 +2943,319 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByRole('combobox', { name: 'Approval mode selector' })).not.toBeInTheDocument()
   })
 
-  it('renders Test in the enabled built-in composer selector', async () => {
+  it('applies pendingInitialRuntimeAgentId on mount and reports it consumed', () => {
+    const onConsumed = vi.fn()
     render(
       <AgentRuntime
         agent={makeAgent({
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
-          selectedRuntimeAgentId: 'test',
-          selectedRuntimeAgentLabel: 'Test',
+          selectedRuntimeAgentId: 'ask',
+          selectedRuntimeAgentLabel: 'Ask',
+          selectedApprovalMode: 'suggest',
+        })}
+        pendingInitialRuntimeAgentId="agent_create"
+        onPendingInitialRuntimeAgentIdConsumed={onConsumed}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Agent Create')
+    expect(onConsumed).toHaveBeenCalled()
+  })
+
+  it('applies a pending custom agent definition preselection', () => {
+    const onConsumed = vi.fn()
+    const customAgent = {
+      definitionId: 'security_reviewer',
+      currentVersion: 1,
+      displayName: 'Security Reviewer',
+      shortLabel: 'SecRev',
+      description: 'User-created threat model reviewer.',
+      scope: 'global_custom',
+      lifecycleState: 'active',
+      baseCapabilityProfile: 'engineering',
+      createdAt: '2026-04-15T20:00:00Z',
+      updatedAt: '2026-04-15T20:00:00Z',
+      isBuiltIn: false,
+    } satisfies AgentDefinitionSummaryDto
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'ask',
+          selectedRuntimeAgentLabel: 'Ask',
+          selectedApprovalMode: 'suggest',
+        })}
+        customAgentDefinitions={[customAgent]}
+        pendingInitialRuntimeAgentId="engineer"
+        pendingInitialAgentDefinitionId="security_reviewer"
+        onPendingInitialRuntimeAgentIdConsumed={onConsumed}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent(
+      'Security Reviewer',
+    )
+    expect(onConsumed).toHaveBeenCalled()
+  })
+
+  it('uses Agent as the first-run composer default without creating a sticky preference', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'generalist',
+          selectedRuntimeAgentLabel: 'Agent',
           selectedApprovalMode: 'suggest',
         })}
         onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
       />,
     )
 
-    const agentSelector = screen.getByRole('combobox', { name: 'Agent selector' })
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Agent')
+    expect(window.localStorage.getItem(COMPOSER_SETTINGS_STORAGE_KEY)).toBeNull()
+  })
 
-    expect(agentSelector).toHaveTextContent('Test')
-    expect(agentSelector).toBeEnabled()
-    expect(screen.queryByRole('combobox', { name: 'Approval mode selector' })).not.toBeInTheDocument()
+  it('does not persist one-shot Agent Create preselection as the last-used agent', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'generalist',
+          selectedRuntimeAgentLabel: 'Agent',
+          selectedApprovalMode: 'suggest',
+        })}
+        pendingInitialRuntimeAgentId="agent_create"
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
 
-    fireEvent.pointerDown(agentSelector, {
-      button: 0,
-      buttons: 1,
-      ctrlKey: false,
-      pointerType: 'mouse',
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Agent Create')
+    expect(window.localStorage.getItem(COMPOSER_SETTINGS_STORAGE_KEY)).toBeNull()
+  })
+
+  it('restores the last-used composer controls from persisted settings', async () => {
+    window.localStorage.setItem(
+      COMPOSER_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        modelSelectionKey: 'anthropic:anthropic/claude-3.5-haiku',
+        runtimeAgentId: 'debug',
+        agentDefinitionId: null,
+        thinkingEffort: 'low',
+        approvalMode: 'yolo',
+        autoCompactEnabled: true,
+      }),
+    )
+    const onStartRuntimeRun = vi.fn(async () => makeRuntimeRun())
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'ask',
+          selectedRuntimeAgentLabel: 'Ask',
+          selectedModelId: 'openai_codex',
+          selectedThinkingEffort: 'medium',
+          selectedApprovalMode: 'suggest',
+          composerModelOptions: [
+            makeComposerModelOption(),
+            makeComposerModelOption({
+              selectionKey: 'anthropic:anthropic/claude-3.5-haiku',
+              profileId: 'anthropic-default',
+              providerId: 'anthropic',
+              providerLabel: 'Anthropic',
+              modelId: 'anthropic/claude-3.5-haiku',
+              displayName: 'Claude 3.5 Haiku',
+              thinking: { supported: true, effortOptions: ['low', 'medium'], defaultEffort: 'low' },
+              thinkingEffortOptions: ['low', 'medium'],
+              defaultThinkingEffort: 'low',
+            }),
+          ],
+        })}
+        onStartRuntimeRun={onStartRuntimeRun}
+      />,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Debug')
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('Claude 3.5 Haiku')
+    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Low')
+    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('YOLO')
+    expect(screen.getByRole('button', { name: 'Auto-compact before sending' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: 'Use the restored controls.' },
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    expect(await screen.findByRole('option', { name: /Ask/i })).toBeVisible()
-    expect(screen.getByRole('option', { name: /Test/i })).toBeVisible()
+    await waitFor(() =>
+      expect(onStartRuntimeRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'Use the restored controls.',
+          controls: expect.objectContaining({
+            runtimeAgentId: 'debug',
+            providerProfileId: 'anthropic-default',
+            modelId: 'anthropic/claude-3.5-haiku',
+            thinkingEffort: 'low',
+            approvalMode: 'yolo',
+          }),
+        }),
+      ),
+    )
+  })
+
+  it('restores mirrored app-state composer controls without a model selection key', () => {
+    window.localStorage.setItem(
+      COMPOSER_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        modelId: 'xai/grok-4.3',
+        providerProfileId: 'xai-default',
+        runtimeAgentId: 'debug',
+        agentDefinitionId: null,
+        thinkingEffort: 'low',
+        approvalMode: 'yolo',
+        autoCompactEnabled: false,
+      }),
+    )
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'ask',
+          selectedRuntimeAgentLabel: 'Ask',
+          selectedModelId: 'openai_codex',
+          selectedThinkingEffort: 'medium',
+          selectedApprovalMode: 'suggest',
+          composerModelOptions: [
+            makeComposerModelOption(),
+            makeComposerModelOption({
+              selectionKey: 'xai:xai/grok-4.3',
+              profileId: 'xai-default',
+              providerId: 'xai',
+              providerLabel: 'xAI',
+              modelId: 'xai/grok-4.3',
+              displayName: 'Grok 4.3',
+              thinking: { supported: true, effortOptions: ['low', 'medium'], defaultEffort: 'medium' },
+              thinkingEffortOptions: ['low', 'medium'],
+              defaultThinkingEffort: 'medium',
+            }),
+          ],
+        })}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Debug')
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('Grok 4.3')
+    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Low')
+    expect(screen.getByRole('button', { name: 'Auto-compact before sending' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+  })
+
+  it('persists composer control changes for the next reload', async () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedModelSelectionKey: 'openai_codex:openai_codex',
+          selectedThinkingEffort: 'medium',
+          composerModelOptions: [
+            makeComposerModelOption(),
+            makeComposerModelOption({
+              selectionKey: 'anthropic:anthropic/claude-3.5-haiku',
+              profileId: 'anthropic-default',
+              providerId: 'anthropic',
+              providerLabel: 'Anthropic',
+              modelId: 'anthropic/claude-3.5-haiku',
+              displayName: 'Claude 3.5 Haiku',
+              thinking: { supported: true, effortOptions: ['low', 'medium'], defaultEffort: 'low' },
+              thinkingEffortOptions: ['low', 'medium'],
+              defaultThinkingEffort: 'low',
+            }),
+          ],
+        })}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Agent selector' }))
+    fireEvent.click(await screen.findByRole('option', { name: /Engineer/i }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Approval mode selector' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'YOLO' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-compact before sending' }))
+
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(COMPOSER_SETTINGS_STORAGE_KEY)
+      expect(raw).not.toBeNull()
+      expect(JSON.parse(raw ?? '{}')).toMatchObject({
+        version: 1,
+        modelSelectionKey: 'openai_codex:openai_codex',
+        runtimeAgentId: 'engineer',
+        agentDefinitionId: null,
+        thinkingEffort: 'medium',
+        approvalMode: 'yolo',
+        autoCompactEnabled: false,
+      })
+    })
+  })
+
+  it('uses the agent_create build placeholder and standalone empty state when active', () => {
+    const onStartWorkflowAgentCreate = vi.fn()
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'agent_create',
+          selectedRuntimeAgentLabel: 'Agent Create',
+          selectedApprovalMode: 'suggest',
+        })}
+        onStartWorkflowAgentCreate={onStartWorkflowAgentCreate}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    expect(
+      screen.getByPlaceholderText('Describe the agent or workflow...'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Shape a definition' })).toBeVisible()
+    expect(screen.getByText(/Start from a description\./)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /Start on workflow canvas/i }))
+    expect(onStartWorkflowAgentCreate).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Create a coding helper' })).toBeVisible()
+    expect(screen.queryByText(/The canvas is already included\./)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Draft from this canvas' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/What can we build together/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Explore the codebase' })).not.toBeInTheDocument()
+  })
+
+  it('shows canvas-included copy for Agent Create only when the caller provides workflow context', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          selectedRuntimeAgentId: 'agent_create',
+          selectedRuntimeAgentLabel: 'Agent Create',
+          selectedApprovalMode: 'suggest',
+        })}
+        agentCreateCanvasIncluded
+        onStartWorkflowAgentCreate={vi.fn()}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    expect(screen.getByText(/The canvas is already included\./)).toBeVisible()
+    expect(screen.queryByText(/Start from a description\./)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Start on workflow canvas/i })).not.toBeInTheDocument()
   })
 
   it('keeps model selectors available while a prompt is pending on an active run', async () => {
@@ -1696,6 +3314,7 @@ describe('AgentRuntime current UI', () => {
             approvalMode: 'suggest',
             approvalModeLabel: 'Suggest',
             planModeRequired: false,
+            autoCompactEnabled: true,
             revision: 1,
             appliedAt: '2026-04-20T12:00:00Z',
           },
@@ -1711,6 +3330,7 @@ describe('AgentRuntime current UI', () => {
             approvalMode: 'yolo',
             approvalModeLabel: 'YOLO',
             planModeRequired: false,
+            autoCompactEnabled: true,
             revision: 2,
             queuedAt: '2026-04-20T12:05:00Z',
             queuedPrompt: 'Review the diff before continuing.',
@@ -1789,6 +3409,7 @@ describe('AgentRuntime current UI', () => {
           thinkingEffort: null,
           approvalMode: 'suggest',
           planModeRequired: false,
+          autoCompactEnabled: true,
         },
         prompt: 'Kick off the first run.',
       }),
@@ -1822,6 +3443,7 @@ describe('AgentRuntime current UI', () => {
             approvalMode: 'suggest',
             approvalModeLabel: 'Suggest',
             planModeRequired: false,
+            autoCompactEnabled: true,
             revision: 1,
             appliedAt: '2026-04-20T12:00:00Z',
           },
@@ -1837,6 +3459,7 @@ describe('AgentRuntime current UI', () => {
             approvalMode: 'suggest',
             approvalModeLabel: 'Suggest',
             planModeRequired: false,
+            autoCompactEnabled: true,
             revision: 2,
             queuedAt: '2026-04-20T12:05:00Z',
             queuedPrompt: 'Kick off the first run.',
@@ -1926,6 +3549,7 @@ describe('AgentRuntime current UI', () => {
           thinkingEffort: 'medium',
           approvalMode: 'suggest',
           planModeRequired: false,
+          autoCompactEnabled: true,
         },
         prompt: 'Build the provider path.',
       }),
@@ -2025,6 +3649,7 @@ describe('AgentRuntime current UI', () => {
             approvalMode: 'yolo',
             approvalModeLabel: 'YOLO',
             planModeRequired: false,
+            autoCompactEnabled: true,
             revision: 3,
             appliedAt: '2026-04-20T12:00:00Z',
           },
@@ -2047,7 +3672,48 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('YOLO')
   })
 
-  it('opts owned-agent continuations into auto-compact from the composer', async () => {
+  it('queues runtime agent changes against the active run controls', async () => {
+    const onUpdateRuntimeRunControls = vi.fn(async () => makeRuntimeRun())
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          controlTruthSource: 'runtime_run',
+          selectedModelId: 'openai_codex',
+          selectedModelSelectionKey: 'openai_codex:openai_codex',
+          selectedThinkingEffort: 'medium',
+          selectedApprovalMode: 'suggest',
+          composerModelOptions: [makeComposerModelOption()],
+        })}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    const agentSelector = screen.getByRole('combobox', { name: 'Agent selector' })
+    expect(agentSelector).not.toBeDisabled()
+
+    fireEvent.click(agentSelector)
+    fireEvent.click(await screen.findByRole('option', { name: /Engineer/i }))
+
+    await waitFor(() =>
+      expect(onUpdateRuntimeRunControls).toHaveBeenCalledWith({
+        controls: {
+          runtimeAgentId: 'engineer',
+          agentDefinitionId: null,
+          providerProfileId: 'openai_codex-default',
+          modelId: 'openai_codex',
+          thinkingEffort: 'medium',
+          approvalMode: 'suggest',
+          planModeRequired: false,
+          autoCompactEnabled: true,
+        },
+      }),
+    )
+  })
+
+  it('queues sticky auto-compact control updates from the composer toggle', async () => {
     const onUpdateRuntimeRunControls = vi.fn(async () => makeRuntimeRun())
 
     render(
@@ -2066,21 +3732,14 @@ describe('AgentRuntime current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Auto-compact before sending' }))
-    fireEvent.change(screen.getByLabelText('Agent input'), {
-      target: { value: 'Continue after compacting old context.' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    await waitFor(() =>
-      expect(onUpdateRuntimeRunControls).toHaveBeenCalledWith({
-        prompt: 'Continue after compacting old context.',
-        autoCompact: {
-          enabled: true,
-          thresholdPercent: 85,
-          rawTailMessageCount: 8,
-        },
-      }),
-    )
+    await waitFor(() => {
+      expect(onUpdateRuntimeRunControls).toHaveBeenCalledWith(
+        expect.objectContaining({
+          controls: expect.objectContaining({ autoCompactEnabled: false }),
+        }),
+      )
+    })
   })
 
   it('keeps the dictation mic hidden without native macOS support', () => {
@@ -2135,10 +3794,12 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    const input = screen.getByLabelText('Agent input')
+    const input = screen.getByLabelText('Agent input') as HTMLTextAreaElement
     fireEvent.change(input, { target: { value: 'Send from keyboard.' } })
+    input.setSelectionRange(input.value.length, input.value.length)
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
     expect(onUpdateRuntimeRunControls).not.toHaveBeenCalled()
+    await waitFor(() => expect(input).toHaveValue('Send from keyboard.\n'))
 
     fireEvent.keyDown(input, { key: 'Enter' })
 
@@ -2588,6 +4249,7 @@ describe('AgentRuntime current UI', () => {
 
         expect(getSessionContextSnapshot).toHaveBeenCalledTimes(1)
       } finally {
+        vi.useRealTimers()
         Object.defineProperty(window, 'requestAnimationFrame', {
           configurable: true,
           value: originalRequestAnimationFrame,
@@ -2615,7 +4277,7 @@ describe('AgentRuntime current UI', () => {
       expect(spawnBtn).toBeDisabled()
     })
 
-    it('renders the compact composer variant with a gear popover when density is compact', () => {
+    it('renders the dense inline composer variant when density is compact', () => {
       render(
         <AgentRuntime
           agent={makeAgent({
@@ -2627,10 +4289,9 @@ describe('AgentRuntime current UI', () => {
         />,
       )
 
-      // Compact composer: gear popover trigger is visible.
-      expect(screen.getByRole('button', { name: 'Composer settings' })).toBeVisible()
-      // Comfortable-mode inline thinking selector is hidden in compact mode (lives inside gear popover).
-      expect(screen.queryByLabelText('Thinking level selector')).not.toBeInTheDocument()
+      // Compact agent panes adopt the sidebar's dense inline pills, not a gear popover.
+      expect(screen.queryByRole('button', { name: 'Composer settings' })).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Thinking level selector')).toBeVisible()
     })
 
     it('uses the condensed transcript font scale when density is compact', () => {
@@ -2763,6 +4424,212 @@ describe('AgentRuntime current UI', () => {
 
       expect(screen.queryByRole('button', { name: 'Composer settings' })).not.toBeInTheDocument()
       expect(screen.getByLabelText('Thinking level selector')).toBeVisible()
+    })
+  })
+
+  describe('subagent group rendering', () => {
+    function renderSubagentScenario(
+      items: NonNullable<AgentPaneView['runtimeStreamItems']>,
+      density: 'comfortable' | 'compact' = 'comfortable',
+      paneCount = 1,
+    ) {
+      return render(
+        <AgentRuntime
+          agent={makeAgent({
+            runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+            runtimeRun: makeRuntimeRun(),
+            runtimeStreamStatus: 'live',
+            runtimeStreamStatusLabel: 'Live stream',
+            runtimeStreamItems: items,
+          })}
+          density={density}
+          paneCount={paneCount}
+          paneNumber={1}
+        />,
+      )
+    }
+
+    it('groups forwarded subagent child transcript turns under a SubagentGroupCard', () => {
+      renderSubagentScenario([
+        {
+          id: 'transcript:run-1:1',
+          kind: 'transcript',
+          runId: 'run-1',
+          sequence: 1,
+          createdAt: '2026-05-09T10:00:00Z',
+          role: 'user',
+          text: 'Delegate the refactor.',
+        },
+        {
+          id: 'subagent_lifecycle:run-1:sub-1:2',
+          kind: 'subagent_lifecycle',
+          runId: 'run-1',
+          sequence: 2,
+          createdAt: '2026-05-09T10:00:01Z',
+          subagentId: 'sub-1',
+          subagentRole: 'engineer',
+          subagentRoleLabel: 'Engineer',
+          subagentRunId: 'run-2',
+          subagentStatus: 'spawned',
+          usedToolCalls: 0,
+          maxToolCalls: 10,
+          usedTokens: 0,
+          maxTokens: 50_000,
+          usedCostMicros: null,
+          maxCostMicros: null,
+          resultSummary: null,
+          prompt: 'Refactor auth module',
+          title: 'Subagent · Engineer',
+          detail: 'Engineer subagent is spawned.',
+        },
+        {
+          id: 'transcript:run-1:3',
+          kind: 'transcript',
+          runId: 'run-1',
+          sequence: 3,
+          createdAt: '2026-05-09T10:00:05Z',
+          role: 'assistant',
+          text: 'Reading auth module first.',
+          subagentId: 'sub-1',
+          subagentRole: 'engineer',
+          subagentRoleLabel: 'Engineer',
+        },
+        {
+          id: 'subagent_lifecycle:run-1:sub-1:4',
+          kind: 'subagent_lifecycle',
+          runId: 'run-1',
+          sequence: 4,
+          createdAt: '2026-05-09T10:00:30Z',
+          subagentId: 'sub-1',
+          subagentRole: 'engineer',
+          subagentRoleLabel: 'Engineer',
+          subagentRunId: 'run-2',
+          subagentStatus: 'completed',
+          usedToolCalls: 3,
+          maxToolCalls: 10,
+          usedTokens: 4_200,
+          maxTokens: 50_000,
+          usedCostMicros: null,
+          maxCostMicros: null,
+          resultSummary: 'Auth module refactored cleanly.',
+          prompt: null,
+          title: 'Subagent · Engineer',
+          detail: 'Engineer subagent is completed.',
+        },
+      ])
+
+      // Header is rendered with role label
+      const header = screen.getByRole('button', { name: /subagent Engineer transcript/i })
+      expect(header).toBeVisible()
+      // The card collapses on terminal status; expand it to see children.
+      fireEvent.click(header)
+
+      // After expansion we see the prompt and the forwarded child transcript
+      expect(screen.getByText('Refactor auth module')).toBeVisible()
+      expect(screen.getByText('Reading auth module first.')).toBeVisible()
+      expect(screen.getByText('Auth module refactored cleanly.')).toBeVisible()
+      // Budget chip on header reflects terminal usage
+      expect(screen.getByText(/Tools 3\/10/)).toBeVisible()
+    })
+
+    it('keeps the subagent card open while running and renders child turns inline', () => {
+      renderSubagentScenario([
+        {
+          id: 'subagent_lifecycle:run-1:sub-2:1',
+          kind: 'subagent_lifecycle',
+          runId: 'run-1',
+          sequence: 1,
+          createdAt: '2026-05-09T11:00:00Z',
+          subagentId: 'sub-2',
+          subagentRole: 'debugger',
+          subagentRoleLabel: 'Debugger',
+          subagentRunId: 'run-3',
+          subagentStatus: 'running',
+          usedToolCalls: 1,
+          maxToolCalls: 8,
+          usedTokens: 600,
+          maxTokens: 30_000,
+          usedCostMicros: null,
+          maxCostMicros: null,
+          resultSummary: null,
+          prompt: 'Reproduce the crash.',
+          title: 'Subagent · Debugger',
+          detail: 'Debugger subagent is running.',
+        },
+        {
+          id: 'transcript:run-1:2',
+          kind: 'transcript',
+          runId: 'run-1',
+          sequence: 2,
+          createdAt: '2026-05-09T11:00:05Z',
+          role: 'assistant',
+          text: 'Looking at the stack trace…',
+          subagentId: 'sub-2',
+          subagentRole: 'debugger',
+          subagentRoleLabel: 'Debugger',
+        },
+      ])
+
+      // Header should be present and card should be open by default while running
+      expect(screen.getByRole('button', { name: /subagent Debugger transcript/i })).toBeVisible()
+      // Inline child transcript visible without clicking
+      expect(screen.getByText('Looking at the stack trace…')).toBeVisible()
+      expect(screen.getByText('Reproduce the crash.')).toBeVisible()
+      // Status pill shows Running
+      expect(screen.getByText(/Running/)).toBeVisible()
+    })
+
+    it('updates an existing subagent group when a terminal lifecycle event arrives later', () => {
+      renderSubagentScenario([
+        {
+          id: 'subagent_lifecycle:run-1:sub-4:1',
+          kind: 'subagent_lifecycle',
+          runId: 'run-1',
+          sequence: 1,
+          createdAt: '2026-05-09T12:00:00Z',
+          subagentId: 'sub-4',
+          subagentRole: 'researcher',
+          subagentRoleLabel: 'Researcher',
+          subagentRunId: 'run-5',
+          subagentStatus: 'running',
+          usedToolCalls: 0,
+          maxToolCalls: 4,
+          usedTokens: 0,
+          maxTokens: 5_000,
+          usedCostMicros: null,
+          maxCostMicros: null,
+          resultSummary: null,
+          prompt: null,
+          title: 'Subagent · Researcher',
+          detail: 'Researcher subagent is running.',
+        },
+        {
+          id: 'subagent_lifecycle:run-1:sub-4:2',
+          kind: 'subagent_lifecycle',
+          runId: 'run-1',
+          sequence: 2,
+          createdAt: '2026-05-09T12:01:00Z',
+          subagentId: 'sub-4',
+          subagentRole: 'researcher',
+          subagentRoleLabel: 'Researcher',
+          subagentRunId: 'run-5',
+          subagentStatus: 'failed',
+          usedToolCalls: 1,
+          maxToolCalls: 4,
+          usedTokens: 220,
+          maxTokens: 5_000,
+          usedCostMicros: null,
+          maxCostMicros: null,
+          resultSummary: 'Source unavailable.',
+          prompt: null,
+          title: 'Subagent · Researcher',
+          detail: 'Researcher subagent is failed.',
+        },
+      ])
+
+      // Two lifecycle events for the same subagentId collapse into a single group card.
+      expect(screen.getAllByRole('button', { name: /subagent Researcher transcript/i })).toHaveLength(1)
+      expect(screen.getByText(/Failed/)).toBeVisible()
     })
   })
 })

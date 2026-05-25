@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildComposerAgentSelectionKey,
   getComposerControlInput,
+  getComposerModelGroups,
   parseComposerAgentSelectionKey,
   runtimeAgentIdForCustomBaseCapability,
 } from '@/components/xero/agent-runtime/composer-helpers'
@@ -30,10 +31,10 @@ const baseModel: AgentProviderModelView = {
 const customDefinition: AgentDefinitionSummaryDto = {
   definitionId: 'project_research',
   currentVersion: 2,
-  displayName: 'Project Research',
+  displayName: 'User Research',
   shortLabel: 'Research',
-  description: 'Project-aware observe-only researcher.',
-  scope: 'project_custom',
+  description: 'User-created observe-only researcher.',
+  scope: 'global_custom',
   lifecycleState: 'active',
   baseCapabilityProfile: 'observe_only',
   createdAt: '2026-04-30T18:00:00Z',
@@ -44,9 +45,11 @@ const customDefinition: AgentDefinitionSummaryDto = {
 describe('runtimeAgentIdForCustomBaseCapability', () => {
   it('maps each base capability profile to the matching runtime agent id', () => {
     expect(runtimeAgentIdForCustomBaseCapability('observe_only')).toBe('ask')
+    expect(runtimeAgentIdForCustomBaseCapability('planning')).toBe('plan')
     expect(runtimeAgentIdForCustomBaseCapability('repository_recon')).toBe('crawl')
     expect(runtimeAgentIdForCustomBaseCapability('engineering')).toBe('engineer')
     expect(runtimeAgentIdForCustomBaseCapability('debugging')).toBe('debug')
+    expect(runtimeAgentIdForCustomBaseCapability('computer_use')).toBe('computer_use')
     expect(runtimeAgentIdForCustomBaseCapability('agent_builder')).toBe('agent_create')
   })
 })
@@ -85,15 +88,44 @@ describe('parseComposerAgentSelectionKey', () => {
     expect(parsed).toMatchObject({
       runtimeAgentId: 'ask',
       agentDefinitionId: 'project_research',
-      label: 'Project Research',
+      label: 'User Research',
       isCustom: true,
-      scope: 'project_custom',
+      scope: 'global_custom',
     })
   })
 
   it('returns null when a custom selection references an unknown definition', () => {
     const parsed = parseComposerAgentSelectionKey('custom:missing', [customDefinition])
     expect(parsed).toBeNull()
+  })
+})
+
+describe('getComposerModelGroups', () => {
+  it('uses displayName for picker labels even when label still carries the raw model id', () => {
+    const model: AgentProviderModelView = {
+      ...baseModel,
+      selectionKey: 'xai:grok-4.3-latest',
+      providerId: 'xai',
+      providerLabel: 'xAI / Grok',
+      modelId: 'grok-4.3-latest',
+      label: 'grok-4.3-latest',
+      displayName: 'Grok 4.3 Latest',
+      groupId: 'xai',
+      groupLabel: 'xAI / Grok',
+    }
+
+    expect(getComposerModelGroups([model])).toEqual([
+      {
+        id: 'xai',
+        label: 'xAI / Grok',
+        items: [
+          {
+            value: 'xai:grok-4.3-latest',
+            label: 'Grok 4.3 Latest',
+          },
+        ],
+      },
+    ])
   })
 })
 
@@ -106,6 +138,7 @@ describe('getComposerControlInput', () => {
       selectionKey: baseModel.selectionKey,
       thinkingEffort: 'medium',
       approvalMode: 'suggest',
+      autoCompactEnabled: true,
     })
     expect(input).not.toBeNull()
     expect(input?.agentDefinitionId).toBe('team_engineer_v2')
@@ -120,6 +153,7 @@ describe('getComposerControlInput', () => {
       selectionKey: baseModel.selectionKey,
       thinkingEffort: null,
       approvalMode: 'suggest',
+      autoCompactEnabled: true,
     })
     expect(input?.agentDefinitionId).toBeNull()
   })

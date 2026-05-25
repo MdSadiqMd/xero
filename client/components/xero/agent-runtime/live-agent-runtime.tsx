@@ -1,8 +1,10 @@
 "use client"
 
-import { lazy, memo, Suspense, useMemo } from 'react'
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react'
 
-import type { AgentRuntimeProps } from '@/components/xero/agent-runtime'
+import type { AgentRuntimeDesktopAdapter, AgentRuntimeProps } from '@/components/xero/agent-runtime'
+import type { ConversationTurn } from '@xero/ui/components/transcript/conversation-section'
+import { buildHistoricalConversationTurns } from '@/components/xero/agent-runtime/session-history-projection'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   selectRuntimeStreamForProject,
@@ -79,6 +81,102 @@ export function useAgentViewWithLiveRuntimeStream(
   }, [agent, runtimeStream])
 }
 
+/**
+ * Fetches the persisted session transcript for the given pane and projects it
+ * into the historical `ConversationTurn[]` that the conversation pane renders
+ * ahead of the live runtime stream. Returns `null` while the request is
+ * in-flight on first load (so the UI falls back to the live stream alone).
+ *
+ * Refetches whenever the (project, session, run) triple changes — the
+ * runId-flip case is the same-type handoff path where the source run becomes
+ * historical and we want it to re-appear in the conversation under a new
+ * `handoff_notice` row.
+ */
+export function useHistoricalConversationTurns(
+  agent: AgentPaneView | null,
+  desktopAdapter: AgentRuntimeDesktopAdapter | undefined,
+): ConversationTurn[] | null {
+  const projectId = agent?.project.id ?? null
+  const agentSessionId = agent?.project.selectedAgentSessionId ?? null
+  const runtimeRun = agent?.runtimeRun ?? null
+  const activeRunId = runtimeRun && !runtimeRun.isTerminal ? runtimeRun.runId : null
+  const getSessionTranscript = desktopAdapter?.getSessionTranscript
+  const [turnsByKey, setTurnsByKey] = useState<{
+    sessionKey: string
+    fetchKey: string
+    turns: ConversationTurn[]
+  } | null>(null)
+  const streamStatus = agent?.runtimeStreamStatus ?? 'idle'
+  const shouldDeferTranscriptFetch = Boolean(
+    agent?.runtimeRunActionStatus === 'running' ||
+      agent?.selectedPrompt?.hasQueuedPrompt ||
+      streamStatus === 'subscribing' ||
+      streamStatus === 'replaying' ||
+      streamStatus === 'live',
+  )
+
+  // Keying on (project, session, run) covers the same-type handoff case: when
+  // the runtime run snapshot is rebound from source -> target run, the runId
+  // changes and we refetch so the source run's items show up as history.
+  const sessionKey = projectId && agentSessionId
+    ? `${projectId}::${agentSessionId}`
+    : null
+  const fetchKey = sessionKey
+    ? `${sessionKey}::${activeRunId ?? ''}`
+    : null
+
+  useEffect(() => {
+    if (!sessionKey || !fetchKey || !projectId || !agentSessionId || !getSessionTranscript || shouldDeferTranscriptFetch) {
+      return
+    }
+
+    let cancelled = false
+    void getSessionTranscript({
+      projectId,
+      agentSessionId,
+      runId: null,
+    })
+      .then((transcript) => {
+        if (cancelled) return
+        const turns = buildHistoricalConversationTurns(transcript, { activeRunId })
+        setTurnsByKey({ sessionKey, fetchKey, turns })
+      })
+      .catch(() => {
+        if (cancelled) return
+        // On failure, fall back silently to the live stream alone. The pane
+        // is still functional; only the historical context is missing.
+        setTurnsByKey({ sessionKey, fetchKey, turns: [] })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeRunId,
+    agentSessionId,
+    fetchKey,
+    getSessionTranscript,
+    projectId,
+    sessionKey,
+    shouldDeferTranscriptFetch,
+  ])
+
+  // While stale-keyed (e.g. user just switched panes or the active run id just
+  // arrived during project load), suppress the previous history. Keeping a
+  // transcript fetched with no active run would let the current run appear once
+  // as static history and again from the live/restored stream.
+  if (
+    !sessionKey ||
+    !fetchKey ||
+    !turnsByKey ||
+    turnsByKey.sessionKey !== sessionKey ||
+    turnsByKey.fetchKey !== fetchKey
+  ) {
+    return null
+  }
+  return turnsByKey.turns
+}
+
 interface LiveAgentRuntimeViewProps extends Omit<AgentRuntimeProps, 'agent'> {
   agent: AgentPaneView | null
   highChurnStore: XeroHighChurnStore
@@ -90,13 +188,18 @@ export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
   ...props
 }: LiveAgentRuntimeViewProps) {
   const liveAgent = useAgentViewWithLiveRuntimeStream(agent, highChurnStore)
+  const historicalConversationTurns = useHistoricalConversationTurns(liveAgent, props.desktopAdapter)
   if (!liveAgent) {
     return null
   }
 
   return (
     <Suspense fallback={<AgentRuntimeLoadingShell />}>
-      <LazyAgentRuntime {...props} agent={liveAgent} />
+      <LazyAgentRuntime
+        {...props}
+        agent={liveAgent}
+        historicalConversationTurns={historicalConversationTurns ?? undefined}
+      />
     </Suspense>
   )
 })

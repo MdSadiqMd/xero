@@ -71,7 +71,7 @@ impl BrowserSource {
     }
 
     fn all() -> Vec<BrowserSource> {
-        let mut sources = vec![
+        vec![
             BrowserSource::Chrome,
             BrowserSource::Chromium,
             BrowserSource::Brave,
@@ -83,10 +83,9 @@ impl BrowserSource {
             BrowserSource::Firefox,
             BrowserSource::LibreWolf,
             BrowserSource::Zen,
-        ];
-        #[cfg(target_os = "macos")]
-        sources.push(BrowserSource::Safari);
-        sources
+            #[cfg(target_os = "macos")]
+            BrowserSource::Safari,
+        ]
     }
 
     /// Detects installed browsers via file presence instead of rookie. Rookie's
@@ -134,8 +133,12 @@ impl BrowserSource {
         }
         #[cfg(target_os = "windows")]
         {
-            let local = home.join("AppData/Local");
-            let roaming = home.join("AppData/Roaming");
+            let local = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData").join("Local"));
+            let roaming = std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData").join("Roaming"));
             match self {
                 BrowserSource::Chrome => vec![local
                     .join("Google/Chrome/User Data/Default/Network/Cookies")],

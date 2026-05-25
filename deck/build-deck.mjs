@@ -9,6 +9,7 @@ const runtimeRequire = createRequire(
 
 const { chromium } = runtimeRequire("playwright");
 const sharp = runtimeRequire("sharp");
+const { PDFDocument } = runtimeRequire("pdf-lib");
 
 const __filename = fileURLToPath(import.meta.url);
 const deckDir = path.dirname(__filename);
@@ -56,16 +57,20 @@ for (let index = 0; index < slideHandles.length; index += 1) {
   previews.push(previewPath);
 }
 
-await page.pdf({
-  path: pdfPath,
-  width: "1600px",
-  height: "900px",
-  printBackground: true,
-  preferCSSPageSize: true,
-  margin: { top: "0px", right: "0px", bottom: "0px", left: "0px" },
-});
-
 await browser.close();
+
+// Build PDF from the correctly-sized PNG screenshots — bypasses
+// Chromium's print pipeline which scales content to ~92.7% of the page.
+const pdfDoc = await PDFDocument.create();
+for (const previewPath of previews) {
+  const bytes = await fs.readFile(previewPath);
+  const png = await pdfDoc.embedPng(bytes);
+  // PDF points: 1 CSS px = 0.75 pt. 1600x900 px → 1200x675 pt.
+  const pdfPage = pdfDoc.addPage([1200, 675]);
+  pdfPage.drawImage(png, { x: 0, y: 0, width: 1200, height: 675 });
+}
+const pdfBytes = await pdfDoc.save();
+await fs.writeFile(pdfPath, pdfBytes);
 
 const checks = [];
 for (const previewPath of previews) {
@@ -94,7 +99,7 @@ const report = {
   pdfBytes: pdfStat.size,
   slideCount: slideHandles.length,
   previews: checks,
-  passed: checks.length === 10 && checks.every((check) => check.passed) && pdfStat.size > 100_000,
+  passed: checks.length === 9 && checks.every((check) => check.passed) && pdfStat.size > 100_000,
 };
 
 await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");

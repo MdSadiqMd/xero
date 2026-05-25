@@ -12,7 +12,15 @@ import type {
   SkillRegistryLoadStatus,
   SkillRegistryMutationStatus,
 } from "@/src/features/xero/use-xero-desktop-state"
+import type { AgentToolingSettingsAdapter } from "@/components/xero/settings-dialog/agent-tooling-section"
+import type {
+  DangerSettingsAdapter,
+  DangerZoneProject,
+} from "@/components/xero/settings-dialog/account-danger-zone"
 import type { DictationSettingsAdapter } from "@/components/xero/settings-dialog/dictation-section"
+import type { MemoryReviewAdapter } from "@/components/xero/settings-dialog/memory-review-section"
+import type { PowerSettingsAdapter } from "@/components/xero/settings-dialog/power-section"
+import type { ProjectStateAdapter } from "@/components/xero/settings-dialog/project-state-section"
 import type { SoulSettingsAdapter } from "@/components/xero/settings-dialog/soul-section"
 import type {
   EnvironmentDiscoveryStatusDto,
@@ -26,7 +34,7 @@ import type {
   McpRegistryDto,
   ProviderCredentialsSnapshotDto,
   ProviderAuthSessionView,
-  ProviderProfileDiagnosticsDto,
+  RuntimeAgentIdDto,
   RuntimeProviderIdDto,
   RunDoctorReportRequestDto,
   ListSkillRegistryRequestDto,
@@ -44,14 +52,17 @@ import type {
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
   UpsertProviderCredentialRequestDto,
+  XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
+import type { StartTargetDto, StartTargetInputDto } from "@/src/lib/xero-desktop"
+import type { ToolCallGroupingPreference } from "@/src/features/xero/tool-call-grouping-preference"
 import type { PlatformVariant } from "@/components/xero/shell"
 import type {
   GitHubAuthError,
   GitHubAuthStatus,
   GitHubSessionView,
 } from "@/src/lib/github-auth"
-import { Activity, ArrowLeft, Bell, Bot, Code2, Database, Globe, Heart, KeyRound, Mic, Palette, Plug, PlugZap, UserRound, WandSparkles } from "lucide-react"
+import { Activity, ArrowLeft, Bell, Bot, Brain, Cloud, Code2, Database, Globe, HardDrive, Heart, Keyboard, KeyRound, Mic, Palette, PlaySquare, Plug, PlugZap, Power, UserRound, WandSparkles, Wrench } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -62,6 +73,7 @@ import { cn } from "@/lib/utils"
 
 export type SettingsSection =
   | "account"
+  | "cloudAccount"
   | "providers"
   | "diagnostics"
   | "soul"
@@ -70,14 +82,21 @@ export type SettingsSection =
   | "mcp"
   | "skills"
   | "agents"
+  | "agentTooling"
+  | "memory"
   | "plugins"
   | "browser"
+  | "power"
   | "workspaceIndex"
+  | "projectState"
+  | "projectRunner"
   | "themes"
+  | "shortcuts"
   | "development"
 
 const SETTINGS_SECTIONS: SettingsSection[] = [
   "account",
+  "cloudAccount",
   "providers",
   "diagnostics",
   "soul",
@@ -85,11 +104,17 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   "notifications",
   "mcp",
   "agents",
+  "agentTooling",
+  "memory",
   "skills",
   "plugins",
   "browser",
+  "power",
   "workspaceIndex",
+  "projectState",
+  "projectRunner",
   "themes",
+  "shortcuts",
   "development",
 ]
 
@@ -97,13 +122,25 @@ const loadAccountSection = () =>
   import("@/components/xero/settings-dialog/account-section").then((module) => ({
     default: module.AccountSection,
   }))
+const loadCloudAccountSection = () =>
+  import("@/components/xero/settings-dialog/cloud-account-section").then((module) => ({
+    default: module.CloudAccountSection,
+  }))
 const loadAgentsSection = () =>
   import("@/components/xero/settings-dialog/agents-section").then((module) => ({
     default: module.AgentsSection,
   }))
+const loadAgentToolingSection = () =>
+  import("@/components/xero/settings-dialog/agent-tooling-section").then((module) => ({
+    default: module.AgentToolingSection,
+  }))
 const loadBrowserSection = () =>
   import("@/components/xero/settings-dialog/browser-section").then((module) => ({
     default: module.BrowserSection,
+  }))
+const loadPowerSection = () =>
+  import("@/components/xero/settings-dialog/power-section").then((module) => ({
+    default: module.PowerSection,
   }))
 const loadDevelopmentSection = () =>
   import("@/components/xero/settings-dialog/development-section").then((module) => ({
@@ -121,6 +158,10 @@ const loadMcpSection = () =>
   import("@/components/xero/settings-dialog/mcp-section").then((module) => ({
     default: module.McpSection,
   }))
+const loadMemoryReviewSection = () =>
+  import("@/components/xero/settings-dialog/memory-review-section").then((module) => ({
+    default: module.MemoryReviewSection,
+  }))
 const loadNotificationsSection = () =>
   import("@/components/xero/settings-dialog/notifications-section").then((module) => ({
     default: module.NotificationsSection,
@@ -132,6 +173,10 @@ const loadProvidersSection = () =>
 const loadPluginsSection = () =>
   import("@/components/xero/settings-dialog/plugins-section").then((module) => ({
     default: module.PluginsSection,
+  }))
+const loadShortcutsSection = () =>
+  import("@/components/xero/settings-dialog/shortcuts-section").then((module) => ({
+    default: module.ShortcutsSection,
   }))
 const loadSkillsSection = () =>
   import("@/components/xero/settings-dialog/skills-section").then((module) => ({
@@ -149,24 +194,40 @@ const loadWorkspaceIndexSection = () =>
   import("@/components/xero/settings-dialog/workspace-index-section").then((module) => ({
     default: module.WorkspaceIndexSection,
   }))
+const loadProjectStateSection = () =>
+  import("@/components/xero/settings-dialog/project-state-section").then((module) => ({
+    default: module.ProjectStateSection,
+  }))
+const loadProjectRunnerSection = () =>
+  import("@/components/xero/settings-dialog/project-runner-section").then((module) => ({
+    default: module.ProjectRunnerSection,
+  }))
 
 const LazyAccountSection = lazy(loadAccountSection)
+const LazyCloudAccountSection = lazy(loadCloudAccountSection)
 const LazyAgentsSection = lazy(loadAgentsSection)
+const LazyAgentToolingSection = lazy(loadAgentToolingSection)
 const LazyBrowserSection = lazy(loadBrowserSection)
+const LazyPowerSection = lazy(loadPowerSection)
 const LazyDevelopmentSection = lazy(loadDevelopmentSection)
 const LazyDictationSection = lazy(loadDictationSection)
 const LazyDiagnosticsSection = lazy(loadDiagnosticsSection)
 const LazyMcpSection = lazy(loadMcpSection)
+const LazyMemoryReviewSection = lazy(loadMemoryReviewSection)
 const LazyNotificationsSection = lazy(loadNotificationsSection)
 const LazyProvidersSection = lazy(loadProvidersSection)
 const LazyPluginsSection = lazy(loadPluginsSection)
+const LazyShortcutsSection = lazy(loadShortcutsSection)
 const LazySkillsSection = lazy(loadSkillsSection)
 const LazySoulSection = lazy(loadSoulSection)
 const LazyThemesSection = lazy(loadThemesSection)
 const LazyWorkspaceIndexSection = lazy(loadWorkspaceIndexSection)
+const LazyProjectStateSection = lazy(loadProjectStateSection)
+const LazyProjectRunnerSection = lazy(loadProjectRunnerSection)
 
 const SETTINGS_SECTION_LOADERS: Record<SettingsSection, () => Promise<unknown>> = {
   account: loadAccountSection,
+  cloudAccount: loadCloudAccountSection,
   providers: loadProvidersSection,
   diagnostics: loadDiagnosticsSection,
   soul: loadSoulSection,
@@ -174,11 +235,17 @@ const SETTINGS_SECTION_LOADERS: Record<SettingsSection, () => Promise<unknown>> 
   notifications: loadNotificationsSection,
   mcp: loadMcpSection,
   agents: loadAgentsSection,
+  agentTooling: loadAgentToolingSection,
+  memory: loadMemoryReviewSection,
   skills: loadSkillsSection,
   plugins: loadPluginsSection,
   browser: loadBrowserSection,
+  power: loadPowerSection,
   workspaceIndex: loadWorkspaceIndexSection,
+  projectState: loadProjectStateSection,
+  projectRunner: loadProjectRunnerSection,
   themes: loadThemesSection,
+  shortcuts: loadShortcutsSection,
   development: loadDevelopmentSection,
 }
 
@@ -215,7 +282,10 @@ interface NavGroup {
 const ACCOUNT_GROUP: NavGroup = {
   id: "account",
   label: "Account",
-  items: [{ id: "account", label: "Account", icon: UserRound }],
+  items: [
+    { id: "account", label: "Account", icon: UserRound },
+    { id: "cloudAccount", label: "Cloud account", icon: Cloud },
+  ],
 }
 
 const WORKSPACE_GROUP: NavGroup = {
@@ -229,17 +299,25 @@ const WORKSPACE_GROUP: NavGroup = {
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "mcp", label: "MCP", icon: PlugZap },
     { id: "agents", label: "Agents", icon: Bot },
+    { id: "agentTooling", label: "Agent Tooling", icon: Wrench },
+    { id: "memory", label: "Memory", icon: Brain },
     { id: "skills", label: "Skills", icon: WandSparkles },
     { id: "plugins", label: "Plugins", icon: Plug },
     { id: "browser", label: "Browser", icon: Globe },
+    { id: "power", label: "Power", icon: Power },
     { id: "workspaceIndex", label: "Workspace Index", icon: Database },
+    { id: "projectState", label: "Project State", icon: HardDrive },
+    { id: "projectRunner", label: "Project Runner", icon: PlaySquare },
   ],
 }
 
 const APPEARANCE_GROUP: NavGroup = {
   id: "appearance",
   label: "Appearance",
-  items: [{ id: "themes", label: "Themes", icon: Palette }],
+  items: [
+    { id: "themes", label: "Themes", icon: Palette },
+    { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+  ],
 }
 
 const DEVELOPER_GROUP: NavGroup = {
@@ -275,10 +353,11 @@ export interface SettingsDialogProps {
     providerId: RuntimeProviderIdDto
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
-  onCheckProviderProfile?: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
+  onStartXaiDeviceCodeLogin?: (request: { providerId: "xai" }) => Promise<XaiDeviceCodeLoginDto>
+  onPollXaiDeviceCodeLogin?: (request: {
+    providerId: "xai"
+    flowId: string
+  }) => Promise<XaiDeviceCodeLoginDto>
   doctorReport?: XeroDoctorReportDto | null
   doctorReportStatus?: DoctorReportRunStatus
   doctorReportError?: OperatorActionErrorView | null
@@ -291,6 +370,44 @@ export interface SettingsDialogProps {
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
   dictationAdapter?: DictationSettingsAdapter
   soulAdapter?: SoulSettingsAdapter
+  agentToolingAdapter?: AgentToolingSettingsAdapter
+  powerAdapter?: PowerSettingsAdapter
+  toolCallGroupingPreference?: ToolCallGroupingPreference
+  onToolCallGroupingPreferenceChange?: (preference: ToolCallGroupingPreference) => Promise<void> | void
+  memoryReviewAdapter?: MemoryReviewAdapter | null
+  projectStateAdapter?: ProjectStateAdapter | null
+  dangerAdapter?: DangerSettingsAdapter | null
+  projects?: DangerZoneProject[]
+  projectStartTargets?: StartTargetDto[]
+  onUpdateProjectStartTargets?: (
+    targets: StartTargetInputDto[],
+  ) => Promise<void>
+  resolveProjectRunnerSuggestRequest?: () => {
+    modelId: string
+    providerProfileId: string | null
+    runtimeAgentId: RuntimeAgentIdDto | null
+    thinkingEffort:
+      | "none"
+      | "minimal"
+      | "low"
+      | "medium"
+      | "high"
+      | "x_high"
+      | null
+  } | null
+  onSuggestProjectStartTargets?: (request: {
+    modelId: string
+    providerProfileId: string | null
+    runtimeAgentId: RuntimeAgentIdDto | null
+    thinkingEffort:
+      | "none"
+      | "minimal"
+      | "low"
+      | "medium"
+      | "high"
+      | "x_high"
+      | null
+  }) => Promise<{ targets: { name: string; command: string }[] }>
   onUpsertNotificationRoute?: (req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">) => Promise<unknown>
   mcpRegistry?: McpRegistryDto | null
   mcpImportDiagnostics?: McpImportDiagnosticDto[]
@@ -343,6 +460,12 @@ export interface SettingsDialogProps {
     definitionId: string
     version: number
   }) => Promise<import("@/src/lib/xero-model/agent-definition").AgentDefinitionVersionSummaryDto | null>
+  onGetAgentDefinitionVersionDiff?: (request: {
+    projectId: string
+    definitionId: string
+    fromVersion: number
+    toVersion: number
+  }) => Promise<import("@/src/lib/xero-model/agent-definition").AgentDefinitionVersionDiffDto>
   onAgentRegistryChanged?: () => void
 }
 
@@ -360,7 +483,8 @@ export function SettingsDialog({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
-  onCheckProviderProfile,
+  onStartXaiDeviceCodeLogin,
+  onPollXaiDeviceCodeLogin,
   doctorReport = null,
   doctorReportStatus = "idle",
   doctorReportError = null,
@@ -373,6 +497,18 @@ export function SettingsDialog({
   onRunDoctorReport,
   dictationAdapter,
   soulAdapter,
+  agentToolingAdapter,
+  powerAdapter,
+  toolCallGroupingPreference,
+  onToolCallGroupingPreferenceChange,
+  memoryReviewAdapter = null,
+  projectStateAdapter = null,
+  dangerAdapter = null,
+  projects = [],
+  projectStartTargets = [],
+  onUpdateProjectStartTargets,
+  resolveProjectRunnerSuggestRequest,
+  onSuggestProjectStartTargets,
   onUpsertNotificationRoute,
   mcpRegistry = null,
   mcpImportDiagnostics = [],
@@ -415,11 +551,12 @@ export function SettingsDialog({
   onListAgentDefinitions,
   onArchiveAgentDefinition,
   onGetAgentDefinitionVersion,
+  onGetAgentDefinitionVersionDiff,
   onAgentRegistryChanged,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<SettingsSection>("providers")
+  const [section, setSection] = useState<SettingsSection>(initialSection)
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
-    () => new Set(["providers"]),
+    () => new Set([initialSection]),
   )
   const refreshOnOpenCallbacksRef = useRef({
     providerCredentials: onRefreshProviderCredentials,
@@ -519,6 +656,10 @@ export function SettingsDialog({
   }, [])
 
   const renderSectionContent = (renderedSection: SettingsSection) => {
+    if (renderedSection === "cloudAccount") {
+      return <LazyCloudAccountSection />
+    }
+
     if (renderedSection === "account") {
       return (
         <LazyAccountSection
@@ -527,6 +668,9 @@ export function SettingsDialog({
           error={githubAuthError ?? null}
           onLogin={() => onGithubLogin?.()}
           onLogout={() => onGithubLogout?.()}
+          dangerAdapter={dangerAdapter}
+          dangerProjects={projects}
+          activeProjectId={agent?.project.id ?? null}
         />
       )
     }
@@ -545,7 +689,8 @@ export function SettingsDialog({
           onUpsertProviderCredential={onUpsertProviderCredential}
           onDeleteProviderCredential={onDeleteProviderCredential}
           onStartOAuthLogin={onStartOAuthLogin}
-          onCheckProviderProfile={onCheckProviderProfile}
+          onStartXaiDeviceCodeLogin={onStartXaiDeviceCodeLogin}
+          onPollXaiDeviceCodeLogin={onPollXaiDeviceCodeLogin}
         />
       )
     }
@@ -616,7 +761,30 @@ export function SettingsDialog({
           onListAgentDefinitions={onListAgentDefinitions}
           onArchiveAgentDefinition={onArchiveAgentDefinition}
           onGetAgentDefinitionVersion={onGetAgentDefinitionVersion}
+          onGetAgentDefinitionVersionDiff={onGetAgentDefinitionVersionDiff}
           onRegistryChanged={onAgentRegistryChanged}
+        />
+      )
+    }
+
+    if (renderedSection === "agentTooling") {
+      return (
+        <LazyAgentToolingSection
+          adapter={agentToolingAdapter}
+          toolCallGroupingPreference={toolCallGroupingPreference}
+          onToolCallGroupingPreferenceChange={onToolCallGroupingPreferenceChange}
+        />
+      )
+    }
+
+    if (renderedSection === "memory") {
+      const sessionId = agent?.project.selectedAgentSessionId
+      return (
+        <LazyMemoryReviewSection
+          projectId={agent?.project.id ?? null}
+          projectLabel={agent?.project.repository?.displayName ?? agent?.project.name ?? null}
+          agentSessionId={sessionId && sessionId.length > 0 ? sessionId : null}
+          adapter={memoryReviewAdapter}
         />
       )
     }
@@ -667,6 +835,10 @@ export function SettingsDialog({
       return <LazyBrowserSection />
     }
 
+    if (renderedSection === "power") {
+      return <LazyPowerSection adapter={powerAdapter} />
+    }
+
     if (renderedSection === "workspaceIndex") {
       return (
         <LazyWorkspaceIndexSection
@@ -676,8 +848,35 @@ export function SettingsDialog({
       )
     }
 
+    if (renderedSection === "projectState") {
+      return (
+        <LazyProjectStateSection
+          projectId={agent?.project.id ?? null}
+          projectLabel={agent?.project.repository?.displayName ?? agent?.project.name ?? null}
+          adapter={projectStateAdapter}
+        />
+      )
+    }
+
+    if (renderedSection === "projectRunner") {
+      return (
+        <LazyProjectRunnerSection
+          projectId={agent?.project.id ?? null}
+          projectLabel={agent?.project.repository?.displayName ?? agent?.project.name ?? null}
+          startTargets={projectStartTargets}
+          onSave={onUpdateProjectStartTargets}
+          resolveSuggestRequest={resolveProjectRunnerSuggestRequest}
+          onSuggest={onSuggestProjectStartTargets}
+        />
+      )
+    }
+
     if (renderedSection === "themes") {
       return <LazyThemesSection />
+    }
+
+    if (renderedSection === "shortcuts") {
+      return <LazyShortcutsSection />
     }
 
     if (renderedSection === "development") {
@@ -705,19 +904,19 @@ export function SettingsDialog({
         </DialogDescription>
 
         <div className="flex min-h-0 flex-1">
-          <nav className="flex w-64 shrink-0 flex-col gap-4 border-r border-border/70 bg-sidebar py-4">
-            <div className="px-2.5">
+          <nav className="flex w-64 shrink-0 flex-col border-r border-border/70 bg-sidebar">
+            <div className="shrink-0 px-2.5 pt-4">
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] font-medium text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               >
                 <ArrowLeft className="h-4 w-4" />
                 Back to app
               </button>
             </div>
 
-            <div className="flex flex-col gap-3.5">
+            <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto scrollbar-thin scrollbar-sidebar py-4">
               {NAV_GROUPS.map((group) => (
                 <div key={group.id} className="flex flex-col">
                   <span className="px-4 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
@@ -740,7 +939,7 @@ export function SettingsDialog({
                             void preloadSettingsSectionChunk(id)
                           }}
                           className={cn(
-                            "group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13.5px] leading-tight transition-colors",
+                            "group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13.5px] leading-tight",
                             active
                               ? "bg-accent/60 text-foreground"
                               : "text-muted-foreground hover:bg-accent/30 hover:text-foreground",

@@ -93,6 +93,8 @@ pub struct HarnessPromptFragmentSnapshot {
     pub priority: u16,
     pub title: String,
     pub provenance: String,
+    pub budget_policy: String,
+    pub inclusion_reason: String,
     pub content: String,
     pub sha256: String,
     pub token_estimate: u64,
@@ -339,7 +341,7 @@ fn prompt_snapshot_for_agent(
     let compilation = PromptCompiler::new(
         repo_root,
         Some("contract-project"),
-        Some("contract-session"),
+        None,
         runtime_agent_id,
         BrowserControlPreferenceDto::Default,
         registry.descriptors(),
@@ -348,6 +350,7 @@ fn prompt_snapshot_for_agent(
     .with_skill_contexts(skill_contexts)
     .with_owned_process_summary(owned_process_summary)
     .with_active_coordination_summary(active_coordination_summary)
+    .with_runtime_metadata(contract_snapshot_runtime_metadata())
     .compile()?;
 
     let fragment_ids = compilation
@@ -377,9 +380,30 @@ fn prompt_fragment_snapshot(fragment: &PromptFragment) -> HarnessPromptFragmentS
         priority: fragment.priority,
         title: fragment.title.clone(),
         provenance: fragment.provenance.clone(),
+        budget_policy: fragment.budget_policy.as_str().into(),
+        inclusion_reason: fragment.inclusion_reason.clone(),
         content: fragment.body.clone(),
         sha256: fragment.sha256.clone(),
         token_estimate: fragment.token_estimate,
+    }
+}
+
+fn contract_snapshot_runtime_metadata() -> RuntimeHostMetadata {
+    RuntimeHostMetadata {
+        timestamp_utc: "2026-05-01T00:00:00Z".into(),
+        date_utc: "2026-05-01".into(),
+        operating_system: std::env::consts::OS.into(),
+        operating_system_label: match std::env::consts::OS {
+            "macos" => "macOS",
+            "windows" => "Windows",
+            "linux" => "Linux",
+            "ios" => "iOS",
+            "android" => "Android",
+            _ => "Other",
+        }
+        .into(),
+        architecture: std::env::consts::ARCH.into(),
+        family: std::env::consts::FAMILY.into(),
     }
 }
 
@@ -576,6 +600,107 @@ mod tests {
     }
 
     #[test]
+    fn contract_export_enforces_catalog_group_and_risk_invariants() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let contract =
+            export_harness_contract(root.path(), HarnessContractExportOptions::default())
+                .expect("export harness contract");
+        let tool_names = contract
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let allowed_risk_classes = [
+            "agent_definition_state",
+            "agent_delegation",
+            "browser_control",
+            "browser_observe",
+            "command",
+            "command_mutating",
+            "command_probe",
+            "command_verify",
+            "coordination_state",
+            "device_control",
+            "external_capability",
+            "external_capability_invoke",
+            "external_capability_observe",
+            "external_chain",
+            "external_chain_control",
+            "external_chain_mutation",
+            "external_chain_observe",
+            "external_chain_simulation",
+            "long_running_process",
+            "network",
+            "network_browser_control",
+            "observe",
+            "os_control",
+            "process_control",
+            "project_context_read",
+            "registry_control",
+            "runtime_state",
+            "secret_reference",
+            "skill_runtime",
+            "system_privileged",
+            "system_read",
+            "write",
+            "write_destructive",
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+
+        for group in &contract.tool_groups {
+            assert!(
+                allowed_risk_classes.contains(group.risk_class.as_str()),
+                "unknown group risk class {} for {}",
+                group.risk_class,
+                group.name
+            );
+            assert!(
+                !group.description.contains(AUTONOMOUS_TOOL_HARNESS_RUNNER),
+                "reserved tool leaked into group description for {}",
+                group.name
+            );
+            for tool in &group.tools {
+                assert!(
+                    tool_names.contains(tool.as_str()),
+                    "group {} references unknown tool {}",
+                    group.name,
+                    tool
+                );
+                assert_ne!(
+                    tool, AUTONOMOUS_TOOL_HARNESS_RUNNER,
+                    "reserved harness runner must not be group-visible"
+                );
+            }
+        }
+
+        for tool in &contract.tools {
+            assert!(
+                tool.effect_class_known,
+                "tool {} has unknown effect class",
+                tool.name
+            );
+            if let Some(catalog) = tool.catalog.as_ref() {
+                assert!(
+                    allowed_risk_classes.contains(catalog.risk_class.as_str()),
+                    "unknown catalog risk class {} for {}",
+                    catalog.risk_class,
+                    tool.name
+                );
+            }
+            if let Some(descriptor) = tool.descriptor.as_ref() {
+                assert!(
+                    !descriptor
+                        .description
+                        .contains(AUTONOMOUS_TOOL_HARNESS_RUNNER),
+                    "reserved tool leaked into descriptor description for {}",
+                    tool.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn prompt_contract_snapshot_hashes_freeze_builtin_agent_policy() {
         let root = tempfile::tempdir().expect("temp dir");
         let contract =
@@ -597,52 +722,60 @@ mod tests {
             .collect::<Vec<_>>();
         let expected = vec![
             (
+                "generalist:base".to_string(),
+                "9b8da9fc125f9a0e819f6c9bd608d8705beae3efd6eb85b082217aa7e82e3806",
+            ),
+            (
+                "generalist:custom_policy_skill_process_coordination".to_string(),
+                "6e49b026d612cbe9cf6add09e790bfe963b06adbe1730afdcfc7086aa2a85311",
+            ),
+            (
                 "ask:base".to_string(),
-                "2fd40cf5cb22f407b2992509513eb68f40064609a80956b509a22d01150cd4ce",
+                "e183cec670576fe1751fb57c1417021f01323a721f341e658088446e59b5feec",
             ),
             (
                 "ask:custom_policy_skill_process_coordination".to_string(),
-                "cc91e7075c7d08be6a94300cc32ab24121f4217e8597f4971f3514663a7371ec",
+                "9468236f559c29c000e7e9a56d817e38d142e3af795c836c4710ba78eb07e356",
+            ),
+            (
+                "plan:base".to_string(),
+                "c17a622d124bf889d96865e6c8e0698ac64f1586028ba7a5ae35f9068a68cc6a",
+            ),
+            (
+                "plan:custom_policy_skill_process_coordination".to_string(),
+                "9b45c95a542fc9035e0bcb7ac974290e31f663758d10da63f47aec6f40288344",
             ),
             (
                 "engineer:base".to_string(),
-                "4bef5f89665922dded2fdf68a4e7dab45937418418403c9b5ce256bac03dae34",
+                "9fc7ed5135992a00afea5ebb1d61a8124721fcd2857bc0dce3f7af82329e4f08",
             ),
             (
                 "engineer:custom_policy_skill_process_coordination".to_string(),
-                "aa61171e42f4525b6a3ba54ab5901fb10b93f9918b0b3ad492e8b1c3183a7fac",
+                "1fdd0fb803a7e74bdd30dfb07e57c372b29db4a17ef7dc353d0bd05284a1ea20",
             ),
             (
                 "debug:base".to_string(),
-                "4e048e83c179c11c5f2e1a40a4bba442e8ab92c7b1c193b757d24cc119fbec39",
+                "0bcf630a6ba8441e0db28aac73c81ad47cbc25953de225d9e24f02874558e381",
             ),
             (
                 "debug:custom_policy_skill_process_coordination".to_string(),
-                "014e89499b9efa32633c0961cb255663663573983b02c797af50aef6da790b84",
+                "8b2eb473366a9d85788e8fcd36b1d1d9ff54c4036e029231ec75cb166b409054",
             ),
             (
                 "crawl:base".to_string(),
-                "eeee248316373d33b422a64586fe336cd11a82a9ed7f6c6d0a216617050f63fe",
+                "d036b3bc6706fb2becdf0271b0b64b8fa68aee79872e20a536bf8b4b4fd3a8a0",
             ),
             (
                 "crawl:custom_policy_skill_process_coordination".to_string(),
-                "83ebe815d10402504325683146abe43d804b87d488f5e156cd59bb3483ba8f35",
+                "6adc6fe0dccc2f5e21d98052fa5c0cbeffea373e04bf34eef21fe1c402cf1b6a",
             ),
             (
                 "agent_create:base".to_string(),
-                "c49a44949f8bdf77434e3250e4a2008e6a6044090337db4b11c88ffd04dd93a4",
+                "b5443c57b055c74c92d424b23a0f329c2d6141907b71395de2e712e04e5540e7",
             ),
             (
                 "agent_create:custom_policy_skill_process_coordination".to_string(),
-                "2623a904e241aaf9fdd7ff6201db6000e11bc8d0f51927f79e4486fd79b953d4",
-            ),
-            (
-                "test:base".to_string(),
-                "4e724f8b85ab236a90e1c30fdaa54586ea9e02e3a08b75d76f8af34910320e37",
-            ),
-            (
-                "test:custom_policy_skill_process_coordination".to_string(),
-                "6d75bc738cf6828cd87d6877dd68074831edaa5bbece73f96565340d91f25025",
+                "c6cd154dd79fd5b0446abce0d15cdd567a2e11adeb96bbd5c01df669c8590464",
             ),
         ];
 
@@ -671,40 +804,44 @@ mod tests {
             .collect::<Vec<_>>();
         let expected = vec![
             (
+                "generalist:builtin_full".to_string(),
+                "6c63e97c45cd0af2266bdea3d3a290f513b742495c6eafcc1dd0c121ee6f316c",
+            ),
+            (
                 "ask:builtin_full".to_string(),
-                "7afa9bfd6ba1ea14d462dc17cdddd3da781046f03a74363d8b7726ca98870eca",
+                "bc60905830b13392e1fe5a95795d468e50957a779822fdb555483d525aa772aa",
+            ),
+            (
+                "plan:builtin_full".to_string(),
+                "fb1ab69ace66e290f305d8fdb868e7475f87c7f11455273952e670df83817a28",
             ),
             (
                 "engineer:builtin_full".to_string(),
-                "aff21e9bfa817718e8fc0344de8ece83554260f9d48a9bebc70a15ca87e0187f",
+                "6c63e97c45cd0af2266bdea3d3a290f513b742495c6eafcc1dd0c121ee6f316c",
             ),
             (
                 "debug:builtin_full".to_string(),
-                "aff21e9bfa817718e8fc0344de8ece83554260f9d48a9bebc70a15ca87e0187f",
+                "6c63e97c45cd0af2266bdea3d3a290f513b742495c6eafcc1dd0c121ee6f316c",
             ),
             (
                 "crawl:builtin_full".to_string(),
-                "fbd3c6481d2afccd5d7b8331111ea1952766a02ea1d0b2ab64090d7a2478df20",
+                "45d41d13e3807422bfbb6427dca78bc0dae1b05fa0b0f25875fd57bf61f79040",
             ),
             (
                 "agent_create:builtin_full".to_string(),
-                "816baa5a61ca04bb6355481417bb705e436090b312cc84bf1f9f100827e90ec7",
-            ),
-            (
-                "test:builtin_full".to_string(),
-                "aff21e9bfa817718e8fc0344de8ece83554260f9d48a9bebc70a15ca87e0187f",
+                "0d3204d107e89477b3707082ff85f5d3f7d1993875a6342705755b04f352a01a",
             ),
             (
                 "engineer:custom_observe_only".to_string(),
-                "32a11873cf5254294cdc094b3abab08ae1dd9fb0289c37b357679c0cb0e549a8",
+                "33cd2690286b60aee9652e1217826a7b75f57b6989e20c2d8c9f919d1993043a",
             ),
             (
                 "engineer:custom_engineering".to_string(),
-                "99507d2cf64aa44ff2325610b4f4e31e8adb298213309da2c25b034bc4debe01",
+                "6c63e97c45cd0af2266bdea3d3a290f513b742495c6eafcc1dd0c121ee6f316c",
             ),
             (
                 "agent_create:custom_agent_builder".to_string(),
-                "816baa5a61ca04bb6355481417bb705e436090b312cc84bf1f9f100827e90ec7",
+                "0d3204d107e89477b3707082ff85f5d3f7d1993875a6342705755b04f352a01a",
             ),
         ];
 

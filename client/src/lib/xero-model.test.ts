@@ -3,7 +3,9 @@ import {
   applyRepositoryStatus,
   applyRuntimeSession,
   applyRuntimeStreamIssue,
+  adrenalineModeSettingsSchema,
   browserControlSettingsSchema,
+  closedLidModeSettingsSchema,
   composeNotificationRouteTarget,
   createRuntimeStreamFromSubscription,
   decomposeNotificationRouteTarget,
@@ -15,8 +17,6 @@ import {
   mapRepositoryStatus,
   mapRuntimeRun,
   mapRuntimeSession,
-  MAX_RUNTIME_STREAM_ITEMS,
-  MAX_RUNTIME_STREAM_TRANSCRIPTS,
   mergeRuntimeStreamEvent,
   mergeRuntimeUpdated,
   projectSnapshotResponseSchema,
@@ -33,7 +33,9 @@ import {
   syncNotificationAdaptersResponseSchema,
   subscribeRuntimeStreamResponseSchema,
   toolResultSummarySchema,
+  upsertAdrenalineModeSettingsRequestSchema,
   upsertBrowserControlSettingsRequestSchema,
+  upsertClosedLidModeSettingsRequestSchema,
   upsertNotificationRouteCredentialsRequestSchema,
   upsertNotificationRouteCredentialsResponseSchema,
   upsertNotificationRouteRequestSchema,
@@ -44,6 +46,9 @@ import {
   type RuntimeStreamEventDto,
   type RuntimeStreamItemDto,
 } from '@/src/lib/xero-model'
+
+const LEGACY_RUNTIME_STREAM_RECENT_ITEM_CAP = 40
+const LEGACY_RUNTIME_STREAM_TRANSCRIPT_CAP = 20
 
 function makeSnapshot(overrides: Partial<ProjectSnapshotResponseDto> = {}): ProjectSnapshotResponseDto {
   return {
@@ -96,10 +101,12 @@ function makeSnapshot(overrides: Partial<ProjectSnapshotResponseDto> = {}): Proj
       {
         projectId: 'project-1',
         agentSessionId: 'agent-session-main',
+        sessionKind: 'standard',
         title: 'Main session',
         summary: 'Primary project session',
         status: 'active',
         selected: true,
+        remoteVisible: false,
         createdAt: '2026-04-15T17:55:00Z',
         updatedAt: '2026-04-15T17:55:00Z',
         archivedAt: null,
@@ -403,6 +410,7 @@ describe('xero-model', () => {
     expect(project.phaseProgressPercent).toBe(33)
     expect(project.completedPhases).toBe(1)
     expect(project.repository?.headShaLabel).toBe('abc123')
+    expect(project.selectedAgentSession?.remoteVisible).toBe(false)
     expect(project.phases).toHaveLength(2)
     expect(project.phases[0].summary).toBe('Imported successfully')
     expect(project.phases[1].summary).toBeUndefined()
@@ -1722,7 +1730,7 @@ describe('xero-model', () => {
       toolState: 'succeeded',
     })
 
-    for (let index = 0; index < MAX_RUNTIME_STREAM_ITEMS + 5; index += 1) {
+    for (let index = 0; index < LEGACY_RUNTIME_STREAM_RECENT_ITEM_CAP + 5; index += 1) {
       stream = mergeRuntimeStreamEvent(
         stream,
         makeStreamEvent(
@@ -1752,8 +1760,9 @@ describe('xero-model', () => {
       'Reading the relevant files.',
     ])
     expect(stream.items.filter((item) => item.kind !== 'transcript')).toHaveLength(
-      MAX_RUNTIME_STREAM_ITEMS + 6,
+      LEGACY_RUNTIME_STREAM_RECENT_ITEM_CAP + 6,
     )
+    expect(stream.toolCalls).toHaveLength(LEGACY_RUNTIME_STREAM_RECENT_ITEM_CAP + 6)
   })
 
   it('preserves whitespace-bearing assistant transcript deltas while compacting the live turn', () => {
@@ -1776,7 +1785,7 @@ describe('xero-model', () => {
   it('keeps a long streamed assistant reply as one expanding transcript instead of a capped delta window', () => {
     let stream = createRuntimeStreamFromSubscription(streamSubscription)
     const deltas = Array.from(
-      { length: MAX_RUNTIME_STREAM_TRANSCRIPTS + 12 },
+      { length: LEGACY_RUNTIME_STREAM_TRANSCRIPT_CAP + 12 },
       (_, index) => (index === 0 ? 'Chunk' : ` ${index}`),
     )
 
@@ -1790,6 +1799,26 @@ describe('xero-model', () => {
     expect(stream.transcriptItems).toHaveLength(1)
     expect(stream.transcriptItems[0]?.text).toBe(deltas.join(''))
     expect(stream.items.filter((item) => item.kind === 'transcript')).toHaveLength(1)
+  })
+
+  it('keeps replayed transcript turns beyond the old recent-tail cap', () => {
+    let stream = createRuntimeStreamFromSubscription(streamSubscription)
+    const turnCount = LEGACY_RUNTIME_STREAM_TRANSCRIPT_CAP + 5
+
+    for (let index = 0; index < turnCount; index += 1) {
+      stream = mergeRuntimeStreamEvent(
+        stream,
+        makeTranscriptStreamEvent(`turn-${index}`, {
+          sequence: index + 1,
+          role: 'user',
+        }),
+      )
+    }
+
+    expect(stream.transcriptItems).toHaveLength(turnCount)
+    expect(stream.items.filter((item) => item.kind === 'transcript')).toHaveLength(turnCount)
+    expect(stream.transcriptItems[0]?.text).toBe('turn-0')
+    expect(stream.transcriptItems.at(-1)?.text).toBe(`turn-${turnCount - 1}`)
   })
 
   it('keeps streamed reasoning activity deltas as one expanding timeline item', () => {
@@ -2633,6 +2662,90 @@ describe('xero-model', () => {
     ).toEqual({
       preference: 'native_browser',
     })
+
+    expect(
+      adrenalineModeSettingsSchema.parse({
+        enabled: true,
+        assertionKind: 'prevent_idle_system_sleep',
+        active: true,
+        activeStatus: 'active',
+        platformSupported: true,
+        updatedAt: '2026-05-18T12:00:00Z',
+        diagnosticMessage: null,
+      }),
+    ).toEqual({
+      enabled: true,
+      assertionKind: 'prevent_idle_system_sleep',
+      active: true,
+      activeStatus: 'active',
+      platformSupported: true,
+      updatedAt: '2026-05-18T12:00:00Z',
+      diagnosticMessage: null,
+    })
+
+    expect(
+      upsertAdrenalineModeSettingsRequestSchema.parse({
+        enabled: false,
+        assertionKind: 'prevent_idle_display_sleep',
+      }),
+    ).toEqual({
+      enabled: false,
+      assertionKind: 'prevent_idle_display_sleep',
+    })
+
+    expect(
+      closedLidModeSettingsSchema.parse({
+        enabled: true,
+        active: true,
+        activeStatus: 'active',
+        platformSupported: true,
+        authorizationRequired: true,
+        currentDisablesleep: true,
+        previousDisablesleep: false,
+        updatedAt: '2026-05-18T12:00:00Z',
+        diagnosticMessage: null,
+      }),
+    ).toEqual({
+      enabled: true,
+      active: true,
+      activeStatus: 'active',
+      platformSupported: true,
+      authorizationRequired: true,
+      currentDisablesleep: true,
+      previousDisablesleep: false,
+      updatedAt: '2026-05-18T12:00:00Z',
+      diagnosticMessage: null,
+    })
+
+    expect(
+      upsertClosedLidModeSettingsRequestSchema.parse({
+        enabled: true,
+        acknowledgeGlobalPowerChange: true,
+      }),
+    ).toEqual({
+      enabled: true,
+      acknowledgeGlobalPowerChange: true,
+    })
+
+    expect(() =>
+      closedLidModeSettingsSchema.parse({
+        enabled: true,
+        active: true,
+        activeStatus: 'admin_prompt',
+        platformSupported: true,
+        authorizationRequired: true,
+      }),
+    ).toThrow(/activeStatus/)
+
+    expect(() =>
+      adrenalineModeSettingsSchema.parse({
+        enabled: true,
+        assertionKind: 'pmset_disablesleep',
+        active: true,
+        activeStatus: 'active',
+        platformSupported: true,
+      }),
+    ).toThrow(/assertionKind/)
 
     expect(() =>
       browserControlSettingsSchema.parse({

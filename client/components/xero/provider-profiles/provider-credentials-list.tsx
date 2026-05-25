@@ -1,25 +1,31 @@
 import { useEffect, useMemo, useState, type ElementType } from "react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
-  Activity,
   AlertCircle,
   Check,
   ChevronDown,
-  Cloud,
-  KeyRound,
+  ExternalLink,
   LoaderCircle,
   LogIn,
   LogOut,
-  Server,
+  MonitorCheck,
+  Webhook,
 } from "lucide-react"
 import {
+  AWSIcon,
   AnthropicIcon,
+  AzureIcon,
+  CursorIcon,
+  DeepSeekIcon,
   GitHubIcon,
-  GoogleIcon,
+  GoogleCloudIcon,
+  GoogleGeminiIcon,
+  OllamaIcon,
   OpenAIIcon,
+  OpenRouterIcon,
+  XAIIcon,
 } from "@/components/xero/brand-icons"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -34,23 +40,17 @@ import {
   type ProviderCredentialDto,
   type ProviderCredentialsSnapshotDto,
   type ProviderAuthSessionView,
-  type ProviderProfileDiagnosticsDto,
   type RuntimeProviderIdDto,
   type RuntimeSessionView,
   type UpsertProviderCredentialRequestDto,
-  type XeroDiagnosticCheckDto,
+  type XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
-import { getProviderModelCatalogFreshnessLabel } from "@/src/lib/xero-model/provider-models"
 import { listCloudProviderPresets } from "@/src/lib/xero-model/provider-presets"
 
 type SupportedProviderId = RuntimeProviderIdDto
 
 type AuthPending = { providerId: SupportedProviderId } | null
 type SaveErrorState = { providerId: SupportedProviderId; message: string } | null
-type ProviderCheckState =
-  | { status: "running"; diagnostics: null; error: null }
-  | { status: "ready"; diagnostics: ProviderProfileDiagnosticsDto; error: null }
-  | { status: "error"; diagnostics: null; error: string }
 
 interface CredentialDraft {
   apiKey: string
@@ -60,17 +60,50 @@ interface CredentialDraft {
   projectId: string
 }
 
-const PROVIDER_ICON_BY_ID: Record<SupportedProviderId, ElementType> = {
-  openai_codex: OpenAIIcon,
-  openrouter: KeyRound,
-  anthropic: AnthropicIcon,
-  github_models: GitHubIcon,
-  openai_api: OpenAIIcon,
-  ollama: Server,
-  azure_openai: OpenAIIcon,
-  gemini_ai_studio: GoogleIcon,
-  bedrock: Cloud,
-  vertex: GoogleIcon,
+interface ProviderIconConfig {
+  icon: ElementType
+}
+
+const PROVIDER_ICON_BY_ID: Record<SupportedProviderId, ProviderIconConfig> = {
+  openai_codex: {
+    icon: OpenAIIcon,
+  },
+  openrouter: {
+    icon: OpenRouterIcon,
+  },
+  anthropic: {
+    icon: AnthropicIcon,
+  },
+  github_models: {
+    icon: GitHubIcon,
+  },
+  openai_api: {
+    icon: Webhook,
+  },
+  deepseek: {
+    icon: DeepSeekIcon,
+  },
+  xai: {
+    icon: XAIIcon,
+  },
+  external_cursor_sdk: {
+    icon: CursorIcon,
+  },
+  ollama: {
+    icon: OllamaIcon,
+  },
+  azure_openai: {
+    icon: AzureIcon,
+  },
+  gemini_ai_studio: {
+    icon: GoogleGeminiIcon,
+  },
+  bedrock: {
+    icon: AWSIcon,
+  },
+  vertex: {
+    icon: GoogleCloudIcon,
+  },
 }
 
 function errMsg(error: unknown, fallback: string): string {
@@ -91,6 +124,9 @@ function isSupportedProviderId(value: string | null | undefined): value is Suppo
     value === "anthropic" ||
     value === "github_models" ||
     value === "openai_api" ||
+    value === "deepseek" ||
+    value === "xai" ||
+    value === "external_cursor_sdk" ||
     value === "ollama" ||
     value === "azure_openai" ||
     value === "gemini_ai_studio" ||
@@ -117,7 +153,7 @@ function getStatus(credential: ProviderCredentialDto): StatusInfo {
     case "oauth_session":
       return {
         label: "Signed in",
-        detail: credential.oauthAccountId ? `@${credential.oauthAccountId}` : null,
+        detail: null,
       }
     case "stored_secret":
       return {
@@ -223,31 +259,6 @@ function validateDraft(
   return null
 }
 
-function collectProviderDiagnostics(
-  diagnostics: ProviderProfileDiagnosticsDto,
-): XeroDiagnosticCheckDto[] {
-  return [
-    ...diagnostics.validationChecks,
-    ...diagnostics.reachabilityChecks,
-    ...diagnostics.capabilityChecks,
-  ]
-}
-
-function summarizeProviderDiagnostics(diagnostics: ProviderProfileDiagnosticsDto) {
-  const checks = collectProviderDiagnostics(diagnostics)
-  return checks.reduce(
-    (summary, check) => {
-      summary.total += 1
-      if (check.status === "passed") summary.passed += 1
-      if (check.status === "warning") summary.warnings += 1
-      if (check.status === "failed") summary.failed += 1
-      if (check.status === "skipped") summary.skipped += 1
-      return summary
-    },
-    { passed: 0, warnings: 0, failed: 0, skipped: 0, total: 0 },
-  )
-}
-
 export interface ProviderCredentialsListProps {
   providerCredentials: ProviderCredentialsSnapshotDto | null
   providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
@@ -266,10 +277,11 @@ export interface ProviderCredentialsListProps {
     providerId: SupportedProviderId
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
-  onCheckProviderProfile?: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
+  onStartXaiDeviceCodeLogin?: (request: { providerId: "xai" }) => Promise<XaiDeviceCodeLoginDto>
+  onPollXaiDeviceCodeLogin?: (request: {
+    providerId: "xai"
+    flowId: string
+  }) => Promise<XaiDeviceCodeLoginDto>
 }
 
 export function ProviderCredentialsList({
@@ -283,7 +295,8 @@ export function ProviderCredentialsList({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
-  onCheckProviderProfile,
+  onStartXaiDeviceCodeLogin,
+  onPollXaiDeviceCodeLogin,
 }: ProviderCredentialsListProps) {
   const presets = useMemo(() => listCloudProviderPresets(), [])
   const [openProviderId, setOpenProviderId] = useState<SupportedProviderId | null>(null)
@@ -291,9 +304,10 @@ export function ProviderCredentialsList({
     () => ({}) as Record<SupportedProviderId, CredentialDraft>,
   )
   const [authPending, setAuthPending] = useState<AuthPending>(null)
+  const [deviceLogin, setDeviceLogin] = useState<XaiDeviceCodeLoginDto | null>(null)
+  const [devicePollPending, setDevicePollPending] = useState(false)
   const [saveError, setSaveError] = useState<SaveErrorState>(null)
   const [openAuthError, setOpenAuthError] = useState<SaveErrorState>(null)
-  const [providerChecks, setProviderChecks] = useState<Partial<Record<SupportedProviderId, ProviderCheckState>>>({})
 
   useEffect(() => {
     if (providerCredentialsLoadStatus === "idle" && onRefreshProviderCredentials) {
@@ -302,6 +316,49 @@ export function ProviderCredentialsList({
       })
     }
   }, [providerCredentialsLoadStatus, onRefreshProviderCredentials])
+
+  useEffect(() => {
+    if (
+      !deviceLogin ||
+      deviceLogin.providerId !== "xai" ||
+      deviceLogin.phase !== "awaiting_manual_input" ||
+      !onPollXaiDeviceCodeLogin
+    ) {
+      return
+    }
+
+    let cancelled = false
+    const delayMs = Math.max(deviceLogin.intervalSeconds, 1) * 1000
+    const timer = window.setTimeout(async () => {
+      if (cancelled) return
+      setDevicePollPending(true)
+      try {
+        const next = await onPollXaiDeviceCodeLogin({
+          providerId: "xai",
+          flowId: deviceLogin.flowId,
+        })
+        if (!cancelled) {
+          setDeviceLogin(next)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setOpenAuthError({
+            providerId: "xai",
+            message: errMsg(error, "Xero could not check the xAI device-code login."),
+          })
+        }
+      } finally {
+        if (!cancelled) {
+          setDevicePollPending(false)
+        }
+      }
+    }, delayMs)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [deviceLogin, onPollXaiDeviceCodeLogin])
 
   const updateDraft = (providerId: SupportedProviderId, patch: Partial<CredentialDraft>) => {
     setDrafts((prev) => ({
@@ -399,33 +456,25 @@ export function ProviderCredentialsList({
     }
   }
 
-  const handleCheckProvider = async (
-    providerId: SupportedProviderId,
-    credential: ProviderCredentialDto | null,
-  ) => {
-    if (!onCheckProviderProfile) return
-    setProviderChecks((current) => ({
-      ...current,
-      [providerId]: { status: "running", diagnostics: null, error: null },
-    }))
+  const handleDeviceCodeLogin = async () => {
+    if (!onStartXaiDeviceCodeLogin) return
+    setAuthPending({ providerId: "xai" })
+    setOpenAuthError(null)
     try {
-      const diagnostics = await onCheckProviderProfile(providerId, {
-        includeNetwork: true,
-        modelId: credential?.defaultModelId ?? null,
-      })
-      setProviderChecks((current) => ({
-        ...current,
-        [providerId]: { status: "ready", diagnostics, error: null },
-      }))
+      const login = await onStartXaiDeviceCodeLogin({ providerId: "xai" })
+      setDeviceLogin(login)
+      setOpenProviderId("xai")
+      const target = login.verificationUriComplete ?? login.verificationUri
+      if (target) {
+        await openUrl(target)
+      }
     } catch (error) {
-      setProviderChecks((current) => ({
-        ...current,
-        [providerId]: {
-          status: "error",
-          diagnostics: null,
-          error: errMsg(error, "Xero could not check this provider."),
-        },
-      }))
+      setOpenAuthError({
+        providerId: "xai",
+        message: errMsg(error, "Xero could not start the xAI device-code flow."),
+      })
+    } finally {
+      setAuthPending(null)
     }
   }
 
@@ -456,7 +505,8 @@ export function ProviderCredentialsList({
     const providerId = preset.providerId
     if (!isSupportedProviderId(providerId)) return null
     const credential = findCredential(providerCredentials, providerId)
-    const Icon = PROVIDER_ICON_BY_ID[providerId]
+    const iconConfig = PROVIDER_ICON_BY_ID[providerId]
+    const Icon = iconConfig.icon
     const isOpen = openProviderId === providerId
     const draft = drafts[providerId] ?? createDraft(credential)
     const isSaving =
@@ -468,16 +518,18 @@ export function ProviderCredentialsList({
         : null
     const localOpenAuthError =
       openAuthError?.providerId === providerId ? openAuthError.message : null
-    const isOAuth = preset.authMode === "oauth"
+    const supportsBrowserOAuth =
+      preset.authMode === "oauth" || preset.browserOAuthSupported === true
+    const supportsDeviceCode = preset.deviceCodeSupported === true && providerId === "xai"
+    const hasConfigEditor = preset.authMode !== "oauth"
     const isAuthenticated =
       credential?.kind === "oauth_session" && credential?.hasOauthAccessToken
     const showAuthInProgress =
-      isOAuth &&
+      supportsBrowserOAuth &&
       !!runtimeSession?.isLoginInProgress &&
       runtimeSession.providerId === providerId
+    const rowDeviceLogin = providerId === "xai" ? deviceLogin : null
     const status = credential ? getStatus(credential) : null
-    const checkState = providerChecks[providerId] ?? null
-    const isChecking = checkState?.status === "running"
 
     return (
       <div
@@ -509,23 +561,7 @@ export function ProviderCredentialsList({
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5">
-            {credential ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
-                onClick={() => handleCheckProvider(providerId, credential)}
-                disabled={!onCheckProviderProfile || isChecking}
-              >
-                {isChecking ? (
-                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Activity className="h-3.5 w-3.5" />
-                )}
-                Check
-              </Button>
-            ) : null}
-            {isOAuth ? (
+            {supportsBrowserOAuth ? (
               isAuthenticated ? (
                 <Button
                   variant="ghost"
@@ -557,7 +593,28 @@ export function ProviderCredentialsList({
                   Sign in
                 </Button>
               )
-            ) : (
+            ) : null}
+            {supportsDeviceCode && !isAuthenticated ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+                onClick={handleDeviceCodeLogin}
+                disabled={
+                  !onStartXaiDeviceCodeLogin ||
+                  authPending?.providerId === providerId ||
+                  rowDeviceLogin?.phase === "awaiting_manual_input"
+                }
+              >
+                {authPending?.providerId === providerId || devicePollPending ? (
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <MonitorCheck className="h-3.5 w-3.5" />
+                )}
+                Device
+              </Button>
+            ) : null}
+            {hasConfigEditor ? (
               <Button
                 variant={credential ? "ghost" : "outline"}
                 size="sm"
@@ -576,13 +633,9 @@ export function ProviderCredentialsList({
                   )}
                 />
               </Button>
-            )}
+            ) : null}
           </div>
         </div>
-
-        {checkState ? (
-          <ProviderCheckResult providerLabel={preset.label} state={checkState} />
-        ) : null}
 
         {localOpenAuthError ? (
           <div className="border-t border-border/60 px-3.5 py-2.5">
@@ -593,9 +646,60 @@ export function ProviderCredentialsList({
           </div>
         ) : null}
 
-        {!isOAuth && isOpen ? (
+        {isOpen && (hasConfigEditor || rowDeviceLogin) ? (
           <div className="space-y-3 border-t border-border/60 px-3.5 py-3.5">
-            {preset.authMode === "api_key" ? (
+            {rowDeviceLogin ? (
+              <div className="rounded-md border border-border/60 bg-background/50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[12px] font-medium text-foreground">
+                      {rowDeviceLogin.phase === "authenticated"
+                        ? "Device sign-in complete"
+                        : "Device sign-in"}
+                    </div>
+                    <div className="mt-1 text-[12px] text-muted-foreground">
+                      {rowDeviceLogin.phase === "authenticated"
+                        ? "xAI is connected for this app."
+                        : "Enter this code in xAI, then keep this panel open while Xero checks the login."}
+                    </div>
+                  </div>
+                  {rowDeviceLogin.phase === "awaiting_manual_input" ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 text-[12px]"
+                      onClick={() => {
+                        void openUrl(
+                          rowDeviceLogin.verificationUriComplete ??
+                            rowDeviceLogin.verificationUri,
+                        )
+                      }}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Open
+                    </Button>
+                  ) : null}
+                </div>
+                {rowDeviceLogin.phase === "awaiting_manual_input" ? (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-border/60 bg-card px-3 py-2">
+                    <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                      Code
+                    </span>
+                    <span className="font-mono text-[17px] font-semibold tracking-[0.16em] text-foreground">
+                      {rowDeviceLogin.userCode}
+                    </span>
+                  </div>
+                ) : null}
+                {rowDeviceLogin.lastError?.message ? (
+                  <div className="mt-2 text-[12px] text-muted-foreground">
+                    {rowDeviceLogin.lastError.message}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {hasConfigEditor && preset.authMode === "api_key" ? (
               <FieldRow>
                 <Label htmlFor={`${providerId}-api-key`} className="text-[11.5px] text-muted-foreground">
                   API key
@@ -617,7 +721,7 @@ export function ProviderCredentialsList({
               </FieldRow>
             ) : null}
 
-            {preset.baseUrlMode !== "none" || preset.authMode === "local" ? (
+            {hasConfigEditor && (preset.baseUrlMode !== "none" || preset.authMode === "local") ? (
               <FieldRow>
                 <Label htmlFor={`${providerId}-base-url`} className="text-[11.5px] text-muted-foreground">
                   Base URL
@@ -635,7 +739,7 @@ export function ProviderCredentialsList({
               </FieldRow>
             ) : null}
 
-            {preset.apiVersionMode !== "none" ? (
+            {hasConfigEditor && preset.apiVersionMode !== "none" ? (
               <FieldRow>
                 <Label htmlFor={`${providerId}-api-version`} className="text-[11.5px] text-muted-foreground">
                   API version
@@ -652,7 +756,7 @@ export function ProviderCredentialsList({
               </FieldRow>
             ) : null}
 
-            {preset.regionMode === "required" ? (
+            {hasConfigEditor && preset.regionMode === "required" ? (
               <FieldRow>
                 <Label htmlFor={`${providerId}-region`} className="text-[11.5px] text-muted-foreground">
                   Region <span className="text-destructive">*</span>
@@ -666,7 +770,7 @@ export function ProviderCredentialsList({
               </FieldRow>
             ) : null}
 
-            {preset.projectIdMode === "required" ? (
+            {hasConfigEditor && preset.projectIdMode === "required" ? (
               <FieldRow>
                 <Label htmlFor={`${providerId}-project-id`} className="text-[11.5px] text-muted-foreground">
                   Project ID <span className="text-destructive">*</span>
@@ -689,34 +793,36 @@ export function ProviderCredentialsList({
               </Alert>
             ) : null}
 
-            <div className="flex items-center justify-between gap-2 pt-1">
-              {credential ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDelete(providerId)}
-                  disabled={isSaving || !onDeleteProviderCredential}
-                  className="h-8 text-[12px] text-destructive hover:bg-destructive/10 hover:text-destructive"
-                >
-                  Remove
-                </Button>
-              ) : (
-                <span />
-              )}
-              <Button
-                size="sm"
-                className="h-8 gap-1.5 text-[12px]"
-                onClick={() => handleSave(preset)}
-                disabled={isSaving || !onUpsertProviderCredential}
-              >
-                {isSaving ? (
-                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            {hasConfigEditor ? (
+              <div className="flex items-center justify-between gap-2 pt-1">
+                {credential ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDelete(providerId)}
+                    disabled={isSaving || !onDeleteProviderCredential}
+                    className="h-8 text-[12px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    Remove
+                  </Button>
                 ) : (
-                  <Check className="h-3.5 w-3.5" />
+                  <span />
                 )}
-                Save
-              </Button>
-            </div>
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 text-[12px]"
+                  onClick={() => handleSave(preset)}
+                  disabled={isSaving || !onUpsertProviderCredential}
+                >
+                  {isSaving ? (
+                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                  Save
+                </Button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -756,123 +862,6 @@ export function ProviderCredentialsList({
       >
         {available.map(renderRow)}
       </Group>
-    </div>
-  )
-}
-
-function ProviderCheckResult({
-  providerLabel,
-  state,
-}: {
-  providerLabel: string
-  state: ProviderCheckState
-}) {
-  if (state.status === "running") {
-    return (
-      <div className="border-t border-border/60 px-3.5 py-2.5">
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-          Checking {providerLabel} credentials, catalog, endpoint, and turn capabilities.
-        </div>
-      </div>
-    )
-  }
-
-  if (state.status === "error") {
-    return (
-      <div className="border-t border-border/60 px-3.5 py-2.5">
-        <Alert variant="destructive" className="border-destructive/40">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{state.error}</AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
-  const diagnostics = state.diagnostics
-  const summary = summarizeProviderDiagnostics(diagnostics)
-  const tone =
-    summary.failed > 0
-      ? "destructive"
-      : summary.warnings > 0
-        ? "warning"
-        : "success"
-  const catalog = diagnostics.modelCatalog ?? null
-  const catalogCapabilities = catalog?.capabilities ?? null
-  const requestPreview = catalogCapabilities?.requestPreview ?? null
-  const capabilityItems = catalogCapabilities
-    ? [
-        ["Stream", catalogCapabilities.capabilities.streaming.status],
-        ["Tools", catalogCapabilities.capabilities.toolCalls.status],
-        ["Reasoning", catalogCapabilities.capabilities.reasoning.status],
-        ["Files", catalogCapabilities.capabilities.attachments.status],
-        ["Context", catalogCapabilities.capabilities.contextLimits.status],
-      ]
-    : []
-  const headline =
-    summary.failed > 0
-      ? `${providerLabel} needs attention`
-      : summary.warnings > 0
-        ? `${providerLabel} is usable with warnings`
-        : `${providerLabel} is ready`
-
-  return (
-    <div className="border-t border-border/60 px-3.5 py-2.5">
-      <div
-        className={cn(
-          "rounded-md border px-3 py-2 text-[12px]",
-          tone === "destructive"
-            ? "border-destructive/35 bg-destructive/5 text-destructive"
-            : tone === "warning"
-              ? "border-warning/35 bg-warning/10 text-warning dark:text-warning"
-              : "border-success/30 bg-success/10 text-success dark:text-success",
-        )}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="font-medium text-foreground">{headline}</span>
-            {catalog ? (
-              <span className="truncate text-muted-foreground">
-                {getProviderModelCatalogFreshnessLabel(catalog)}
-              </span>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-1">
-            <Badge variant={summary.failed > 0 ? "destructive" : "outline"} className="h-5 text-[10.5px]">
-              {summary.failed} failed
-            </Badge>
-            <Badge variant="outline" className="h-5 text-[10.5px]">
-              {summary.warnings} warnings
-            </Badge>
-            <Badge variant="outline" className="h-5 text-[10.5px]">
-              {summary.passed} passed
-            </Badge>
-          </div>
-        </div>
-        {capabilityItems.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {capabilityItems.map(([label, status]) => (
-              <Badge
-                key={label}
-                variant="outline"
-                className={cn(
-                  "h-5 border-border/70 bg-background/40 text-[10.5px] text-muted-foreground",
-                  status === "supported" || status === "probed" ? "text-success dark:text-success" : null,
-                  status === "unavailable" ? "text-destructive" : null,
-                  status === "unknown" ? "text-warning dark:text-warning" : null,
-                )}
-              >
-                {label}: {status.replace("_", " ")}
-              </Badge>
-            ))}
-            {requestPreview ? (
-              <Badge variant="outline" className="h-5 border-border/70 bg-background/40 text-[10.5px] text-muted-foreground">
-                {requestPreview.route}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
     </div>
   )
 }

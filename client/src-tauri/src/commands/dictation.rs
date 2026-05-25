@@ -1,8 +1,11 @@
+#[cfg(all(target_os = "macos", xero_dictation_native_shim))]
 use std::{
     ffi::{c_char, c_void, CStr, CString},
+    ptr::NonNull,
+};
+use std::{
     fmt,
     path::Path,
-    ptr::NonNull,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -839,6 +842,10 @@ struct NativeSessionRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 struct NativeOperationResponse {
     ok: bool,
     session_id: Option<String>,
@@ -884,6 +891,10 @@ impl NativeStartError {
     }
 }
 
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 fn native_operation_result(
     response: NativeOperationResponse,
 ) -> Result<NativeOperationResponse, NativeOperationError> {
@@ -902,12 +913,20 @@ fn native_operation_result(
     }
 }
 
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 struct NativeCallbackContext {
     session_id: String,
     state: DictationState,
     channel: Channel<DictationEventDto>,
 }
 
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 impl NativeCallbackContext {
     fn handle_payload(&self, payload: &str) {
         let event = match serde_json::from_str::<NativeDictationEvent>(payload) {
@@ -947,6 +966,10 @@ impl NativeCallbackContext {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 enum NativeDictationEvent {
     Permission {
         microphone: DictationPermissionStateDto,
@@ -988,11 +1011,19 @@ enum NativeDictationEvent {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 struct NativeEventOutcome {
     event: DictationEventDto,
     terminal: bool,
 }
 
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 impl NativeDictationEvent {
     fn into_dto(
         self,
@@ -1082,6 +1113,10 @@ impl NativeDictationEvent {
     }
 }
 
+#[cfg_attr(
+    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    allow(dead_code)
+)]
 fn validate_native_session_id(
     expected_session_id: &str,
     actual_session_id: &str,
@@ -1097,6 +1132,7 @@ fn validate_native_session_id(
     })
 }
 
+#[cfg(all(target_os = "macos", xero_dictation_native_shim))]
 extern "C" fn native_event_callback(context: *mut c_void, payload: *const c_char) {
     if context.is_null() || payload.is_null() {
         return;

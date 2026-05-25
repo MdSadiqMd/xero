@@ -1,0 +1,4935 @@
+'use client'
+
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  Position,
+  ReactFlow,
+  ReactFlowProvider,
+  useNodesState,
+  useReactFlow,
+  useUpdateNodeInternals,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type EdgeTypes,
+  type Node,
+  type NodeChange,
+  type OnNodeDrag,
+  type NodeTypes,
+  type Viewport,
+  type XYPosition,
+} from '@xyflow/react'
+
+import '@xyflow/react/dist/style.css'
+
+import type {
+  AgentDefinitionPreSaveReviewDto,
+  AgentDefinitionPreviewResponseDto,
+  AgentDefinitionValidationDiagnosticDto,
+  AgentDefinitionWriteResponseDto,
+  CustomAgentWorkflowPhaseDto,
+} from '@/src/lib/xero-model/agent-definition'
+import {
+  agentRefKey,
+  type AgentAuthoringCatalogDto,
+  type AgentAuthoringAttachableSkillDto,
+  type AgentAuthoringSkillSearchResultDto,
+  type AgentToolPackCatalogDto,
+  type SearchAgentAuthoringSkillsResponseDto,
+  type AgentTriggerRefDto,
+  type WorkflowAgentDetailDto,
+} from '@/src/lib/xero-model/workflow-agents'
+import { XeroDesktopAdapter } from '@/src/lib/xero-desktop'
+
+import {
+  AGENT_GRAPH_HEADER_HANDLES,
+  AGENT_GRAPH_HEADER_LEFT_HANDLE_RATIOS,
+  AGENT_GRAPH_HEADER_NODE_ID,
+  AGENT_GRAPH_HEADER_RIGHT_HANDLE_RATIOS,
+  AGENT_GRAPH_OUTPUT_NODE_ID,
+  AGENT_GRAPH_TRIGGER_HANDLES,
+  agentGraphFromProjection,
+  buildAgentGraph,
+  buildAgentGraphForEditing,
+  decodeAgentGraphNodeId,
+  deriveAdvancedFromDetail,
+  emptyInferredAdvanced,
+  getHandleDragRole,
+  humanizeIdentifier,
+  inferAdvancedFromConnections,
+  lifecycleEventLabel,
+  promptNodeId,
+  skillNodeId,
+  stageNodeId,
+  toolNodeId,
+  type AgentGraph,
+  type AgentGraphEdge,
+  type AgentGraphNode,
+  type AgentGraphNodeKind,
+  type AgentHeaderAdvancedFields,
+} from './build-agent-graph'
+import { AddStageChip } from './add-stage-chip'
+import {
+  StageToolFanOverlay,
+  type StageToolFanEntry,
+  type StageToolFanOverlayRef,
+} from './stage-tool-fan-overlay'
+import { buildSnapshotFromGraph } from './build-snapshot'
+import {
+  CanvasModeProvider,
+  type CanvasMode,
+  type CanvasModeContextValue,
+} from './canvas-mode-context'
+import type { CanvasPaletteKind } from './canvas-palette'
+import { DropPicker } from './drop-picker'
+import {
+  applyEdgeValidationClasses,
+  isEdgeAllowed,
+  validateEdges,
+  validateStructure,
+} from './edge-validation'
+import {
+  AgentCanvasExpansionContext,
+  type AgentCanvasExpansionContextValue,
+} from './expansion-context'
+import {
+  AgentCanvasControls,
+  AgentCanvasDots,
+  AGENT_CANVAS_CONTROL_ZOOM_TRANSITION_MS,
+  AGENT_CANVAS_EMPTY_VIEWPORT,
+  AGENT_CANVAS_SNAP_GRID,
+} from './canvas-shell'
+import { AgentApprovalReviewDialog } from './agent-approval-review-dialog'
+import { EditingSmoothStepEdge } from './edges/editing-smoothstep-edge'
+import { PhaseBranchEdge } from './edges/phase-branch-edge'
+import { TriggerEdge } from './edges/trigger-edge'
+import { layoutAgentGraphByCategory, type NodeSize } from './layout'
+import { NodeDetailsPanel } from './node-details-panel'
+import { NodePropertiesPanel } from './node-properties-panel'
+import { AgentHeaderNode } from './nodes/agent-header-node'
+import { ConsumedArtifactNode } from './nodes/consumed-artifact-node'
+import { DbGroupFrameNode } from './nodes/db-group-frame-node'
+import { DbTableNode } from './nodes/db-table-node'
+import { LaneLabelNode } from './nodes/lane-label-node'
+import { OutputNode } from './nodes/output-node'
+import { OutputSectionNode } from './nodes/output-section-node'
+import { PromptNode } from './nodes/prompt-node'
+import { SkillNode } from './nodes/skill-node'
+import { ToolGroupFrameNode } from './nodes/tool-group-frame-node'
+import { ToolNode } from './nodes/tool-node'
+import { StageNode } from './nodes/stage-node'
+import { StageGroupFrameNode } from './nodes/stage-group-frame-node'
+
+import './agent-visualization.css'
+
+const NODE_TYPES = {
+  'agent-header': AgentHeaderNode,
+  prompt: PromptNode,
+  skills: SkillNode,
+  tool: ToolNode,
+  'db-table': DbTableNode,
+  'db-group-frame': DbGroupFrameNode,
+  'agent-output': OutputNode,
+  'output-section': OutputSectionNode,
+  'consumed-artifact': ConsumedArtifactNode,
+  stage: StageNode,
+  'stage-group-frame': StageGroupFrameNode,
+  'lane-label': LaneLabelNode,
+  'tool-group-frame': ToolGroupFrameNode,
+} as unknown as NodeTypes
+
+// Custom edge types. Trigger edges render their labels via the
+// `EdgeLabelRenderer` portal so the labels sit above the node layer instead
+// of inside the edges SVG, where they'd dim/clip behind any card the edge
+// happens to cross. Phase-branch edges use the same portal pattern to
+// keep the conditional label readable when one branch overlaps another.
+const EDGE_TYPES = {
+  smoothstep: EditingSmoothStepEdge,
+  trigger: TriggerEdge,
+  'phase-branch': PhaseBranchEdge,
+} as unknown as EdgeTypes
+
+const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const
+const FIT_VIEW_OPTIONS = { padding: 0.16, includeHiddenNodes: false } as const
+const FIT_VIEW_TRANSITION_MS = 420
+const PROPERTIES_PANEL_FOCUS_FOOTPRINT_PX = 320
+// Initial authoring can mount while app chrome is opening or after a blank
+// canvas was already shown; allow a couple of measured-size corrections
+// without turning every later resize into a refit.
+const CREATE_MODE_INITIAL_FIT_MAX_PASSES = 3
+const CREATE_MODE_INITIAL_FIT_TRANSITION_MS = 0
+const CREATE_MODE_REFIT_TRANSITION_MS = 180
+const CREATE_MODE_INITIAL_FIT_REVEAL_DELAY_MS = 80
+const CREATE_MODE_REENTRY_SETTLE_REFIT_DELAY_MS = 140
+const CREATE_MODE_FIT_MAX_ZOOM = 1
+const CREATE_MODE_FIT_MIN_ZOOM = 0.38
+const CREATE_MODE_FIT_MIN_PADDING = 72
+const CREATE_MODE_FIT_MAX_PADDING = 144
+const CREATE_MODE_FIT_PADDING_RATIO = 0.14
+const AGENT_EXIT_TRANSITION_MS = 220
+const EMPTY_CANVAS_DEFAULT_VIEWPORT = AGENT_CANVAS_EMPTY_VIEWPORT
+const DEFAULT_EDGE_OPTIONS = {
+  type: 'smoothstep',
+  animated: false,
+  interactionWidth: 0,
+} as const
+
+const NODE_SIZE_BY_TYPE: Record<string, NodeSize> = {
+  'agent-header': { width: 320, height: 210 },
+  prompt: { width: 300, height: 48 },
+  skills: { width: 260, height: 112 },
+  // Tool / output-section heights are intentionally close to the rendered
+  // collapsed-card height so layout doesn't pad the column with empty
+  // vertical slack between rows. Expansion delta is added separately via
+  // EXPANDED_BODY_EXTRA when the user opens a card.
+  tool: { width: 240, height: 36 },
+  'db-table': { width: 260, height: 116 },
+  'agent-output': { width: 300, height: 110 },
+  'output-section': { width: 200, height: 32 },
+  'consumed-artifact': { width: 260, height: 104 },
+  stage: { width: 260, height: 132 },
+}
+
+// Fallback extra height for an expanded card body, used only when React Flow
+// has not yet reported a measurement for the node (e.g. the very first frame
+// after expanding, or in test environments that stub ResizeObserver). Once a
+// measurement arrives, the measured height drives the layout instead of these
+// estimates so neighbours never push further than the actual rendered body.
+const EXPANDED_BODY_EXTRA: Partial<Record<string, number>> = {
+  prompt: 200,
+  tool: 90,
+  'output-section': 80,
+  'consumed-artifact': 130,
+}
+
+const POSITIONS_STORAGE_PREFIX = 'xero.workflows.canvas-positions:'
+const SNAP_TO_GRID_STORAGE_KEY = 'xero.workflows.canvas-snap-to-grid'
+const SNAP_TO_GRID_APP_STATE_KEY = 'workflow.canvas.snapToGrid.v1'
+const INTERACTION_SETTLE_MS = 110
+const EXPANSION_MEASUREMENT_SETTLE_MS = 280
+// Snap step is locked to half the visual dot-grid spacing so every snap stop
+// is either directly on a dot or exactly between two adjacent dots. Keeps the
+// snapping visually tied to the canvas pattern instead of feeling arbitrary.
+const SNAP_GRID: [number, number] = AGENT_CANVAS_SNAP_GRID
+// React Flow's visibility culling recomputes visible node/edge id arrays on
+// every viewport transform. Agent canvases are dense enough that a stable DOM
+// moved by the viewport transform is smoother than per-frame culling work.
+const ONLY_RENDER_VISIBLE_ELEMENTS = false
+const FIT_VIEW_ON_INIT = import.meta.env.MODE !== 'test'
+const HANDLE_SIZE = 0
+const FOCUS_BULK_DOM_LOOKUP_THRESHOLD = 24
+const TRIGGER_EDGE_ID_PREFIX = 'e:trigger:'
+const EXPANDED_NODE_CLASS = 'agent-node-expanded'
+const DB_COLLAPSED_TRIGGER_LIMIT = 3
+const DB_CARD_INNER_WIDTH = 240
+const DB_CHIP_GAP = 4
+const DB_HEADER_HEIGHT = 32
+const DB_PURPOSE_CHARS_PER_LINE = 38
+const DB_PURPOSE_LINE_HEIGHT = 14
+const DB_CHIP_ROW_HEIGHT = 24
+const DB_CHIP_BOTTOM_PADDING = 6
+const DB_EXPAND_ROW_HEIGHT = 29
+const DB_COLUMNS_LABEL_HEIGHT = 16
+const DB_COLUMNS_CHARS_PER_LINE = 36
+const DB_COLUMNS_LINE_HEIGHT = 14
+const DB_COLUMNS_VERTICAL_PADDING = 10
+const DB_CARD_BORDER_HEIGHT = 2
+const EMPTY_AGENT_GRAPH: {
+  nodes: AgentGraphNode[]
+  edges: AgentGraphEdge[]
+} = { nodes: [], edges: [] }
+const EDITING_DOM_MEASURED_HANDLE_NODE_TYPES = new Set<string>(['db-table'])
+
+type StoredPositions = Record<string, { x: number; y: number }>
+
+type LaneDragCategory =
+  | 'prompt'
+  | 'skills'
+  | 'tool'
+  | 'db-table'
+  | 'agent-output'
+  | 'output-section'
+  | 'consumed-artifact'
+  | 'stage'
+
+const LANE_NODE_PREFIX = 'lane:'
+
+/**
+ * Editing-state surface published by the canvas to its embedding chrome
+ * (phase-view). Lets the existing top-right button cluster render Save /
+ * Cancel buttons alongside its other chrome instead of having the canvas
+ * paint a separate toolbar over its own surface.
+ */
+export interface AgentVisualizationEditingStatus {
+  saving: boolean
+  saveDisabled: boolean
+  hasInvalidEdges: boolean
+  errorMessage: string | null
+  diagnosticCount: number
+  diagnostics: ReadonlyArray<AgentDefinitionValidationDiagnosticDto>
+  save: () => void
+}
+
+interface AgentVisualizationProps {
+  active?: boolean
+  projectId?: string | null
+  detail?: WorkflowAgentDetailDto | null
+  emptyState?: ReactNode
+  emptyStateVisible?: boolean
+  // Editing extensions. When `editing` is true, `mode`, `onSubmit`, `onSaved`,
+  // and `onCancel` must also be provided. The canvas switches to a mutable
+  // graph seeded from `initialDetail` (or a blank graph for `mode === 'create'`)
+  // and renders the palette overlay. The Save/Cancel buttons are rendered by
+  // the embedding chrome (phase-view) using `onEditingStatusChange` so they
+  // sit in the same top-right cluster as the rest of the agent chrome.
+  editing?: boolean
+  mode?: CanvasMode
+  initialDetail?: WorkflowAgentDetailDto | null
+  // Catalog of pickable tools / DB tables / upstream artifacts used by the
+  // editing palette. When null the canvas falls back to empty pickers so the
+  // UI degrades gracefully if the catalog hasn't loaded yet.
+  authoringCatalog?: AgentAuthoringCatalogDto | null
+  // Tool-pack manifest catalog used by the granular policy editor. Optional
+  // because the catalog command is host-side and may not be wired in every
+  // adapter (the editor degrades gracefully — pack picker hides when null).
+  toolPackCatalog?: AgentToolPackCatalogDto | null
+  onSearchAttachableSkills?: (params: {
+    query: string
+    offset: number
+    limit: number
+  }) => Promise<SearchAgentAuthoringSkillsResponseDto>
+  onResolveAttachableSkill?: (
+    skill: AgentAuthoringSkillSearchResultDto,
+  ) => Promise<AgentAuthoringAttachableSkillDto>
+  onSubmit?: (params: {
+    snapshot: Record<string, unknown>
+    mode: CanvasMode
+    definitionId?: string
+    /** When true, the runtime returns a pre-save approval review without
+     *  persisting. The canvas uses this to show the operator what will change
+     *  before they confirm the actual write. */
+    dryRun?: boolean
+  }) => Promise<AgentDefinitionWriteResponseDto>
+  onSaved?: (response: AgentDefinitionWriteResponseDto) => void
+  onCancel?: () => void
+  onEditingStatusChange?: (status: AgentVisualizationEditingStatus | null) => void
+  onReadProjectUiState?: (key: string) => Promise<unknown | null>
+  onWriteProjectUiState?: (key: string, value: unknown | null) => Promise<void>
+  // Fired when the inline properties / details panel becomes visible or hidden
+  // so the surrounding chrome can react (e.g. App.tsx auto-collapses any open
+  // sidebar so the panel has the canvas to itself, then reopens it on close).
+  onSelectedNodeChange?: (hasSelection: boolean) => void
+  // When provided, editing mode uses the preview adapter to resolve inline
+  // tool-policy diagnostics from the current unsaved canvas snapshot.
+  onPreviewEffectiveRuntime?: (params: {
+    snapshot: Record<string, unknown>
+    definitionId: string | null
+  }) => Promise<AgentDefinitionPreviewResponseDto>
+}
+
+interface FocusIndex {
+  edgeIdsByNodeId: Map<string, Set<string>>
+  edgeById: Map<string, Edge>
+  nodeTypeById: Map<string, string | undefined>
+  // Parent (frame) for each node, populated for tools that live inside a
+  // tool-group-frame. Hover focus walks this chain so hovering a tool also
+  // lights up its parent frame and the header → frame edge.
+  parentIdByNodeId: Map<string, string>
+  // Inverse of the parent map. Hovering a frame uses this to pull all child
+  // tools into the focused set, so the entire category visually pops.
+  childIdsByParent: Map<string, Set<string>>
+}
+
+interface FocusTarget {
+  nodeIds: string[]
+  edgeIds: string[]
+}
+
+interface AppliedFocus {
+  nodeElements: HTMLElement[]
+  edgeElements: SVGElement[]
+  edgeLabelElements: HTMLElement[]
+}
+
+interface FocusDomCache {
+  nodes: Map<string, HTMLElement>
+  edges: Map<string, SVGElement>
+  // Trigger edges can render multiple label spans (rare, but the original
+  // bulk-lookup path handled it). Keep an array per id.
+  labels: Map<string, HTMLElement[]>
+}
+
+interface DbTableCardHeightInput {
+  purpose?: string
+  triggers?: readonly AgentTriggerRefDto[]
+  columns?: readonly string[]
+  expanded?: boolean
+}
+
+interface DbTriggerChipEstimate {
+  label: string
+  hasIcon: boolean
+}
+
+function dbTriggerChipLabelText(trigger: AgentTriggerRefDto): DbTriggerChipEstimate | null {
+  switch (trigger.kind) {
+    case 'tool':
+      return { label: `Tool: ${humanizeIdentifier(trigger.name)}`, hasIcon: false }
+    case 'output_section':
+      return { label: `Section: ${humanizeIdentifier(trigger.id)}`, hasIcon: false }
+    case 'lifecycle':
+      return { label: `on ${lifecycleEventLabel(trigger.event)}`, hasIcon: true }
+    case 'upstream_artifact':
+      return { label: `from ${humanizeIdentifier(trigger.id)}`, hasIcon: true }
+  }
+}
+
+function estimateTextLineCount(text: string | undefined, charsPerLine: number): number {
+  const length = text?.trim().length ?? 0
+  if (length === 0) return 0
+  return Math.max(1, Math.ceil(length / charsPerLine))
+}
+
+function estimateDbTriggerChipWidth(chip: DbTriggerChipEstimate): number {
+  const textWidth = chip.label.length * 5.8
+  const iconWidth = chip.hasIcon ? 14 : 0
+  return Math.min(DB_CARD_INNER_WIDTH, Math.ceil(textWidth + iconWidth + 14))
+}
+
+function estimateHiddenDbTriggerChipWidth(hiddenCount: number): number {
+  return Math.min(DB_CARD_INNER_WIDTH, 18 + `${hiddenCount}`.length * 6 + 26)
+}
+
+function estimateWrappedRows(widths: readonly number[], rowWidth: number): number {
+  if (widths.length === 0) return 0
+
+  let rows = 1
+  let used = 0
+  for (const width of widths) {
+    const clamped = Math.min(width, rowWidth)
+    const next = used === 0 ? clamped : used + DB_CHIP_GAP + clamped
+    if (used > 0 && next > rowWidth) {
+      rows++
+      used = clamped
+    } else {
+      used = next
+    }
+  }
+  return rows
+}
+
+export function estimateDbTableCardHeight({
+  purpose,
+  triggers = [],
+  columns = [],
+  expanded = false,
+}: DbTableCardHeightInput): number {
+  const canExpand = columns.length > 0
+  const isExpanded = canExpand && expanded
+  const chips = triggers
+    .map(dbTriggerChipLabelText)
+    .filter((chip): chip is DbTriggerChipEstimate => chip !== null)
+  const visibleChips =
+    canExpand && !isExpanded ? chips.slice(0, DB_COLLAPSED_TRIGGER_LIMIT) : chips
+  const hiddenCount = canExpand ? Math.max(0, chips.length - visibleChips.length) : 0
+  const chipWidths = visibleChips.map(estimateDbTriggerChipWidth)
+  if (hiddenCount > 0) {
+    chipWidths.push(estimateHiddenDbTriggerChipWidth(hiddenCount))
+  }
+
+  const purposeLines = estimateTextLineCount(purpose, DB_PURPOSE_CHARS_PER_LINE)
+  const chipRows = estimateWrappedRows(chipWidths, DB_CARD_INNER_WIDTH)
+  let height = DB_CARD_BORDER_HEIGHT + DB_HEADER_HEIGHT
+
+  if (purposeLines > 0) {
+    height += purposeLines * DB_PURPOSE_LINE_HEIGHT + DB_CHIP_BOTTOM_PADDING
+  }
+  if (chipRows > 0) {
+    height +=
+      chipRows * DB_CHIP_ROW_HEIGHT +
+      Math.max(0, chipRows - 1) * DB_CHIP_GAP +
+      DB_CHIP_BOTTOM_PADDING
+  }
+  if (isExpanded) {
+    const columnLines = Math.max(
+      1,
+      estimateTextLineCount(columns.join(', '), DB_COLUMNS_CHARS_PER_LINE),
+    )
+    height +=
+      DB_COLUMNS_VERTICAL_PADDING +
+      DB_COLUMNS_LABEL_HEIGHT +
+      columnLines * DB_COLUMNS_LINE_HEIGHT
+  }
+  if (canExpand) {
+    height += DB_EXPAND_ROW_HEIGHT
+  }
+
+  return Math.max(NODE_SIZE_BY_TYPE['db-table'].height, Math.ceil(height))
+}
+
+function shouldUseMeasuredHeightForLayout(
+  node: AgentGraphNode,
+  expanded: boolean,
+): boolean {
+  switch (node.type) {
+    case 'agent-header':
+      // Template copies such as Engineer/Debug/Plan can wrap the header
+      // description/count rows beyond the nominal design height. The visible
+      // side handles are positioned as percentages of the rendered card, so
+      // the seeded React Flow handle bounds must use the same measured height.
+      // layoutAgentGraphByCategory still receives a stableHeaderHeight so the
+      // side lanes themselves do not drift when the card grows.
+      return true
+    case 'tool':
+    case 'output-section':
+    case 'consumed-artifact':
+      return expanded
+    // Prompt cards live directly above the header. Let their collapsed
+    // measurement drive layout so the visible prompt/header gap matches the
+    // output/header gap instead of reserving stale body height above the card.
+    case 'prompt':
+      return true
+    // DB cards have data-dependent collapsed heights, and the output card has
+    // free-form descriptive text. Let their measured heights drive layout.
+    case 'db-table':
+    case 'agent-output':
+      return true
+    default:
+      return true
+  }
+}
+
+export function buildSizeMap(
+  nodes: AgentGraphNode[],
+  expandedIds: ReadonlySet<string>,
+  measuredSizes: ReadonlyMap<string, NodeSize>,
+): Map<string, NodeSize> {
+  const map = new Map<string, NodeSize>()
+  for (const node of nodes) {
+    if (!node.type) continue
+    const declaredBase = NODE_SIZE_BY_TYPE[node.type] ?? { width: 280, height: 120 }
+    const expanded = expandedIds.has(node.id)
+    const base =
+      node.type === 'db-table'
+        ? {
+            width: declaredBase.width,
+            height: estimateDbTableCardHeight({ ...node.data, expanded }),
+          }
+        : declaredBase
+    // Prefer the actual rendered height — that way neighbours displace by
+    // exactly how much the card grew rather than by a conservative estimate.
+    // Width is always controlled by an inline style on the card so we don't
+    // honour a measured width here (it would only echo the design value).
+    const measured = measuredSizes.get(node.id)
+    if (measured && shouldUseMeasuredHeightForLayout(node, expanded)) {
+      map.set(node.id, { width: base.width, height: measured.height })
+      continue
+    }
+    const extra =
+      node.type === 'db-table' ? 0 : expanded ? EXPANDED_BODY_EXTRA[node.type] ?? 0 : 0
+    map.set(node.id, { width: base.width, height: base.height + extra })
+  }
+  return map
+}
+
+function storageKeyFor(detail: WorkflowAgentDetailDto): string {
+  return `${POSITIONS_STORAGE_PREFIX}${agentRefKey(detail.ref)}`
+}
+
+function readStoredPositions(key: string): StoredPositions {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return {}
+    return parseStoredPositions(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
+
+function parseStoredPositions(value: unknown): StoredPositions {
+  if (!value || typeof value !== 'object') return {}
+  const out: StoredPositions = {}
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      entry &&
+      typeof entry === 'object' &&
+      typeof (entry as { x?: unknown }).x === 'number' &&
+      typeof (entry as { y?: unknown }).y === 'number'
+    ) {
+      out[id] = {
+        x: (entry as { x: number }).x,
+        y: (entry as { y: number }).y,
+      }
+    }
+  }
+  return out
+}
+
+function writeStoredPositions(key: string, positions: StoredPositions): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(positions))
+  } catch {
+    // Best-effort; storage may be disabled or full.
+  }
+}
+
+function readSnapToGridPreference(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    const raw = window.localStorage.getItem(SNAP_TO_GRID_STORAGE_KEY)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+function writeSnapToGridPreference(enabled: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SNAP_TO_GRID_STORAGE_KEY, enabled ? 'true' : 'false')
+  } catch {
+    // Best-effort; storage may be disabled or full.
+  }
+}
+
+function roundCanvasCoord(value: number): number {
+  return Math.round(value)
+}
+
+function normalizeMeasuredSize(size: NodeSize): NodeSize {
+  return {
+    width: Math.max(1, Math.round(size.width)),
+    height: Math.max(1, Math.round(size.height)),
+  }
+}
+
+export function measuredSizeForDimensionChange(
+  nodeId: string,
+  dimensions: NodeSize,
+  renderedCardSize: NodeSize | null,
+  viewportZoom = 1,
+): NodeSize | null {
+  if (nodeId.startsWith('stage:')) {
+    if (!renderedCardSize) return null
+    const zoom = Number.isFinite(viewportZoom) && viewportZoom > 0 ? viewportZoom : 1
+    return normalizeMeasuredSize({
+      width: renderedCardSize.width / zoom,
+      height: renderedCardSize.height / zoom,
+    })
+  }
+  return normalizeMeasuredSize(dimensions)
+}
+
+export function estimateExpandedCardHeight(
+  cardHeight: number,
+  bodyWrapperHeight: number,
+  bodyScrollHeight: number,
+  expanded: boolean,
+): number {
+  const stableChromeHeight = Math.max(0, cardHeight - bodyWrapperHeight)
+  if (!expanded) return stableChromeHeight
+  return stableChromeHeight + Math.max(0, bodyScrollHeight)
+}
+
+function sameMeasuredSize(left: NodeSize | undefined, right: NodeSize): boolean {
+  return Boolean(left && left.width === right.width && left.height === right.height)
+}
+
+type NodeViewportBounds = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function nodeAbsolutePositionFromList(
+  node: Node,
+  nodesById: ReadonlyMap<string, Node>,
+  visited = new Set<string>(),
+): XYPosition {
+  const internals = node as Node & {
+    internals?: { positionAbsolute?: XYPosition }
+    positionAbsolute?: XYPosition
+  }
+  const absolute = internals.positionAbsolute ?? internals.internals?.positionAbsolute
+  if (absolute) return absolute
+
+  const parentId = node.parentId
+  if (!parentId || visited.has(node.id)) return node.position
+
+  const parent = nodesById.get(parentId)
+  if (!parent) return node.position
+
+  visited.add(node.id)
+  const parentPosition = nodeAbsolutePositionFromList(parent, nodesById, visited)
+  return {
+    x: parentPosition.x + node.position.x,
+    y: parentPosition.y + node.position.y,
+  }
+}
+
+function nodeSizeForViewportBounds(node: Node): NodeSize {
+  const fallback =
+    node.type === 'lane-label'
+      ? { width: 300, height: 26 }
+      : NODE_SIZE_BY_TYPE[node.type ?? ''] ?? { width: 240, height: 80 }
+  return normalizeMeasuredSize({
+    width: node.measured?.width ?? node.width ?? node.initialWidth ?? fallback.width,
+    height: node.measured?.height ?? node.height ?? node.initialHeight ?? fallback.height,
+  })
+}
+
+function visibleNodeBounds(nodes: readonly Node[]): NodeViewportBounds | null {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+
+  for (const node of nodes) {
+    if (!node.type || node.hidden) continue
+    const position = nodeAbsolutePositionFromList(node, nodesById)
+    const size = nodeSizeForViewportBounds(node)
+    minX = Math.min(minX, position.x)
+    minY = Math.min(minY, position.y)
+    maxX = Math.max(maxX, position.x + size.width)
+    maxY = Math.max(maxY, position.y + size.height)
+  }
+
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  }
+}
+
+export function selectedNodeFocusCenter(
+  node: Node,
+  nodes: readonly Node[],
+  panelFootprintPx: number,
+  focusZoom: number,
+): XYPosition {
+  const nodesById = new Map(nodes.map((entry) => [entry.id, entry]))
+  const position = nodeAbsolutePositionFromList(node, nodesById)
+  const size = nodeSizeForViewportBounds(node)
+  const screenOffset = panelFootprintPx / 2 / focusZoom
+  return {
+    x: position.x + size.width / 2 - screenOffset,
+    y: position.y + size.height / 2,
+  }
+}
+
+function viewportBoundsKey(bounds: NodeViewportBounds | null): string {
+  if (!bounds) return ''
+  return [
+    Math.round(bounds.x),
+    Math.round(bounds.y),
+    Math.round(bounds.width),
+    Math.round(bounds.height),
+  ].join(':')
+}
+
+function createModeInitialViewport(
+  nodeBounds: NodeViewportBounds,
+  canvasBounds: { width: number; height: number },
+): Viewport {
+  const paddingX = clamp(
+    canvasBounds.width * CREATE_MODE_FIT_PADDING_RATIO,
+    CREATE_MODE_FIT_MIN_PADDING,
+    CREATE_MODE_FIT_MAX_PADDING,
+  )
+  const paddingY = clamp(
+    canvasBounds.height * CREATE_MODE_FIT_PADDING_RATIO,
+    CREATE_MODE_FIT_MIN_PADDING,
+    CREATE_MODE_FIT_MAX_PADDING,
+  )
+  const availableWidth = Math.max(1, canvasBounds.width - paddingX * 2)
+  const availableHeight = Math.max(1, canvasBounds.height - paddingY * 2)
+  const zoom = clamp(
+    Math.min(
+      availableWidth / Math.max(1, nodeBounds.width),
+      availableHeight / Math.max(1, nodeBounds.height),
+    ),
+    CREATE_MODE_FIT_MIN_ZOOM,
+    CREATE_MODE_FIT_MAX_ZOOM,
+  )
+
+  return {
+    x: (canvasBounds.width - nodeBounds.width * zoom) / 2 - nodeBounds.x * zoom,
+    y: (canvasBounds.height - nodeBounds.height * zoom) / 2 - nodeBounds.y * zoom,
+    zoom,
+  }
+}
+
+function isPersistableNode(node: AgentGraphNode | Node): boolean {
+  return Boolean(node.type)
+}
+
+function laneCategoryFromNodeId(nodeId: string): LaneDragCategory | null {
+  if (!nodeId.startsWith(LANE_NODE_PREFIX)) return null
+  const category = nodeId.slice(LANE_NODE_PREFIX.length)
+  switch (category) {
+    case 'prompt':
+    case 'skills':
+    case 'tool':
+    case 'db-table':
+    case 'agent-output':
+    case 'output-section':
+    case 'consumed-artifact':
+    case 'stage':
+      return category
+    default:
+      return null
+  }
+}
+
+function isLaneLabelNodeId(nodeId: string): boolean {
+  return laneCategoryFromNodeId(nodeId) !== null
+}
+
+function shouldRefreshNodeInternals(node: Node): boolean {
+  return Boolean(node.type && node.type !== 'lane-label')
+}
+
+function nodeInternalsRefreshKey(nodes: readonly Node[]): string {
+  const parts: string[] = []
+  for (const node of nodes) {
+    if (!shouldRefreshNodeInternals(node)) continue
+    parts.push(
+      [
+        node.id,
+        node.type ?? '',
+        node.parentId ?? '',
+        node.width ?? '',
+        node.height ?? '',
+        node.initialWidth ?? '',
+        node.initialHeight ?? '',
+        node.measured?.width ?? '',
+        node.measured?.height ?? '',
+      ].join(':'),
+    )
+  }
+  return parts.join('|')
+}
+
+function refreshableNodeIds(nodes: readonly Node[]): string[] {
+  const ids: string[] = []
+  for (const node of nodes) {
+    if (shouldRefreshNodeInternals(node)) ids.push(node.id)
+  }
+  return ids
+}
+
+function nodeMovesWithLane(node: Node, category: LaneDragCategory): boolean {
+  switch (category) {
+    case 'prompt':
+      return node.type === 'prompt'
+    case 'skills':
+      return node.type === 'skills'
+    case 'tool':
+      // Tool cards are children of their group frames. Moving the frame moves
+      // the cards visually while preserving each card's relative coordinates.
+      return node.type === 'tool-group-frame'
+    case 'db-table':
+      // DB cards are children of the database frame; moving the frame moves
+      // the whole database family while preserving card-relative layout.
+      return node.type === 'db-group-frame'
+    case 'agent-output':
+      return node.type === 'agent-output'
+    case 'output-section':
+      return node.type === 'output-section'
+    case 'consumed-artifact':
+      return node.type === 'consumed-artifact'
+    case 'stage':
+      // Frame carries every stage card via React Flow's parent/extent
+      // relationship — moving the frame moves the cards visually while
+      // preserving each card's relative coordinates inside the frame.
+      return node.type === 'stage-group-frame'
+  }
+}
+
+export function getLaneDragMemberIds(
+  nodes: readonly Node[],
+  laneNodeId: string,
+): Set<string> {
+  const category = laneCategoryFromNodeId(laneNodeId)
+  if (!category) return new Set()
+
+  const ids = new Set<string>([laneNodeId])
+  for (const node of nodes) {
+    if (nodeMovesWithLane(node, category)) ids.add(node.id)
+  }
+  return ids
+}
+
+function applyPositionDelta(position: XYPosition, dx: number, dy: number): XYPosition {
+  return {
+    x: position.x + dx,
+    y: position.y + dy,
+  }
+}
+
+export function applyLaneDragPositionChanges(
+  current: Node[],
+  changes: readonly NodeChange<Node>[],
+): Node[] {
+  let next = current
+
+  for (const change of changes) {
+    if (
+      change.type !== 'position' ||
+      !change.position ||
+      !isLaneLabelNodeId(change.id)
+    ) {
+      continue
+    }
+
+    const laneNode = next.find((node) => node.id === change.id)
+    if (!laneNode) continue
+
+    const dx = change.position.x - laneNode.position.x
+    const dy = change.position.y - laneNode.position.y
+    const memberIds = getLaneDragMemberIds(next, change.id)
+    if (memberIds.size === 0) continue
+
+    next = next.map((node) => {
+      if (!memberIds.has(node.id)) return node
+
+      const position =
+        node.id === change.id
+          ? change.position!
+          : applyPositionDelta(node.position, dx, dy)
+
+      if (node.id === change.id && change.dragging !== undefined) {
+        return { ...node, position, dragging: change.dragging }
+      }
+      return { ...node, position }
+    })
+  }
+
+  return next
+}
+
+function applyStoredPositions(
+  nodes: AgentGraphNode[],
+  stored: StoredPositions,
+): AgentGraphNode[] {
+  if (Object.keys(stored).length === 0) return nodes
+  return nodes.map((node) => {
+    if (!isPersistableNode(node)) return node
+    const saved = stored[node.id]
+    if (!saved) return node
+    return { ...node, position: { x: saved.x, y: saved.y } }
+  })
+}
+
+function toggleClassToken(
+  className: string | undefined,
+  token: string,
+  enabled: boolean,
+): string | undefined {
+  const tokens = className?.split(/\s+/).filter(Boolean) ?? []
+  const hasToken = tokens.includes(token)
+  if (enabled === hasToken) return className
+  const nextTokens = enabled
+    ? [...tokens, token]
+    : tokens.filter((existing) => existing !== token)
+  return nextTokens.length > 0 ? nextTokens.join(' ') : undefined
+}
+
+function applyExpandedNodeClass(
+  nodes: AgentGraphNode[],
+  expandedIds: ReadonlySet<string>,
+): AgentGraphNode[] {
+  return nodes.map((node) => {
+    const className = toggleClassToken(
+      node.className,
+      EXPANDED_NODE_CLASS,
+      expandedIds.has(node.id),
+    )
+    return className === node.className ? node : { ...node, className }
+  })
+}
+
+// Patches the agent-header node's data.advanced from the editing panel's
+// state, leaving every other node's identity untouched. Hoisted out of
+// baseGraph so editingAdvanced no longer forces the full graph (layout,
+// edges, focus index) to rebuild on every keystroke.
+function applyEditingAdvanced(
+  nodes: AgentGraphNode[],
+  editing: boolean,
+  editingAdvanced: AgentHeaderAdvancedFields,
+): AgentGraphNode[] {
+  if (!editing) return nodes
+  return nodes.map((node) => {
+    if (node.type !== 'agent-header') return node
+    const existing = (node.data as { advanced?: AgentHeaderAdvancedFields }).advanced
+    if (existing === editingAdvanced) return node
+    return {
+      ...node,
+      data: { ...node.data, advanced: editingAdvanced },
+    } as unknown as AgentGraphNode
+  })
+}
+
+function nodeHandle(
+  type: 'source' | 'target',
+  position: Position,
+  nodeWidth: number,
+  nodeHeight: number,
+  id?: string,
+  offset?: { x?: number; y?: number },
+) {
+  const half = HANDLE_SIZE / 2
+  const x =
+    offset?.x ??
+    (position === Position.Left
+      ? -half
+      : position === Position.Right
+        ? nodeWidth - half
+        : nodeWidth / 2 - half)
+  const y =
+    offset?.y ??
+    (position === Position.Top
+      ? -half
+      : position === Position.Bottom
+        ? nodeHeight - half
+        : nodeHeight / 2 - half)
+
+  return {
+    id,
+    type,
+    position,
+    x,
+    y,
+    width: HANDLE_SIZE,
+    height: HANDLE_SIZE,
+  }
+}
+
+function handleTopFromRatio(nodeHeight: number, ratio: number): number {
+  return nodeHeight * ratio - HANDLE_SIZE / 2
+}
+
+function knownHandlesForNode(node: AgentGraphNode, width: number, height: number) {
+  switch (node.type) {
+    case 'agent-header':
+      return [
+        nodeHandle('source', Position.Top, width, height, AGENT_GRAPH_HEADER_HANDLES.prompt),
+        nodeHandle(
+          'source',
+          Position.Left,
+          width,
+          height,
+          AGENT_GRAPH_HEADER_HANDLES.workflow,
+          { y: handleTopFromRatio(height, AGENT_GRAPH_HEADER_LEFT_HANDLE_RATIOS.workflow) },
+        ),
+        nodeHandle(
+          'target',
+          Position.Left,
+          width,
+          height,
+          AGENT_GRAPH_HEADER_HANDLES.consumed,
+          { y: handleTopFromRatio(height, AGENT_GRAPH_HEADER_LEFT_HANDLE_RATIOS.consumed) },
+        ),
+        nodeHandle(
+          'source',
+          Position.Left,
+          width,
+          height,
+          AGENT_GRAPH_HEADER_HANDLES.skills,
+          { y: handleTopFromRatio(height, AGENT_GRAPH_HEADER_LEFT_HANDLE_RATIOS.skills) },
+        ),
+        nodeHandle(
+          'source',
+          Position.Right,
+          width,
+          height,
+          AGENT_GRAPH_HEADER_HANDLES.tool,
+          { y: handleTopFromRatio(height, AGENT_GRAPH_HEADER_RIGHT_HANDLE_RATIOS.tool) },
+        ),
+        nodeHandle(
+          'source',
+          Position.Right,
+          width,
+          height,
+          AGENT_GRAPH_HEADER_HANDLES.db,
+          { y: handleTopFromRatio(height, AGENT_GRAPH_HEADER_RIGHT_HANDLE_RATIOS.db) },
+        ),
+        nodeHandle('source', Position.Bottom, width, height, AGENT_GRAPH_HEADER_HANDLES.output),
+      ]
+    case 'prompt':
+      return [nodeHandle('target', Position.Bottom, width, height)]
+    case 'skills':
+      return [nodeHandle('target', Position.Bottom, width, height)]
+    case 'tool': {
+      const handles: KnownNodeHandle[] = []
+      if (node.data.directConnectionHandles.target) {
+        handles.push(
+          nodeHandle('target', Position.Left, width, height, AGENT_GRAPH_TRIGGER_HANDLES.target),
+        )
+      }
+      if (node.data.directConnectionHandles.source) {
+        handles.push(
+          nodeHandle('source', Position.Right, width, height, AGENT_GRAPH_TRIGGER_HANDLES.source),
+        )
+      }
+      return handles
+    }
+    case 'tool-group-frame':
+      return [nodeHandle('target', Position.Left, width, height)]
+    case 'db-table':
+      return [
+        nodeHandle('target', Position.Left, width, height),
+        nodeHandle('target', Position.Left, width, height, AGENT_GRAPH_TRIGGER_HANDLES.target, {
+          y: handleTopFromRatio(height, 0.72),
+        }),
+      ]
+    case 'agent-output':
+      return [
+        nodeHandle('target', Position.Top, width, height),
+        nodeHandle('source', Position.Bottom, width, height),
+      ]
+    case 'output-section':
+      return [
+        nodeHandle('target', Position.Top, width, height),
+        nodeHandle('target', Position.Left, width, height, AGENT_GRAPH_TRIGGER_HANDLES.target),
+        nodeHandle('source', Position.Right, width, height, AGENT_GRAPH_TRIGGER_HANDLES.source),
+      ]
+    case 'consumed-artifact':
+      return [
+        nodeHandle('source', Position.Right, width, height),
+        nodeHandle('source', Position.Right, width, height, AGENT_GRAPH_TRIGGER_HANDLES.source, {
+          y: handleTopFromRatio(height, 0.72),
+        }),
+      ]
+    default:
+      return undefined
+  }
+}
+
+type KnownNodeHandle = ReturnType<typeof nodeHandle>
+
+function sameKnownNodeHandles(
+  left: readonly KnownNodeHandle[] | undefined,
+  right: readonly KnownNodeHandle[] | undefined,
+): boolean {
+  if (left === right) return true
+  if (!left || !right || left.length !== right.length) return false
+  for (let i = 0; i < left.length; i++) {
+    const a = left[i]
+    const b = right[i]
+    if (
+      a.id !== b.id ||
+      a.type !== b.type ||
+      a.position !== b.position ||
+      a.x !== b.x ||
+      a.y !== b.y ||
+      a.width !== b.width ||
+      a.height !== b.height
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+export function applyKnownNodeDimensions(
+  nodes: AgentGraphNode[],
+  sizes: ReadonlyMap<string, NodeSize>,
+  options: {
+    domMeasuredHandleNodeTypes?: ReadonlySet<string>
+  } = {},
+): AgentGraphNode[] {
+  // Seed React Flow with deterministic dimensions/handles so initial edge
+  // routing does not wait on ResizeObserver and tests do not depend on DOM
+  // layout APIs that JSDOM lacks.
+  return nodes.map((node) => {
+    if (node.type === 'lane-label') return node
+    const fallback = sizes.get(node.id)
+    const width = typeof node.width === 'number' ? node.width : fallback?.width
+    const height = typeof node.height === 'number' ? node.height : fallback?.height
+    if (typeof width !== 'number' || typeof height !== 'number') return node
+    const handles = options.domMeasuredHandleNodeTypes?.has(node.type ?? '')
+      ? undefined
+      : knownHandlesForNode(node, width, height)
+    const pinsWrapperSize =
+      node.type === 'tool-group-frame' ||
+      node.type === 'stage-group-frame' ||
+      node.type === 'db-group-frame'
+    const nextWidth = pinsWrapperSize ? width : undefined
+    const nextHeight = pinsWrapperSize ? height : undefined
+    if (
+      node.width === nextWidth &&
+      node.height === nextHeight &&
+      node.initialWidth === width &&
+      node.initialHeight === height &&
+      node.measured?.width === width &&
+      node.measured?.height === height &&
+      sameKnownNodeHandles(node.handles as KnownNodeHandle[] | undefined, handles)
+    ) {
+      return node
+    }
+    return {
+      ...node,
+      width: nextWidth,
+      height: nextHeight,
+      initialWidth: width,
+      initialHeight: height,
+      measured: { width, height },
+      handles,
+    }
+  })
+}
+
+function findRenderedNodeElement(
+  root: HTMLElement | null,
+  nodeId: string,
+): HTMLElement | null {
+  if (!root) return null
+  for (const node of root.querySelectorAll<HTMLElement>('.react-flow__node[data-id]')) {
+    if (node.getAttribute('data-id') === nodeId) return node
+  }
+  return null
+}
+
+function estimateRenderedNodeSize(
+  root: HTMLElement | null,
+  nodeId: string,
+  expanded: boolean,
+): NodeSize | null {
+  const nodeElement = findRenderedNodeElement(root, nodeId)
+  const card = nodeElement?.querySelector<HTMLElement>('.agent-card')
+  if (!card) return null
+
+  const cardRect = card.getBoundingClientRect()
+  if (cardRect.height <= 0) return null
+
+  const bodyWrapper = card.querySelector<HTMLElement>('.agent-card-body-wrapper')
+  const body = bodyWrapper?.querySelector<HTMLElement>('.agent-card-body')
+  const wrapperHeight = bodyWrapper?.getBoundingClientRect().height ?? 0
+  const bodyScrollHeight = body
+    ? Math.max(body.scrollHeight, body.getBoundingClientRect().height)
+    : 0
+
+  return normalizeMeasuredSize({
+    width: cardRect.width,
+    height:
+      bodyWrapper && body
+        ? estimateExpandedCardHeight(
+            cardRect.height,
+            wrapperHeight,
+            bodyScrollHeight,
+            expanded,
+          )
+        : cardRect.height,
+  })
+}
+
+function buildFocusIndex(
+  nodes: readonly Node[],
+  edges: readonly Edge[],
+): FocusIndex {
+  const edgeIdsByNodeId = new Map<string, Set<string>>()
+  const edgeById = new Map<string, Edge>()
+  const nodeTypeById = new Map<string, string | undefined>()
+  const parentIdByNodeId = new Map<string, string>()
+  const childIdsByParent = new Map<string, Set<string>>()
+  const add = (nodeId: string, edgeId: string) => {
+    const set = edgeIdsByNodeId.get(nodeId) ?? new Set<string>()
+    set.add(edgeId)
+    edgeIdsByNodeId.set(nodeId, set)
+  }
+
+  for (const edge of edges) {
+    edgeById.set(edge.id, edge)
+    add(edge.source, edge.id)
+    add(edge.target, edge.id)
+  }
+
+  for (const node of nodes) {
+    nodeTypeById.set(node.id, node.type)
+    const parent = (node as Node).parentId
+    if (!parent) continue
+    parentIdByNodeId.set(node.id, parent)
+    const set = childIdsByParent.get(parent) ?? new Set<string>()
+    set.add(node.id)
+    childIdsByParent.set(parent, set)
+  }
+
+  return { edgeIdsByNodeId, edgeById, nodeTypeById, parentIdByNodeId, childIdsByParent }
+}
+
+function buildFocusTarget(nodeId: string, index: FocusIndex): FocusTarget | null {
+  const nodeType = index.nodeTypeById.get(nodeId)
+  if (!nodeType || nodeType === 'lane-label') return null
+
+  const focusedNodes = new Set<string>()
+  const focusedEdges = new Set<string>()
+
+  const visit = (id: string, options: { includeChildConnections?: boolean } = {}) => {
+    if (focusedNodes.has(id)) return
+    focusedNodes.add(id)
+    const incident = index.edgeIdsByNodeId.get(id)
+    if (incident) {
+      for (const edgeId of incident) {
+        const edge = index.edgeById.get(edgeId)
+        if (!edge) continue
+        focusedEdges.add(edge.id)
+        focusedNodes.add(edge.source)
+        focusedNodes.add(edge.target)
+      }
+    }
+    const children = options.includeChildConnections ? index.childIdsByParent.get(id) : undefined
+    if (children) {
+      for (const childId of children) {
+        visit(childId)
+      }
+    }
+  }
+
+  visit(nodeId, {
+    includeChildConnections:
+      nodeType === 'tool-group-frame' || nodeType === 'db-group-frame',
+  })
+
+  let cursor: string | undefined = index.parentIdByNodeId.get(nodeId)
+  const seenAncestors = new Set<string>()
+  while (cursor && !seenAncestors.has(cursor)) {
+    seenAncestors.add(cursor)
+    visit(cursor)
+    cursor = index.parentIdByNodeId.get(cursor)
+  }
+
+  return {
+    nodeIds: Array.from(focusedNodes),
+    edgeIds: Array.from(focusedEdges),
+  }
+}
+
+function cssString(value: string): string {
+  return `"${value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\a ')
+    .replace(/\r/g, '\\d ')}"`
+}
+
+// Looks up the focused DOM elements via a per-id Map cache. Cache entries are
+// validated with isConnected so a stale reference (e.g. after a React-Flow
+// node remount) falls through to querySelector and refreshes itself. Removing
+// the bulk-lookup querySelectorAll path was the main goal here — on large
+// agents it was scanning 200+ DOM elements per hover even though typical
+// focus clusters are 5–40 elements.
+function getFocusedDomElements(
+  root: HTMLElement,
+  target: FocusTarget,
+  cache: FocusDomCache,
+): AppliedFocus {
+  const nodeElements: HTMLElement[] = []
+  const edgeElements: SVGElement[] = []
+  const edgeLabelElements: HTMLElement[] = []
+
+  for (const focusedNodeId of target.nodeIds) {
+    const cached = cache.nodes.get(focusedNodeId)
+    if (cached && cached.isConnected) {
+      nodeElements.push(cached)
+      continue
+    }
+    const nodeElement = root.querySelector<HTMLElement>(
+      `.react-flow__node[data-id=${cssString(focusedNodeId)}]`,
+    )
+    if (nodeElement) {
+      cache.nodes.set(focusedNodeId, nodeElement)
+      nodeElements.push(nodeElement)
+    } else if (cached) {
+      cache.nodes.delete(focusedNodeId)
+    }
+  }
+
+  for (const focusedEdgeId of target.edgeIds) {
+    const cachedEdge = cache.edges.get(focusedEdgeId)
+    if (cachedEdge && cachedEdge.isConnected) {
+      edgeElements.push(cachedEdge)
+    } else {
+      const edgeElement = root.querySelector<SVGElement>(
+        `.react-flow__edge[data-id=${cssString(focusedEdgeId)}]`,
+      )
+      if (edgeElement) {
+        cache.edges.set(focusedEdgeId, edgeElement)
+        edgeElements.push(edgeElement)
+      } else if (cachedEdge) {
+        cache.edges.delete(focusedEdgeId)
+      }
+    }
+
+    if (!focusedEdgeId.startsWith(TRIGGER_EDGE_ID_PREFIX)) continue
+    const cachedLabels = cache.labels.get(focusedEdgeId)
+    const labelsAlive =
+      cachedLabels && cachedLabels.length > 0 && cachedLabels.every((el) => el.isConnected)
+    if (labelsAlive) {
+      for (const el of cachedLabels!) edgeLabelElements.push(el)
+      continue
+    }
+    const fresh: HTMLElement[] = []
+    root
+      .querySelectorAll<HTMLElement>(
+        `.agent-edge-trigger-label[data-edge-id=${cssString(focusedEdgeId)}]`,
+      )
+      .forEach((labelElement) => {
+        fresh.push(labelElement)
+        edgeLabelElements.push(labelElement)
+      })
+    if (fresh.length > 0) cache.labels.set(focusedEdgeId, fresh)
+    else if (cachedLabels) cache.labels.delete(focusedEdgeId)
+  }
+
+  return { nodeElements, edgeElements, edgeLabelElements }
+}
+
+// Validator codes that the granular policy editor knows how to surface.
+// Everything else falls out to the global diagnostic banner so we don't
+// crowd the per-control inline hints with unrelated errors.
+const TOOL_POLICY_DIAGNOSTIC_PREFIXES = [
+  'agent_definition_tool_',
+  'agent_definition_effect_class_',
+  'agent_definition_subagent_role_',
+] as const
+
+function isToolPolicyDiagnosticCode(code: string): boolean {
+  return TOOL_POLICY_DIAGNOSTIC_PREFIXES.some((prefix) => code.startsWith(prefix))
+}
+
+function AgentVisualizationInner({
+  active = true,
+  projectId = null,
+  detail = null,
+  emptyState,
+  emptyStateVisible = detail === null,
+  editing = false,
+  mode,
+  initialDetail = null,
+  authoringCatalog = null,
+  toolPackCatalog = null,
+  onSearchAttachableSkills,
+  onResolveAttachableSkill,
+  onSubmit,
+  onSaved,
+  onCancel,
+  onEditingStatusChange,
+  onReadProjectUiState,
+  onWriteProjectUiState,
+  onSelectedNodeChange,
+  onPreviewEffectiveRuntime,
+}: AgentVisualizationProps) {
+  // ============================================================
+  // Editing-mode state. Always declared (rules of hooks) but only
+  // wired into the canvas when `editing` is true. View mode uses the
+  // detail-derived pipeline below; edit mode bypasses that pipeline
+  // and drives nodes/edges directly from local state — but renders
+  // through the same dots, controls, and JSX shell so both modes
+  // are visually identical.
+  // ============================================================
+  const editingInitial = useMemo(() => {
+    if (!editing) return null
+    const result = buildAgentGraphForEditing(mode ?? 'create', initialDetail ?? null)
+    return { detail: result.detail }
+  }, [editing, mode, initialDetail])
+  const editingSeedBaselineTargetRef = useRef<WorkflowAgentDetailDto | null>(
+    editingInitial?.detail ?? null,
+  )
+
+  // Editing source of truth: a real WorkflowAgentDetailDto we mutate as the
+  // user types/drags. Derived nodes/edges run through the same buildAgentGraph
+  // + layoutAgentGraphByCategory pipeline as view mode, so adding a tool
+  // lands it inside the proper TOOLS lane / category frame instead of at an
+  // arbitrary drop point.
+  const [editingDetail, setEditingDetail] = useState<WorkflowAgentDetailDto | null>(
+    () => editingInitial?.detail ?? null,
+  )
+  const [editingAdvanced, setEditingAdvanced] = useState<AgentHeaderAdvancedFields>(
+    () =>
+      editingInitial
+        ? deriveAdvancedFromDetail(editingInitial.detail)
+        : ({
+            workflowContract: '',
+            finalResponseContract: '',
+            examplePrompts: [],
+            refusalEscalationCases: [],
+            allowedEffectClasses: [],
+            deniedTools: [],
+            allowedToolPacks: [],
+            deniedToolPacks: [],
+            allowedToolGroups: [],
+            deniedToolGroups: [],
+            allowedMcpServers: [],
+            deniedMcpServers: [],
+            allowedDynamicTools: [],
+            deniedDynamicTools: [],
+            allowedSubagentRoles: [],
+            deniedSubagentRoles: [],
+            externalServiceAllowed: false,
+            browserControlAllowed: false,
+            skillRuntimeAllowed: false,
+            subagentAllowed: false,
+            commandAllowed: false,
+            destructiveWriteAllowed: false,
+          } satisfies AgentHeaderAdvancedFields),
+  )
+  const [editingSaving, setEditingSaving] = useState(false)
+  const [editingServerDiagnostics, setEditingServerDiagnostics] = useState<
+    readonly AgentDefinitionValidationDiagnosticDto[]
+  >([])
+  const [editingErrorMessage, setEditingErrorMessage] = useState<string | null>(null)
+  // Two-phase save flow: dry-run produces a pre-save approval review, the
+  // operator confirms, then the same snapshot is sent again with dryRun=false
+  // to actually persist.
+  const [pendingApproval, setPendingApproval] = useState<{
+    review: AgentDefinitionPreSaveReviewDto
+    snapshot: Record<string, unknown>
+    definitionId: string | null | undefined
+    submitMode: CanvasMode
+  } | null>(null)
+  const [approvalErrorMessage, setApprovalErrorMessage] = useState<string | null>(null)
+  // User-driven position overrides for nodes the layout placed automatically.
+  // We persist these in memory only — the agent definition itself doesn't
+  // care about layout positions, and there's no stable storage key for an
+  // unsaved create. Declared here so the layout pipeline (computedNodes)
+  // can reference them, even though most write paths live further down in
+  // the editing-handlers section.
+  const [editingPositionOverrides, setEditingPositionOverrides] = useState<
+    Record<string, { x: number; y: number }>
+  >({})
+  // First stage created in this editing session. Tracked so the canvas can
+  // auto-select the new stage node and pop the properties panel open with
+  // the explainer expanded — the user just reached for an unfamiliar
+  // feature and the panel is where they'll learn what to configure.
+  // Cleared after the node mounts so subsequent stage adds don't steal
+  // selection from whatever the user is editing.
+  const [pendingStageAutoSelectId, setPendingStageAutoSelectId] = useState<
+    string | null
+  >(null)
+
+  useEffect(() => {
+    if (!editingInitial) return
+    editingSeedBaselineTargetRef.current = editingInitial.detail
+    setEditingDetail(editingInitial.detail)
+    setEditingAdvanced(deriveAdvancedFromDetail(editingInitial.detail))
+    setEditingPositionOverrides({})
+    setEditingServerDiagnostics([])
+    setEditingErrorMessage(null)
+  }, [editingInitial])
+
+  const [renderedDetailFromView, setRenderedDetailFromView] =
+    useState<WorkflowAgentDetailDto | null>(() => detail)
+  // In editing mode the renderedDetail is the live editingDetail; the rest
+  // of the pipeline (baseGraph → layout → computedNodes) runs on it
+  // unchanged, so editing inherits the same lane / category-frame layout
+  // view mode produces.
+  const renderedDetail = editing ? editingDetail : renderedDetailFromView
+  const setRenderedDetail = setRenderedDetailFromView
+  const exitTimerRef = useRef<number | null>(null)
+  const emptyStateEntryFrameRef = useRef<number | null>(null)
+  const [emptyStateEntryKey, setEmptyStateEntryKey] = useState(0)
+  const [emptyStateEntered, setEmptyStateEntered] = useState(false)
+  const hasIncomingDetail = detail !== null
+  const hasDetail = renderedDetail !== null
+  const isAgentExiting = !hasIncomingDetail && renderedDetail !== null && !editing
+  const emptyStateIsVisible = emptyStateVisible && emptyStateEntered
+  const reactFlow = useReactFlow<Node, Edge>()
+  const storageKey = useMemo(
+    () => (!editing && renderedDetail ? storageKeyFor(renderedDetail) : ''),
+    [editing, renderedDetail],
+  )
+  const projectUiStateKey = useMemo(
+    () => (!editing && renderedDetail ? `workflow.canvas.positions:${agentRefKey(renderedDetail.ref)}` : ''),
+    [editing, renderedDetail],
+  )
+  const hasProjectUiStateStorage = Boolean(
+    projectId && projectUiStateKey && onReadProjectUiState && onWriteProjectUiState,
+  )
+
+  const baseGraph = useMemo(() => {
+    if (!renderedDetail) return EMPTY_AGENT_GRAPH
+    return !editing && renderedDetail.graphProjection
+      ? agentGraphFromProjection(renderedDetail.graphProjection)
+      : buildAgentGraph(renderedDetail)
+    // editingAdvanced is injected later in computedNodes via applyEditingAdvanced
+    // so typing in the advanced panel doesn't rebuild the entire graph.
+  }, [editing, renderedDetail])
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const [canvasBounds, setCanvasBounds] = useState<{ width: number; height: number } | null>(null)
+  const canvasBoundsKey = canvasBounds ? `${canvasBounds.width}x${canvasBounds.height}` : ''
+  const updateNodeInternals = useUpdateNodeInternals()
+  // Bumped each time the user invokes "Reset layout" so the memoized layout
+  // computation re-runs even when storage was already empty.
+  const [resetNonce, setResetNonce] = useState(0)
+  const [snapToGrid, setSnapToGrid] = useState<boolean>(() => readSnapToGridPreference())
+  const [snapPreferenceHydrated, setSnapPreferenceHydrated] = useState(false)
+  const [canvasLocked, setCanvasLocked] = useState(false)
+  const canvasInteractionsLocked = editing && canvasLocked
+
+  useEffect(() => {
+    const readAppUiState = XeroDesktopAdapter.readAppUiState
+    if (typeof readAppUiState !== 'function') {
+      setSnapPreferenceHydrated(true)
+      return
+    }
+
+    let cancelled = false
+    void readAppUiState({ key: SNAP_TO_GRID_APP_STATE_KEY })
+      .then((response) => {
+        if (cancelled) return
+        if (typeof response.value === 'boolean') {
+          setSnapToGrid(response.value)
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (cancelled) return
+        setSnapPreferenceHydrated(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    writeSnapToGridPreference(snapToGrid)
+    if (snapPreferenceHydrated) {
+      void XeroDesktopAdapter.writeAppUiState?.({
+        key: SNAP_TO_GRID_APP_STATE_KEY,
+        value: snapToGrid,
+      }).catch(() => undefined)
+    }
+  }, [snapPreferenceHydrated, snapToGrid])
+  const handleToggleSnapToGrid = useCallback(() => {
+    setSnapToGrid((prev) => !prev)
+  }, [])
+  const handleToggleCanvasLock = useCallback(() => {
+    setCanvasLocked((prev) => !prev)
+  }, [])
+  const handleZoomIn = useCallback(() => {
+    void reactFlow.zoomIn({ duration: AGENT_CANVAS_CONTROL_ZOOM_TRANSITION_MS })
+  }, [reactFlow])
+  const handleZoomOut = useCallback(() => {
+    void reactFlow.zoomOut({ duration: AGENT_CANVAS_CONTROL_ZOOM_TRANSITION_MS })
+  }, [reactFlow])
+  const handleFitView = useCallback(() => {
+    void reactFlow.fitView({
+      ...FIT_VIEW_OPTIONS,
+      duration: FIT_VIEW_TRANSITION_MS,
+    })
+  }, [reactFlow])
+  useLayoutEffect(() => {
+    const root = canvasRef.current
+    if (!root) return
+
+    let resizeFrame: number | null = null
+    let pendingSize: { width: number; height: number } | null = null
+
+    const commitSize = (width: number, height: number) => {
+      const next = {
+        width: Math.round(width),
+        height: Math.round(height),
+      }
+      if (next.width <= 1 || next.height <= 1) return
+      setCanvasBounds((current) =>
+        current?.width === next.width && current.height === next.height ? current : next,
+      )
+    }
+
+    const scheduleSize = (width: number, height: number) => {
+      pendingSize = { width, height }
+      if (resizeFrame !== null) return
+      // Keep this resilient to tests that mock requestAnimationFrame
+      // synchronously: mark as pending before scheduling, then only store the
+      // returned frame id if the callback did not already run.
+      resizeFrame = -1
+      const nextFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null
+        if (!pendingSize) return
+        const { width: pendingWidth, height: pendingHeight } = pendingSize
+        pendingSize = null
+        commitSize(pendingWidth, pendingHeight)
+      })
+      if (resizeFrame !== null) resizeFrame = nextFrame
+    }
+
+    const initialBounds = root.getBoundingClientRect()
+    commitSize(initialBounds.width, initialBounds.height)
+
+    if (typeof ResizeObserver === 'undefined') {
+      const handleWindowResize = () => {
+        const bounds = root.getBoundingClientRect()
+        scheduleSize(bounds.width, bounds.height)
+      }
+      window.addEventListener('resize', handleWindowResize)
+      return () => {
+        window.removeEventListener('resize', handleWindowResize)
+        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+      }
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      scheduleSize(entry.contentRect.width, entry.contentRect.height)
+    })
+    observer.observe(root)
+
+    return () => {
+      observer.disconnect()
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+    }
+  }, [active])
+  const storedPositionsRef = useRef<{ key: string; positions: StoredPositions } | null>(
+    null,
+  )
+  const [storedPositionsNonce, setStoredPositionsNonce] = useState(0)
+
+  useEffect(() => {
+    if (!hasProjectUiStateStorage || !projectUiStateKey || !onReadProjectUiState) {
+      return
+    }
+
+    let cancelled = false
+    onReadProjectUiState(projectUiStateKey)
+      .then((value) => {
+        if (cancelled) return
+        storedPositionsRef.current = {
+          key: projectUiStateKey,
+          positions: parseStoredPositions(value),
+        }
+        setStoredPositionsNonce((nonce) => nonce + 1)
+      })
+      .catch(() => {
+        if (cancelled) return
+        storedPositionsRef.current = { key: projectUiStateKey, positions: {} }
+        setStoredPositionsNonce((nonce) => nonce + 1)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [hasProjectUiStateStorage, onReadProjectUiState, projectUiStateKey])
+
+  const getStoredPositions = useCallback(() => {
+    if (hasProjectUiStateStorage) {
+      const cached = storedPositionsRef.current
+      return cached?.key === projectUiStateKey ? cached.positions : {}
+    }
+    const cached = storedPositionsRef.current
+    if (cached?.key === storageKey) return cached.positions
+    const positions = readStoredPositions(storageKey)
+    storedPositionsRef.current = { key: storageKey, positions }
+    return positions
+  }, [hasProjectUiStateStorage, projectUiStateKey, storageKey])
+
+  const commitStoredPositions = useCallback(
+    (positions: StoredPositions) => {
+      if (hasProjectUiStateStorage) {
+        storedPositionsRef.current = { key: projectUiStateKey, positions }
+        void onWriteProjectUiState?.(projectUiStateKey, positions).catch(() => {})
+      } else {
+        storedPositionsRef.current = { key: storageKey, positions }
+        writeStoredPositions(storageKey, positions)
+      }
+      setStoredPositionsNonce((nonce) => nonce + 1)
+    },
+    [hasProjectUiStateStorage, onWriteProjectUiState, projectUiStateKey, storageKey],
+  )
+
+  // Track which nodes are inline-expanded. Stored separately so changes here
+  // re-run the layout and trigger neighbouring cards to shift.
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set())
+  const expandedIdsRef = useRef<ReadonlySet<string>>(new Set())
+
+  // Actual rendered size for each node, populated from React Flow's dimension
+  // change events. Drives layout so expansion displaces neighbours by exactly
+  // the amount the card grew (rather than by EXPANDED_BODY_EXTRA, which had to
+  // pad generously to cover worst-case content and was the source of the
+  // "expand overshoots its actual height" bug).
+  const [measuredSizes, setMeasuredSizes] = useState<ReadonlyMap<string, NodeSize>>(
+    () => new Map(),
+  )
+  const measuredSizesRef = useRef<ReadonlyMap<string, NodeSize>>(new Map())
+  const pendingMeasuredSizesRef = useRef<Map<string, NodeSize>>(new Map())
+  const measurementFrameRef = useRef<number | null>(null)
+  const measurementSettleTimersRef = useRef<Map<string, number>>(new Map())
+
+  const commitMeasuredSizes = useCallback(
+    (
+      updater: (
+        previous: ReadonlyMap<string, NodeSize>,
+      ) => ReadonlyMap<string, NodeSize>,
+    ) => {
+      setMeasuredSizes((previous) => {
+        const next = updater(previous)
+        measuredSizesRef.current = next
+        return next
+      })
+    },
+    [],
+  )
+
+  const flushPendingMeasuredSizes = useCallback(
+    (allowedIds?: ReadonlySet<string>) => {
+      const pending = pendingMeasuredSizesRef.current
+      if (pending.size === 0) return
+
+      const updates = new Map<string, NodeSize>()
+      const settling = measurementSettleTimersRef.current
+      for (const [id, size] of pending) {
+        if (allowedIds) {
+          if (!allowedIds.has(id)) continue
+        } else if (settling.has(id)) {
+          continue
+        }
+        updates.set(id, size)
+      }
+      if (updates.size === 0) return
+
+      for (const id of updates.keys()) {
+        pending.delete(id)
+      }
+
+      startTransition(() => {
+        commitMeasuredSizes((previous) => {
+          let next: Map<string, NodeSize> | null = null
+          for (const [id, nextSize] of updates) {
+            if (sameMeasuredSize(previous.get(id), nextSize)) continue
+            if (!next) next = new Map(previous)
+            next.set(id, nextSize)
+          }
+          return next ?? previous
+        })
+      })
+    },
+    [commitMeasuredSizes],
+  )
+
+  const markMeasuredSizeSettling = useCallback(
+    (nodeId: string) => {
+      const timers = measurementSettleTimersRef.current
+      const existing = timers.get(nodeId)
+      if (existing !== undefined) {
+        window.clearTimeout(existing)
+      }
+      const timer = window.setTimeout(() => {
+        timers.delete(nodeId)
+        flushPendingMeasuredSizes(new Set([nodeId]))
+      }, EXPANSION_MEASUREMENT_SETTLE_MS)
+      timers.set(nodeId, timer)
+    },
+    [flushPendingMeasuredSizes],
+  )
+
+  const invalidateMeasuredSize = useCallback(
+    (nodeId: string) => {
+      pendingMeasuredSizesRef.current.delete(nodeId)
+      commitMeasuredSizes((previous) => {
+        if (!previous.has(nodeId)) return previous
+        const next = new Map(previous)
+        next.delete(nodeId)
+        return next
+      })
+    },
+    [commitMeasuredSizes],
+  )
+
+  const commitEstimatedMeasuredSize = useCallback(
+    (nodeId: string, expanded: boolean): boolean => {
+      const estimated = estimateRenderedNodeSize(canvasRef.current, nodeId, expanded)
+      if (!estimated) return false
+
+      pendingMeasuredSizesRef.current.delete(nodeId)
+      commitMeasuredSizes((previous) => {
+        if (sameMeasuredSize(previous.get(nodeId), estimated)) return previous
+        const next = new Map(previous)
+        next.set(nodeId, estimated)
+        return next
+      })
+      return true
+    },
+    [commitMeasuredSizes],
+  )
+
+  const scheduleMeasuredSize = useCallback(
+    (nodeId: string, size: NodeSize) => {
+      const normalized = normalizeMeasuredSize(size)
+      const pending = pendingMeasuredSizesRef.current
+      const existing = pending.get(nodeId) ?? measuredSizesRef.current.get(nodeId)
+      if (sameMeasuredSize(existing, normalized)) return
+
+      pending.set(nodeId, normalized)
+      if (measurementSettleTimersRef.current.has(nodeId)) return
+      if (measurementFrameRef.current !== null) return
+
+      measurementFrameRef.current = window.requestAnimationFrame(() => {
+        measurementFrameRef.current = null
+        flushPendingMeasuredSizes()
+      })
+    },
+    [flushPendingMeasuredSizes],
+  )
+
+  const scheduleDimensionChangeSize = useCallback(
+    (nodeId: string, dimensions: NodeSize) => {
+      const renderedCardSize = nodeId.startsWith('stage:')
+        ? estimateRenderedNodeSize(canvasRef.current, nodeId, false)
+        : null
+      const measured = measuredSizeForDimensionChange(
+        nodeId,
+        dimensions,
+        renderedCardSize,
+        reactFlow.getViewport().zoom,
+      )
+      if (!measured) return
+      scheduleMeasuredSize(nodeId, measured)
+    },
+    [reactFlow, scheduleMeasuredSize],
+  )
+
+  const setNodeExpanded = useCallback(
+    (nodeId: string, expanded: boolean) => {
+      const current = expandedIdsRef.current
+      const has = current.has(nodeId)
+      if (expanded === has) return
+
+      const next = new Set(current)
+      if (expanded) next.add(nodeId)
+      else next.delete(nodeId)
+
+      expandedIdsRef.current = next
+      markMeasuredSizeSettling(nodeId)
+      if (!commitEstimatedMeasuredSize(nodeId, expanded)) {
+        invalidateMeasuredSize(nodeId)
+      }
+      setExpandedIds(next)
+    },
+    [commitEstimatedMeasuredSize, invalidateMeasuredSize, markMeasuredSizeSettling],
+  )
+
+  const expansionValue = useMemo<AgentCanvasExpansionContextValue>(
+    () => ({
+      locked: canvasInteractionsLocked,
+      setExpanded: setNodeExpanded,
+    }),
+    [canvasInteractionsLocked, setNodeExpanded],
+  )
+
+  const layoutResult = useMemo(() => {
+    // resetNonce participates so "Reset layout" forces a recompute after the
+    // persisted position overrides are wiped.
+    void resetNonce
+    const sizes = buildSizeMap(baseGraph.nodes, expandedIds, measuredSizes)
+    const placed = layoutAgentGraphByCategory(baseGraph.nodes, sizes, {
+      stableHeaderHeight: NODE_SIZE_BY_TYPE['agent-header'].height,
+    })
+    return { placed, sizes }
+  }, [baseGraph, expandedIds, measuredSizes, resetNonce])
+
+  const computedNodes = useMemo(() => {
+    const { placed, sizes } = layoutResult
+    // View mode reads persisted user-drag positions from project UI state when
+    // available; editing mode keeps overrides in memory only (no stable storage
+    // key for an unsaved create) so we plug in the in-memory map here instead.
+    const stored = editing ? editingPositionOverrides : getStoredPositions()
+    const positioned = applyStoredPositions(placed, stored)
+    const advanced = applyEditingAdvanced(positioned, editing, editingAdvanced)
+    const classed = applyExpandedNodeClass(advanced, expandedIds)
+    return applyKnownNodeDimensions(
+      classed,
+      sizes,
+      editing
+        ? { domMeasuredHandleNodeTypes: EDITING_DOM_MEASURED_HANDLE_NODE_TYPES }
+        : undefined,
+    ) as Node[]
+  }, [
+    editing,
+    editingAdvanced,
+    editingPositionOverrides,
+    expandedIds,
+    getStoredPositions,
+    layoutResult,
+    storedPositionsNonce,
+  ])
+
+  // Split stage→tool edges out of the React-Flow edges array. They're
+  // visualised by StageToolFanOverlay as a single SVG path drawn on demand
+  // during stage hover; keeping them in React-Flow would force 20+ smoothstep
+  // paths to mount and toggle display per stage hover, which was the dominant
+  // cause of laggy stage interaction.
+  const graphEdges = useMemo(
+    () =>
+      (baseGraph.edges as Edge[])
+        .filter((edge) => {
+          const data = edge.data as { category?: string } | undefined
+          return data?.category !== 'stage-tool'
+        })
+        .map((edge) =>
+          edge.interactionWidth === 0 ? edge : { ...edge, interactionWidth: 0 },
+        ),
+    [baseGraph.edges],
+  )
+
+  const stageToolFanEntries = useMemo<ReadonlyArray<StageToolFanEntry>>(() => {
+    const grouped = new Map<string, string[]>()
+    for (const edge of baseGraph.edges) {
+      const data = edge.data as { category?: string } | undefined
+      if (data?.category !== 'stage-tool') continue
+      const targets = grouped.get(edge.source) ?? []
+      targets.push(edge.target)
+      grouped.set(edge.source, targets)
+    }
+    return Array.from(grouped, ([stageId, targets]) => ({ stageId, targets }))
+  }, [baseGraph.edges])
+  const stageToolFanRef = useRef<StageToolFanOverlayRef | null>(null)
+  const computedEdges = graphEdges
+  const canvasInteractingRef = useRef(false)
+
+  const [nodes, setNodes] = useNodesState<Node>(computedNodes)
+  const nodesRef = useRef<Node[]>(computedNodes)
+  const nodeInternalsRefreshKeyRef = useRef('')
+  const nodeInternalsSecondPassFrameRef = useRef<number | null>(null)
+  const refreshNodeInternals = useCallback(
+    (ids: readonly string[]) => {
+      if (ids.length === 0) return
+      const nextIds = [...ids]
+      updateNodeInternals(nextIds)
+      if (nodeInternalsSecondPassFrameRef.current !== null) {
+        window.cancelAnimationFrame(nodeInternalsSecondPassFrameRef.current)
+      }
+      nodeInternalsSecondPassFrameRef.current = window.requestAnimationFrame(() => {
+        nodeInternalsSecondPassFrameRef.current = null
+        updateNodeInternals(nextIds)
+      })
+    },
+    [updateNodeInternals],
+  )
+  // Cache focus index by topology signature (ids/types/parents/sources/targets).
+  // Position drags and header advanced-panel edits change array identity but
+  // not topology — reusing the index preserves focusTargetCacheRef so hover
+  // dispatch stays O(1) across re-renders.
+  //
+  // The focus index is built from `baseGraph.edges` (all edges), NOT from
+  // `graphEdges` (which has stage-tool stripped out for the SVG overlay
+  // approach). Hovering a stage still needs the tool-highlighting effect
+  // via stage-tool relationships, so the focus traversal must see them.
+  // DOM lookups for the stripped edge ids return null and are skipped
+  // gracefully in getFocusedDomElements.
+  const focusEdges = baseGraph.edges as Edge[]
+  const focusIndexRef = useRef<{ key: string; index: FocusIndex } | null>(null)
+  const focusIndex = useMemo(() => {
+    let key = ''
+    for (const node of computedNodes) {
+      key += `${node.id}|${node.type ?? ''}|${(node as Node).parentId ?? ''},`
+    }
+    key += '::'
+    for (const edge of focusEdges) {
+      key += `${edge.id}|${edge.source}|${edge.target},`
+    }
+    const cached = focusIndexRef.current
+    if (cached && cached.key === key) return cached.index
+    const index = buildFocusIndex(computedNodes, focusEdges)
+    focusIndexRef.current = { key, index }
+    return index
+  }, [computedNodes, focusEdges])
+  const focusTargetCacheRef = useRef<{
+    index: FocusIndex | null
+    targets: Map<string, FocusTarget>
+  }>({ index: null, targets: new Map() })
+  // Clear the DOM-element cache whenever the topology shifts. Stale entries
+  // would self-evict via isConnected, but flushing on layout change avoids
+  // letting the maps grow with detached refs over many edits.
+  useEffect(() => {
+    const cache = focusDomCacheRef.current
+    cache.nodes.clear()
+    cache.edges.clear()
+    cache.labels.clear()
+  }, [focusIndex])
+  const getFocusTarget = useCallback(
+    (nodeId: string): FocusTarget | null => {
+      const cache = focusTargetCacheRef.current
+      if (cache.index !== focusIndex) {
+        cache.index = focusIndex
+        cache.targets = new Map()
+      }
+      const cached = cache.targets.get(nodeId)
+      if (cached) return cached
+      const target = buildFocusTarget(nodeId, focusIndex)
+      if (target) cache.targets.set(nodeId, target)
+      return target
+    },
+    [focusIndex],
+  )
+  // Keep React Flow state in sync with computed layout. Position-only updates
+  // benefit from CSS transition on .react-flow__node so neighbours animate.
+  useEffect(() => {
+    nodesRef.current = nodes
+  }, [nodes])
+
+  useEffect(() => {
+    const refreshKey = nodeInternalsRefreshKey(nodes)
+    const refreshIds = refreshableNodeIds(nodes)
+    if (refreshKey === nodeInternalsRefreshKeyRef.current) return
+    nodeInternalsRefreshKeyRef.current = refreshKey
+    refreshNodeInternals(refreshIds)
+  }, [nodes, refreshNodeInternals])
+
+  // Handles stay 0×0 in both modes so edge endpoints land on the node boundary.
+  // Editing mode paints the grabbable half-dot via CSS pseudo-elements, and
+  // some nodes add or remove handles when editing toggles. Force React Flow to
+  // refresh handleBounds so connection drag hit-testing sees the current set.
+  useEffect(() => {
+    const ids = refreshableNodeIds(nodesRef.current)
+    if (ids.length === 0) return
+    refreshNodeInternals(ids)
+  }, [editing, refreshNodeInternals])
+
+  useEffect(
+    () => () => {
+      if (nodeInternalsSecondPassFrameRef.current !== null) {
+        window.cancelAnimationFrame(nodeInternalsSecondPassFrameRef.current)
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    setNodes((current) => {
+      // Preserve user drag positions where present, otherwise adopt the new
+      // computed position so layout reflow visibly takes effect.
+      const byId = new Map(current.map((n) => [n.id, n] as const))
+      let changed = current.length !== computedNodes.length
+      const nextNodes = computedNodes.map((next) => {
+        const prev = byId.get(next.id)
+        if (!prev) {
+          changed = true
+          return next
+        }
+        // If the node has been measured with the same data and only position changed,
+        // we keep the rest of its React Flow state (selection, etc.) and update position.
+        if (
+          prev.position.x === next.position.x &&
+          prev.position.y === next.position.y &&
+          prev.type === next.type &&
+          prev.parentId === next.parentId &&
+          prev.width === next.width &&
+          prev.height === next.height &&
+          prev.draggable === next.draggable &&
+          prev.selectable === next.selectable &&
+          prev.data === next.data
+        ) {
+          return prev
+        }
+        changed = true
+        return { ...prev, ...next, position: next.position }
+      })
+      const resolved = changed ? nextNodes : current
+      nodesRef.current = resolved
+      return resolved
+    })
+  }, [computedNodes, setNodes])
+
+  // First-stage auto-open: once the new stage node has been built into the
+  // node list, mark it selected (clearing any prior selection) so the
+  // properties panel pops open on the new node. Cleared after the first
+  // matching pass so subsequent stage adds don't fight the user.
+  useEffect(() => {
+    if (!pendingStageAutoSelectId) return
+    const targetNodeId = stageNodeId(pendingStageAutoSelectId)
+    if (!nodes.some((node) => node.id === targetNodeId)) return
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.id === targetNodeId) {
+          return node.selected ? node : { ...node, selected: true }
+        }
+        return node.selected ? { ...node, selected: false } : node
+      }),
+    )
+    setPendingStageAutoSelectId(null)
+  }, [nodes, pendingStageAutoSelectId, setNodes])
+
+  // Hover focus is intentionally DOM-only. The previous React-state version
+  // rebuilt every node and edge object on hover, forcing React Flow to
+  // reconcile the whole graph and recalculate SVG paths during pointer moves.
+  // Here React owns graph structure; hover only toggles classes on the
+  // already-mounted elements touched by the focused cluster.
+  const pendingFrameRef = useRef<number | null>(null)
+  const lastPointerRef = useRef<{ x: number; y: number; nodeId: string | null } | null>(
+    null,
+  )
+  const hoveredNodeIdRef = useRef<string | null>(null)
+  const lastPointerElementRef = useRef<Element | null>(null)
+  const lastPointerDirectNodeIdRef = useRef<string | null>(null)
+  const nodeIdByElementRef = useRef<WeakMap<Element, string | null>>(new WeakMap())
+  const appliedFocusRef = useRef<AppliedFocus | null>(null)
+  const interactionSettleTimerRef = useRef<number | null>(null)
+  // DOM-element cache for focus lookups. Maps node/edge/label id → element.
+  // Replaces per-hover querySelectorAll scans; falls back to querySelector on
+  // miss and self-evicts entries whose element is no longer connected.
+  const focusDomCacheRef = useRef<FocusDomCache>({
+    nodes: new Map(),
+    edges: new Map(),
+    labels: new Map(),
+  })
+
+  const resolveNodeIdFromElement = useCallback((element: Element | null): string | null => {
+    if (!element) return null
+    const cache = nodeIdByElementRef.current
+    if (cache.has(element)) return cache.get(element) ?? null
+
+    let cursor: Element | null = element
+    let frameId: string | null = null
+    while (cursor) {
+      if (cursor.classList.contains('react-flow__node')) {
+        if (cursor.classList.contains('react-flow__node-lane-label')) {
+          cache.set(element, null)
+          return null
+        }
+        const id = cursor.getAttribute('data-id')
+        if (id) {
+          if (!cursor.classList.contains('react-flow__node-tool-group-frame')) {
+            cache.set(element, id)
+            return id
+          }
+          frameId ??= id
+        }
+      }
+      cursor = cursor.parentElement
+    }
+    cache.set(element, frameId)
+    return frameId
+  }, [])
+
+  const resolveNodeIdAtPoint = useCallback((x: number, y: number): string | null => {
+    const pointElements =
+      typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(x, y)
+        : [document.elementFromPoint(x, y)].filter((el): el is Element => Boolean(el))
+    let frameId: string | null = null
+
+    for (const element of pointElements) {
+      let cursor: Element | null = element
+      while (cursor) {
+        if (cursor.classList.contains('react-flow__node')) {
+          if (cursor.classList.contains('react-flow__node-lane-label')) break
+          const id = cursor.getAttribute('data-id')
+          if (id) {
+            if (!cursor.classList.contains('react-flow__node-tool-group-frame')) {
+              return id
+            }
+            frameId ??= id
+          }
+          break
+        }
+        cursor = cursor.parentElement
+      }
+    }
+
+    return frameId
+  }, [])
+
+  const removeAppliedFocus = useCallback(() => {
+    const root = canvasRef.current
+    const applied = appliedFocusRef.current
+    stageToolFanRef.current?.showStage(null)
+    if (!root) return
+    root.classList.remove('is-focusing')
+    if (!applied) return
+    for (const nodeElement of applied.nodeElements) {
+      nodeElement.classList.remove('is-focused')
+    }
+    for (const edgeElement of applied.edgeElements) {
+      edgeElement.classList.remove('is-active')
+    }
+    for (const edgeLabelElement of applied.edgeLabelElements) {
+      edgeLabelElement.classList.remove('is-active')
+    }
+    appliedFocusRef.current = null
+  }, [])
+
+  // Diff-based focus class application. Hovering between two nodes that share
+  // most of their focus cluster (e.g. two tools in the same frame) used to
+  // clear and re-add classes on every element AND toggle `.is-focusing` off
+  // and on the root — triggering two full style-invalidation cascades across
+  // the entire canvas DOM per hover-change. This patch keeps `.is-focusing`
+  // on the root the whole time focus is active and only touches the symmetric
+  // difference of focused/active elements between old and new clusters.
+  const diffAppliedFocus = useCallback((next: AppliedFocus) => {
+    const root = canvasRef.current
+    if (!root) return
+    const prev = appliedFocusRef.current
+    if (!prev) {
+      for (const el of next.nodeElements) el.classList.add('is-focused')
+      for (const el of next.edgeElements) el.classList.add('is-active')
+      for (const el of next.edgeLabelElements) el.classList.add('is-active')
+      appliedFocusRef.current = next
+      return
+    }
+    const prevNodes = new Set(prev.nodeElements)
+    const nextNodes = new Set(next.nodeElements)
+    for (const el of prev.nodeElements) {
+      if (!nextNodes.has(el)) el.classList.remove('is-focused')
+    }
+    for (const el of next.nodeElements) {
+      if (!prevNodes.has(el)) el.classList.add('is-focused')
+    }
+    const prevEdges = new Set(prev.edgeElements)
+    const nextEdges = new Set(next.edgeElements)
+    for (const el of prev.edgeElements) {
+      if (!nextEdges.has(el)) el.classList.remove('is-active')
+    }
+    for (const el of next.edgeElements) {
+      if (!prevEdges.has(el)) el.classList.add('is-active')
+    }
+    const prevLabels = new Set(prev.edgeLabelElements)
+    const nextLabels = new Set(next.edgeLabelElements)
+    for (const el of prev.edgeLabelElements) {
+      if (!nextLabels.has(el)) el.classList.remove('is-active')
+    }
+    for (const el of next.edgeLabelElements) {
+      if (!prevLabels.has(el)) el.classList.add('is-active')
+    }
+    appliedFocusRef.current = next
+  }, [])
+
+  const clearFocus = useCallback(() => {
+    const hasFocusWork =
+      pendingFrameRef.current !== null ||
+      lastPointerRef.current !== null ||
+      hoveredNodeIdRef.current !== null ||
+      appliedFocusRef.current !== null
+    if (!hasFocusWork) return
+
+    if (pendingFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingFrameRef.current)
+      pendingFrameRef.current = null
+    }
+    lastPointerRef.current = null
+    lastPointerElementRef.current = null
+    lastPointerDirectNodeIdRef.current = null
+    hoveredNodeIdRef.current = null
+    removeAppliedFocus()
+  }, [removeAppliedFocus])
+
+  const applyFocusForNode = useCallback(
+    (nodeId: string | null, options: { force?: boolean } = {}) => {
+      if (!options.force && hoveredNodeIdRef.current === nodeId) return
+      hoveredNodeIdRef.current = nodeId
+
+      const root = canvasRef.current
+      if (!root || !nodeId) {
+        removeAppliedFocus()
+        stageToolFanRef.current?.showStage(null)
+        return
+      }
+      const target = getFocusTarget(nodeId)
+      if (!target) {
+        removeAppliedFocus()
+        stageToolFanRef.current?.showStage(null)
+        return
+      }
+
+      // Keep `.is-focusing` on the root across hover-to-new-cluster transitions
+      // so the browser only does the global style-invalidation cascade once per
+      // focus session — not twice (off + on) per hover.
+      if (!root.classList.contains('is-focusing')) {
+        root.classList.add('is-focusing')
+      }
+      const applied = getFocusedDomElements(root, target, focusDomCacheRef.current)
+      diffAppliedFocus(applied)
+
+      // Stage→tool fan lines are drawn outside React-Flow as a single SVG
+      // path. Pass `nodeId` through unconditionally; the overlay returns
+      // early if the id isn't a stage. Pure DOM mutation, no React renders.
+      stageToolFanRef.current?.showStage(nodeId)
+    },
+    [diffAppliedFocus, getFocusTarget, removeAppliedFocus],
+  )
+
+  const markCanvasInteracting = useCallback(() => {
+    const root = canvasRef.current
+    if (!root) return
+    if (interactionSettleTimerRef.current !== null) {
+      window.clearTimeout(interactionSettleTimerRef.current)
+      interactionSettleTimerRef.current = null
+    }
+    if (!canvasInteractingRef.current) {
+      canvasInteractingRef.current = true
+    }
+  }, [])
+
+  const settleCanvasInteraction = useCallback(() => {
+    if (interactionSettleTimerRef.current !== null) {
+      window.clearTimeout(interactionSettleTimerRef.current)
+    }
+    interactionSettleTimerRef.current = window.setTimeout(() => {
+      interactionSettleTimerRef.current = null
+      canvasInteractingRef.current = false
+    }, INTERACTION_SETTLE_MS)
+  }, [])
+
+  const handleMoveStart = useCallback(
+    (event: MouseEvent | TouchEvent | WheelEvent | null) => {
+      markCanvasInteracting()
+      clearFocus()
+      if (typeof WheelEvent !== 'undefined' && event instanceof WheelEvent) {
+        return
+      }
+    },
+    [clearFocus, markCanvasInteracting],
+  )
+
+  const handleMoveEnd = useCallback(() => {
+    settleCanvasInteraction()
+  }, [settleCanvasInteraction])
+
+  const handleNodeDragStart = useCallback<OnNodeDrag<Node>>(() => {
+    clearFocus()
+    markCanvasInteracting()
+    canvasRef.current?.classList.add('is-dragging')
+  }, [clearFocus, markCanvasInteracting])
+
+  const handleNodeDragStop = useCallback<OnNodeDrag<Node>>(
+    (_event, node) => {
+      canvasRef.current?.classList.remove('is-dragging')
+
+      if (isLaneLabelNodeId(node.id)) {
+        const currentNodes = nodesRef.current
+        const memberIds = getLaneDragMemberIds(currentNodes, node.id)
+        if (memberIds.size > 0) {
+          const nextPositions = { ...getStoredPositions() }
+          for (const currentNode of currentNodes) {
+            if (!memberIds.has(currentNode.id) || !isPersistableNode(currentNode)) {
+              continue
+            }
+            nextPositions[currentNode.id] = {
+              x: roundCanvasCoord(currentNode.position.x),
+              y: roundCanvasCoord(currentNode.position.y),
+            }
+          }
+          commitStoredPositions(nextPositions)
+        }
+      }
+
+      settleCanvasInteraction()
+    },
+    [commitStoredPositions, getStoredPositions, settleCanvasInteraction],
+  )
+
+  const handleWheelCapture = useCallback(() => {
+    markCanvasInteracting()
+    clearFocus()
+    settleCanvasInteraction()
+  }, [clearFocus, markCanvasInteracting, settleCanvasInteraction])
+
+  const handlePointerMove = useCallback(
+    (event: PointerEvent) => {
+      if (canvasInteractionsLocked) {
+        clearFocus()
+        return
+      }
+      if (event.buttons !== 0 || canvasInteractingRef.current) {
+        clearFocus()
+        return
+      }
+      const target = event.target instanceof Element ? event.target : null
+      if (
+        target &&
+        target === lastPointerElementRef.current &&
+        lastPointerDirectNodeIdRef.current !== null &&
+        pendingFrameRef.current === null
+      ) {
+        return
+      }
+      lastPointerElementRef.current = target
+      const targetNodeId = resolveNodeIdFromElement(target)
+      lastPointerDirectNodeIdRef.current = targetNodeId
+      if (targetNodeId && targetNodeId === hoveredNodeIdRef.current) return
+      lastPointerRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+        nodeId: targetNodeId,
+      }
+      if (pendingFrameRef.current !== null) return
+      pendingFrameRef.current = window.requestAnimationFrame(() => {
+        pendingFrameRef.current = null
+        const point = lastPointerRef.current
+        if (!point) return
+        applyFocusForNode(point.nodeId ?? resolveNodeIdAtPoint(point.x, point.y))
+      })
+    },
+    [
+      applyFocusForNode,
+      canvasInteractionsLocked,
+      clearFocus,
+      resolveNodeIdAtPoint,
+      resolveNodeIdFromElement,
+    ],
+  )
+
+  useEffect(() => {
+    const root = canvasRef.current
+    if (!root) return
+
+    const passiveOptions: AddEventListenerOptions = { passive: true }
+    const passiveCaptureOptions: AddEventListenerOptions = { capture: true, passive: true }
+    root.addEventListener('pointermove', handlePointerMove, passiveOptions)
+    root.addEventListener('pointerleave', clearFocus, passiveOptions)
+    root.addEventListener('wheel', handleWheelCapture, passiveCaptureOptions)
+
+    return () => {
+      root.removeEventListener('pointermove', handlePointerMove, passiveOptions)
+      root.removeEventListener('pointerleave', clearFocus, passiveOptions)
+      root.removeEventListener('wheel', handleWheelCapture, passiveCaptureOptions)
+    }
+  }, [clearFocus, handlePointerMove, handleWheelCapture])
+
+  useEffect(
+    () => () => {
+      if (pendingFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingFrameRef.current)
+        pendingFrameRef.current = null
+      }
+      if (measurementFrameRef.current !== null) {
+        window.cancelAnimationFrame(measurementFrameRef.current)
+        measurementFrameRef.current = null
+      }
+      if (nodeInternalsSecondPassFrameRef.current !== null) {
+        window.cancelAnimationFrame(nodeInternalsSecondPassFrameRef.current)
+        nodeInternalsSecondPassFrameRef.current = null
+      }
+      for (const timer of measurementSettleTimersRef.current.values()) {
+        window.clearTimeout(timer)
+      }
+      measurementSettleTimersRef.current.clear()
+      if (interactionSettleTimerRef.current !== null) {
+        window.clearTimeout(interactionSettleTimerRef.current)
+        interactionSettleTimerRef.current = null
+      }
+      if (emptyStateEntryFrameRef.current !== null) {
+        window.cancelAnimationFrame(emptyStateEntryFrameRef.current)
+        emptyStateEntryFrameRef.current = null
+      }
+      removeAppliedFocus()
+    },
+    [removeAppliedFocus],
+  )
+
+  useEffect(() => {
+    nodeIdByElementRef.current = new WeakMap()
+    clearFocus()
+  }, [clearFocus, computedEdges, computedNodes])
+
+  useEffect(() => {
+    if (!canvasInteractionsLocked) return
+    clearFocus()
+    canvasInteractingRef.current = false
+    canvasRef.current?.classList.remove('is-dragging')
+  }, [canvasInteractionsLocked, clearFocus])
+
+  // Read mode is view-only: preserve selection and dimension measurements,
+  // but ignore position changes so layout cannot be mutated from this path.
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<Node>[]) => {
+      const flowChanges: NodeChange<Node>[] = []
+
+      for (const change of changes) {
+        if (change.type === 'dimensions') {
+          if (change.dimensions) scheduleDimensionChangeSize(change.id, change.dimensions)
+          continue
+        }
+
+        if (canvasInteractionsLocked) continue
+
+        if (change.type === 'position') {
+          continue
+        }
+
+        flowChanges.push(change)
+      }
+
+      if (flowChanges.length > 0) {
+        setNodes((current) => {
+          const next = applyNodeChanges(flowChanges, current)
+          nodesRef.current = next
+          return next
+        })
+      }
+    },
+    [canvasInteractionsLocked, scheduleDimensionChangeSize, setNodes],
+  )
+
+  // ============================================================
+  // Editing-mode handlers. The data source of truth is `editingDetail`;
+  // every mutation rewrites that detail, which then flows through the same
+  // buildAgentGraph + layoutAgentGraphByCategory pipeline used by view mode.
+  // The structural layout of added nodes (tool category frames, lane labels,
+  // proper positioning) therefore matches view mode automatically.
+  // ============================================================
+  const reactFlowForDrop = useReactFlow<Node, Edge>()
+
+  const handleEditingNodesChange = useCallback((changes: NodeChange<Node>[]) => {
+    // Mirror view-mode behavior: separate normal changes (which apply to the
+    // dragged node directly) from lane-label changes (which propagate the
+    // delta to every child in the lane via applyLaneDragPositionChanges).
+    const flowChanges: NodeChange<Node>[] = []
+    const laneDragChanges: NodeChange<Node>[] = []
+    for (const change of changes) {
+      if (change.type === 'dimensions') {
+        if (change.dimensions) scheduleDimensionChangeSize(change.id, change.dimensions)
+        continue
+      }
+      if (change.type === 'remove') continue // routed via detail mutation below
+      if (change.type === 'position' && isLaneLabelNodeId(change.id)) {
+        laneDragChanges.push(change)
+        continue
+      }
+      flowChanges.push(change)
+    }
+
+    if (flowChanges.length > 0 || laneDragChanges.length > 0) {
+      // Compute the post-change node array synchronously OUTSIDE the
+      // setNodes updater so we can read member positions for the override
+      // capture without violating "updaters must be pure". nodesRef is
+      // populated from a post-render effect, so it's the freshest snapshot
+      // we have between renders.
+      const current = nodesRef.current
+      const withFlowChanges =
+        flowChanges.length > 0 ? applyNodeChanges(flowChanges, current) : current
+      const next =
+        laneDragChanges.length > 0
+          ? applyLaneDragPositionChanges(withFlowChanges, laneDragChanges)
+          : withFlowChanges
+
+      // For lane drags, capture every member's new position so the override
+      // map matches what setNodes is about to commit. The change events
+      // only carry the LABEL'S position — member positions live exclusively
+      // inside the applyLaneDragPositionChanges result above. Without this,
+      // applyStoredPositions on the next layout pass replays the lane label
+      // at its drop point but resets every member back to the layout
+      // baseline, which is what made edges anchor to the pre-drag location.
+      const overrideUpdates: Record<string, { x: number; y: number }> = {}
+      for (const change of laneDragChanges) {
+        if (change.type !== 'position' || !change.position) continue
+        const memberIds = getLaneDragMemberIds(next, change.id)
+        for (const member of next) {
+          if (!memberIds.has(member.id)) continue
+          overrideUpdates[member.id] = {
+            x: member.position.x,
+            y: member.position.y,
+          }
+        }
+      }
+      // Single-node drag-stops: persist the final position so subsequent
+      // layout reflows respect the user's manual placement. We persist on
+      // drag-stop (not every tick) to avoid recomputing the layout pipeline
+      // on every mouse move.
+      for (const change of changes) {
+        if (
+          change.type === 'position' &&
+          change.dragging === false &&
+          change.position &&
+          !isLaneLabelNodeId(change.id)
+        ) {
+          overrideUpdates[change.id] = {
+            x: change.position.x,
+            y: change.position.y,
+          }
+        }
+      }
+
+      // Apply both state updates. React batches them inside this event
+      // handler, so they commit together on the next render.
+      nodesRef.current = next
+      setNodes(next)
+      if (Object.keys(overrideUpdates).length > 0) {
+        setEditingPositionOverrides((currentOverrides) => ({
+          ...currentOverrides,
+          ...overrideUpdates,
+        }))
+      }
+    }
+
+    // Removals (backspace/delete on selected nodes) route through the
+    // detail-mutating path so editingDetail stays the source of truth.
+    for (const change of changes) {
+      if (change.type === 'remove' && !PROTECTED_NODE_IDS.has(change.id)) {
+        removeEditingNodeImpl(change.id)
+      }
+    }
+  }, [])
+
+  const handleEditingEdgesChange = useCallback((_changes: EdgeChange[]) => {
+    // Edges are derived from editingDetail (producedByTools, db.triggers,
+    // etc.). Edge removals on the canvas would need to translate back into
+    // detail mutations; for the v1 of this refactor we treat edges as
+    // read-only-derived. User can remove the underlying node via the trash
+    // button on the node body to clear its associated edges.
+  }, [])
+
+  // Translate a user-drawn connection into the corresponding detail
+  // relationship. Examples:
+  //   tool → output-section : push toolName to section.producedByTools
+  //   tool → db-table       : push tool trigger to db.triggers
+  //   section → db-table    : push output_section trigger to db.triggers
+  //   consumed → db-table   : push upstream_artifact trigger to db.triggers
+  // header → {prompt|tool|db|output} and consumed → header are already
+  // implied by the entity's existence and don't need explicit mutation.
+  const handleEditingConnect = useCallback((connection: Connection) => {
+    if (!connection.source || !connection.target) return
+    const source = decodeAgentGraphNodeId(connection.source)
+    const target = decodeAgentGraphNodeId(connection.target)
+    setEditingDetail((current) => {
+      if (!current) return current
+      // tool → output-section
+      if (source.kind === 'tool' && target.kind === 'output-section') {
+        const sections = current.output.sections.map((section) =>
+          section.id === target.sectionId
+            ? section.producedByTools.includes(source.toolName)
+              ? section
+              : { ...section, producedByTools: [...section.producedByTools, source.toolName] }
+            : section,
+        )
+        return { ...current, output: { ...current.output, sections } }
+      }
+      // stage → stage: add (or keep) a branch entry from the source stage
+      // to the target. Default condition is `always`; the user refines it
+      // in the properties panel. Duplicate branches to the same target are
+      // coalesced — the runtime sees a single canonical edge per (source,
+      // target, condition kind+key).
+      if (source.kind === 'stage' && target.kind === 'stage') {
+        const phases = current.workflowStructure?.phases ?? []
+        if (phases.length === 0) return current
+        if (!phases.some((phase) => phase.id === target.phaseId)) return current
+        const nextPhases = phases.map((phase) => {
+          if (phase.id !== source.phaseId) return phase
+          const existing = phase.branches ?? []
+          if (existing.some((branch) => branch.targetPhaseId === target.phaseId)) {
+            return phase
+          }
+          return {
+            ...phase,
+            branches: [
+              ...existing,
+              { targetPhaseId: target.phaseId, condition: { kind: 'always' as const } },
+            ],
+          }
+        })
+        return {
+          ...current,
+          workflowStructure: {
+            ...(current.workflowStructure ?? {}),
+            startPhaseId: current.workflowStructure?.startPhaseId,
+            phases: nextPhases,
+          },
+        }
+      }
+      // tool → db-table | section → db-table | consumed → db-table
+      if (target.kind === 'db' && (source.kind === 'tool' || source.kind === 'output-section' || source.kind === 'consumed-artifact')) {
+        const trigger: AgentTriggerRefDto =
+          source.kind === 'tool'
+            ? { kind: 'tool', name: source.toolName }
+            : source.kind === 'output-section'
+              ? { kind: 'output_section', id: source.sectionId }
+              : { kind: 'upstream_artifact', id: source.artifactId }
+        const dedupKey = (t: AgentTriggerRefDto): string =>
+          t.kind === 'tool'
+            ? `tool:${t.name}`
+            : t.kind === 'output_section'
+              ? `section:${t.id}`
+              : t.kind === 'upstream_artifact'
+                ? `artifact:${t.id}`
+                : `lifecycle:${t.event}`
+        const triggerKey = dedupKey(trigger)
+        const updateBucket = (bucket: typeof current.dbTouchpoints.reads) =>
+          bucket.map((entry) =>
+            entry.table === target.table && (target.touchpoint === 'read' ? entry.kind === 'read' : target.touchpoint === 'write' ? entry.kind === 'write' : entry.kind === 'encouraged')
+              ? entry.triggers.some((t) => dedupKey(t) === triggerKey)
+                ? entry
+                : { ...entry, triggers: [...entry.triggers, trigger] }
+              : entry,
+          )
+        return {
+          ...current,
+          dbTouchpoints: {
+            reads: target.touchpoint === 'read' ? updateBucket(current.dbTouchpoints.reads) : current.dbTouchpoints.reads,
+            writes: target.touchpoint === 'write' ? updateBucket(current.dbTouchpoints.writes) : current.dbTouchpoints.writes,
+            encouraged: target.touchpoint === 'encouraged' ? updateBucket(current.dbTouchpoints.encouraged) : current.dbTouchpoints.encouraged,
+          },
+        }
+      }
+      return current
+    })
+  }, [])
+
+  // Map editing-context updateNodeData calls back to editingDetail mutations.
+  // Each node id encodes which entity it represents (see decodeAgentGraphNodeId
+  // in build-agent-graph). The header path also handles the editingAdvanced
+  // store, since that lives outside the WorkflowAgentDetailDto shape.
+  const editingAdvancedRef = useRef(editingAdvanced)
+  useEffect(() => {
+    editingAdvancedRef.current = editingAdvanced
+  }, [editingAdvanced])
+
+  const updateEditingNodeData = useCallback<CanvasModeContextValue['updateNodeData']>(
+    (nodeId, updater) => {
+      const decoded = decodeAgentGraphNodeId(nodeId)
+      setEditingDetail((current) => {
+        if (!current) return current
+        switch (decoded.kind) {
+          case 'header': {
+            const prev = {
+              header: current.header,
+              summary: {
+                prompts: current.prompts.length,
+                tools: current.tools.length,
+                dbTables:
+                  current.dbTouchpoints.reads.length +
+                  current.dbTouchpoints.writes.length +
+                  current.dbTouchpoints.encouraged.length,
+                outputSections: current.output.sections.length,
+                consumes: current.consumes.length,
+                attachedSkills: current.attachedSkills.length,
+              },
+              advanced: editingAdvancedRef.current,
+            }
+            const next = updater(prev as never) as typeof prev
+            // Push advanced back to its own state if it changed.
+            if (next.advanced !== prev.advanced) {
+              setEditingAdvanced(next.advanced)
+            }
+            if (next.header === prev.header) return current
+            return { ...current, header: next.header }
+          }
+          case 'output': {
+            const prev = { output: current.output }
+            const next = updater(prev as never) as typeof prev
+            if (next.output === prev.output) return current
+            return { ...current, output: next.output }
+          }
+          case 'prompt': {
+            const prompts = current.prompts.map((p, i) => {
+              if (promptNodeId(p, i) !== nodeId) return p
+              const prev = { prompt: p }
+              const next = updater(prev as never) as typeof prev
+              return next.prompt
+            })
+            return { ...current, prompts }
+          }
+          case 'skills': {
+            const attachedSkills = current.attachedSkills.map((skill) => {
+              if (skillNodeId(skill) !== nodeId) return skill
+              const prev = { skill }
+              const next = updater(prev as never) as typeof prev
+              return next.skill
+            })
+            return { ...current, attachedSkills }
+          }
+          case 'tool': {
+            const tools = current.tools.map((tool) => {
+              if (toolNodeId(tool) !== nodeId) return tool
+              const prev = {
+                tool,
+                directConnectionHandles: { source: false, target: false },
+              }
+              const next = updater(prev as never) as typeof prev
+              return next.tool
+            })
+            return { ...current, tools }
+          }
+          case 'db': {
+            const updateBucket = (bucket: typeof current.dbTouchpoints.reads) =>
+              bucket.map((entry) => {
+                if (entry.table !== decoded.table) return entry
+                const prev = {
+                  table: entry.table,
+                  touchpoint: entry.kind,
+                  purpose: entry.purpose,
+                  triggers: entry.triggers,
+                  columns: entry.columns,
+                }
+                const next = updater(prev as never) as typeof prev
+                return {
+                  table: next.table,
+                  kind: next.touchpoint,
+                  purpose: next.purpose,
+                  triggers: next.triggers,
+                  columns: next.columns,
+                }
+              })
+            return {
+              ...current,
+              dbTouchpoints: {
+                reads:
+                  decoded.touchpoint === 'read'
+                    ? updateBucket(current.dbTouchpoints.reads)
+                    : current.dbTouchpoints.reads,
+                writes:
+                  decoded.touchpoint === 'write'
+                    ? updateBucket(current.dbTouchpoints.writes)
+                    : current.dbTouchpoints.writes,
+                encouraged:
+                  decoded.touchpoint === 'encouraged'
+                    ? updateBucket(current.dbTouchpoints.encouraged)
+                    : current.dbTouchpoints.encouraged,
+              },
+            }
+          }
+          case 'output-section': {
+            const sections = current.output.sections.map((section) => {
+              if (section.id !== decoded.sectionId) return section
+              const prev = { section }
+              const next = updater(prev as never) as typeof prev
+              return next.section
+            })
+            return { ...current, output: { ...current.output, sections } }
+          }
+          case 'consumed-artifact': {
+            const consumes = current.consumes.map((artifact) => {
+              if (artifact.id !== decoded.artifactId) return artifact
+              const prev = { artifact }
+              const next = updater(prev as never) as typeof prev
+              return next.artifact
+            })
+            return { ...current, consumes }
+          }
+          case 'stage': {
+            if (!current.workflowStructure) return current
+            const targetPhaseId = decoded.phaseId
+            const previousStartPhaseId = current.workflowStructure.startPhaseId
+            const phases = current.workflowStructure.phases.map((phase) => {
+              if (phase.id !== targetPhaseId) return phase
+              const prev = {
+                phase,
+                isStart: phase.id === previousStartPhaseId,
+              }
+              const next = updater(prev as never) as typeof prev
+              return next.phase
+            })
+            // Updating a phase's isStart flag flips the structure-level
+            // startPhaseId; reading the next isStart from the same updater
+            // run keeps both halves coherent without a second pass.
+            let nextStart = previousStartPhaseId
+            for (const phase of current.workflowStructure.phases) {
+              if (phase.id !== targetPhaseId) continue
+              const prev = {
+                phase,
+                isStart: phase.id === previousStartPhaseId,
+              }
+              const next = updater(prev as never) as typeof prev
+              if (next.isStart && next.phase.id) {
+                nextStart = next.phase.id
+              } else if (!next.isStart && previousStartPhaseId === targetPhaseId) {
+                nextStart = undefined
+              }
+              break
+            }
+            return {
+              ...current,
+              workflowStructure: {
+                ...(current.workflowStructure ?? {}),
+                startPhaseId: nextStart,
+                phases,
+              },
+            }
+          }
+          default:
+            return current
+        }
+      })
+    },
+    [],
+  )
+
+  // Defined as a closure so handleEditingNodesChange can call it without a
+  // forward reference. Removes a node from the corresponding detail array.
+  const removeEditingNodeImpl = useCallback((nodeId: string) => {
+    if (PROTECTED_NODE_IDS.has(nodeId)) return
+    const decoded = decodeAgentGraphNodeId(nodeId)
+    setEditingDetail((current) => {
+      if (!current) return current
+      switch (decoded.kind) {
+        case 'prompt':
+          return {
+            ...current,
+            prompts: current.prompts.filter(
+              (p, i) => promptNodeId(p, i) !== nodeId,
+            ),
+          }
+        case 'skills':
+          return {
+            ...current,
+            attachedSkills: current.attachedSkills.filter(
+              (skill) => skillNodeId(skill) !== nodeId,
+            ),
+          }
+        case 'tool': {
+          const removedName = decoded.toolName
+          // Drop matching tool, plus any references in section.producedByTools
+          // and db.triggers so the detail stays consistent.
+          const tools = current.tools.filter((tool) => toolNodeId(tool) !== nodeId)
+          const sections = current.output.sections.map((section) => ({
+            ...section,
+            producedByTools: section.producedByTools.filter((name) => name !== removedName),
+          }))
+          const stripTool = (entry: typeof current.dbTouchpoints.reads[number]) => ({
+            ...entry,
+            triggers: entry.triggers.filter(
+              (t) => !(t.kind === 'tool' && t.name === removedName),
+            ),
+          })
+          return {
+            ...current,
+            tools,
+            output: { ...current.output, sections },
+            dbTouchpoints: {
+              reads: current.dbTouchpoints.reads.map(stripTool),
+              writes: current.dbTouchpoints.writes.map(stripTool),
+              encouraged: current.dbTouchpoints.encouraged.map(stripTool),
+            },
+          }
+        }
+        case 'db': {
+          const filterBucket = (bucket: typeof current.dbTouchpoints.reads) =>
+            bucket.filter((entry) => entry.table !== decoded.table)
+          return {
+            ...current,
+            dbTouchpoints: {
+              reads:
+                decoded.touchpoint === 'read'
+                  ? filterBucket(current.dbTouchpoints.reads)
+                  : current.dbTouchpoints.reads,
+              writes:
+                decoded.touchpoint === 'write'
+                  ? filterBucket(current.dbTouchpoints.writes)
+                  : current.dbTouchpoints.writes,
+              encouraged:
+                decoded.touchpoint === 'encouraged'
+                  ? filterBucket(current.dbTouchpoints.encouraged)
+                  : current.dbTouchpoints.encouraged,
+            },
+          }
+        }
+        case 'output-section': {
+          const removedId = decoded.sectionId
+          // Remove section + any db.triggers referencing it.
+          const sections = current.output.sections.filter((s) => s.id !== removedId)
+          const stripSection = (entry: typeof current.dbTouchpoints.reads[number]) => ({
+            ...entry,
+            triggers: entry.triggers.filter(
+              (t) => !(t.kind === 'output_section' && t.id === removedId),
+            ),
+          })
+          return {
+            ...current,
+            output: { ...current.output, sections },
+            dbTouchpoints: {
+              reads: current.dbTouchpoints.reads.map(stripSection),
+              writes: current.dbTouchpoints.writes.map(stripSection),
+              encouraged: current.dbTouchpoints.encouraged.map(stripSection),
+            },
+          }
+        }
+        case 'consumed-artifact': {
+          const removedId = decoded.artifactId
+          const consumes = current.consumes.filter((a) => a.id !== removedId)
+          const stripArtifact = (entry: typeof current.dbTouchpoints.reads[number]) => ({
+            ...entry,
+            triggers: entry.triggers.filter(
+              (t) => !(t.kind === 'upstream_artifact' && t.id === removedId),
+            ),
+          })
+          return {
+            ...current,
+            consumes,
+            dbTouchpoints: {
+              reads: current.dbTouchpoints.reads.map(stripArtifact),
+              writes: current.dbTouchpoints.writes.map(stripArtifact),
+              encouraged: current.dbTouchpoints.encouraged.map(stripArtifact),
+            },
+          }
+        }
+        case 'stage': {
+          const removedId = decoded.phaseId
+          if (!current.workflowStructure) return current
+          // Drop the removed phase plus any branch entries that targeted it.
+          // If the removed phase was the start phase, pick the next surviving
+          // phase as the new start so the runtime always has a valid entry.
+          const remaining = current.workflowStructure.phases.filter(
+            (phase) => phase.id !== removedId,
+          )
+          const cleanedPhases = remaining.map((phase) => ({
+            ...phase,
+            branches: phase.branches?.filter(
+              (branch) => branch.targetPhaseId !== removedId,
+            ),
+          }))
+          if (cleanedPhases.length === 0) {
+            // Removing the last phase clears workflowStructure entirely so
+            // the snapshot drops back to the no-workflow shape.
+            const next = { ...current }
+            delete next.workflowStructure
+            return next
+          }
+          const nextStart =
+            current.workflowStructure.startPhaseId === removedId
+              ? cleanedPhases[0]?.id
+              : current.workflowStructure.startPhaseId
+          return {
+            ...current,
+            workflowStructure: {
+              ...(current.workflowStructure ?? {}),
+              startPhaseId: nextStart,
+              phases: cleanedPhases,
+            },
+          }
+        }
+        default:
+          return current
+      }
+    })
+  }, [])
+
+  const removeEditingNode = removeEditingNodeImpl
+
+  const removeEditingToolGroup = useCallback((sourceGroups: readonly string[]) => {
+    const groupSet = new Set(
+      sourceGroups.map((group) => group.trim() || 'other'),
+    )
+    if (groupSet.size === 0) return
+
+    setEditingDetail((current) => {
+      if (!current) return current
+      const removedNames = new Set(
+        current.tools
+          .filter((tool) => groupSet.has(tool.group?.trim() || 'other'))
+          .map((tool) => tool.name),
+      )
+      if (removedNames.size === 0) return current
+
+      const tools = current.tools.filter((tool) => !removedNames.has(tool.name))
+      const sections = current.output.sections.map((section) => ({
+        ...section,
+        producedByTools: section.producedByTools.filter(
+          (name) => !removedNames.has(name),
+        ),
+      }))
+      const stripRemovedTools = (entry: typeof current.dbTouchpoints.reads[number]) => ({
+        ...entry,
+        triggers: entry.triggers.filter(
+          (trigger) => !(trigger.kind === 'tool' && removedNames.has(trigger.name)),
+        ),
+      })
+
+      return {
+        ...current,
+        tools,
+        output: { ...current.output, sections },
+        dbTouchpoints: {
+          reads: current.dbTouchpoints.reads.map(stripRemovedTools),
+          writes: current.dbTouchpoints.writes.map(stripRemovedTools),
+          encouraged: current.dbTouchpoints.encouraged.map(stripRemovedTools),
+        },
+      }
+    })
+  }, [])
+
+  // Drag-from-handle state. We watch onConnectStart to remember which
+  // handle the user is pulling from, and onConnectEnd to detect when they
+  // released the drag onto empty canvas (rather than another node). When
+  // they release on empty canvas we either create the relevant node
+  // immediately (single-option drags) or open a small inline picker at the
+  // drop point.
+  const connectAttemptRef = useRef<{
+    sourceId: string
+    sourceHandle: string | null
+    handleType: 'source' | 'target'
+  } | null>(null)
+
+  type DropPickerKind = 'skill' | 'tool-category' | 'db-table' | 'consumed-artifact'
+  interface DropPickerState {
+    kind: DropPickerKind
+    // Screen-space anchor for the popup itself.
+    screenX: number
+    screenY: number
+    // Flow-space coordinates where the new node will be placed.
+    flowX: number
+    flowY: number
+    sourceId: string
+    sourceHandle: string | null
+    handleType: 'source' | 'target'
+  }
+  const [dropPicker, setDropPicker] = useState<DropPickerState | null>(null)
+  const closeDropPicker = useCallback(() => setDropPicker(null), [])
+
+  // Drag-add functions push entities into editingDetail. The layout pipeline
+  // re-runs after every change and slots the new entity into its proper lane
+  // (TOOLS frame, DATABASE column, etc.) — exactly where view mode would
+  // render it. The flowPos that comes from the drag-end is therefore mostly
+  // informational at this point: the layout authoritatively decides
+  // placement; the user can drag afterward to refine, and the drag is
+  // captured into editingPositionOverrides.
+
+  // Generate a unique entity id by suffixing a small counter when a base
+  // id collides with one already in `existing`. Used for prompt / artifact /
+  // section ids that must be unique within their lists.
+  const uniqueEntityId = (base: string, existing: readonly { id: string }[]): string => {
+    let id = base
+    let n = 2
+    while (existing.some((e) => e.id === id)) {
+      id = `${base}_${n++}`
+    }
+    return id
+  }
+
+  const addPromptFromDrag = useCallback(() => {
+    setEditingDetail((current) => {
+      if (!current) return current
+      const id = uniqueEntityId('custom_prompt', current.prompts)
+      const index = current.prompts.length
+      return {
+        ...current,
+        prompts: [
+          ...current.prompts,
+          {
+            id,
+            label: `Prompt ${index + 1}`,
+            role: 'system',
+            source: 'custom',
+            policy: null,
+            body:
+              'Replace this with the prompt body. Describe what the agent should do at this stage.',
+          },
+        ],
+      }
+    })
+  }, [])
+
+  const addOutputSectionFromDrag = useCallback(() => {
+    setEditingDetail((current) => {
+      if (!current) return current
+      const id = uniqueEntityId('custom_section', current.output.sections)
+      const index = current.output.sections.length
+      return {
+        ...current,
+        output: {
+          ...current.output,
+          sections: [
+            ...current.output.sections,
+            {
+              id,
+              label: `Section ${index + 1}`,
+              description: '',
+              emphasis: 'standard',
+              producedByTools: [],
+            },
+          ],
+        },
+      }
+    })
+  }, [])
+
+  // Append a stage to the authored state machine. The first added stage
+  // becomes the start stage by default so the runtime has a valid entry
+  // point. Later stages default to non-start; users can flip `isStart`
+  // from the properties panel.
+  const addStageFromDrag = useCallback(() => {
+    setEditingDetail((current) => {
+      if (!current) return current
+      const existingPhases = current.workflowStructure?.phases ?? []
+      const id = uniqueEntityId(
+        `phase_${existingPhases.length + 1}`,
+        existingPhases.map((phase) => ({ id: phase.id })),
+      )
+      const index = existingPhases.length
+      const nextPhase = {
+        id,
+        title: `Phase ${index + 1}`,
+        description: '',
+        allowedTools: [],
+        requiredChecks: [],
+        branches: [],
+      }
+      const startPhaseId = current.workflowStructure?.startPhaseId
+        ?? (index === 0 ? id : undefined)
+      // Auto-select the first stage on creation so the panel can introduce
+      // the feature. Subsequent stages keep the user on whatever they were
+      // editing before.
+      if (index === 0) setPendingStageAutoSelectId(id)
+      return {
+        ...current,
+        workflowStructure: {
+          startPhaseId,
+          phases: [...existingPhases, nextPhase],
+        },
+      }
+    })
+  }, [])
+
+  // Apply a stage preset from the empty-state chip. Replaces the (empty)
+  // workflowStructure entirely with the resolved preset and selects the
+  // start stage so the panel opens against it. Refuses to overwrite an
+  // existing structure — the chip only mounts when phases.length === 0,
+  // but the guard keeps a stale callback invocation from blowing away
+  // user-authored stages.
+  const applyStagePresetFromChip = useCallback(
+    (resolved: {
+      startPhaseId: string
+      phases: ReadonlyArray<CustomAgentWorkflowPhaseDto>
+    }) => {
+      setEditingDetail((current) => {
+        if (!current) return current
+        const existing = current.workflowStructure?.phases ?? []
+        if (existing.length > 0) return current
+        const phases = resolved.phases.map((phase) => ({ ...phase }))
+        if (phases.length === 0) return current
+        setPendingStageAutoSelectId(resolved.startPhaseId || phases[0].id)
+        return {
+          ...current,
+          workflowStructure: {
+            startPhaseId: resolved.startPhaseId || phases[0].id,
+            phases,
+          },
+        }
+      })
+    },
+    [],
+  )
+
+  // Tool category drags add every tool in the chosen category. The layout's
+  // tool-group-frame logic then groups them visually, matching view mode.
+  const addToolCategoryFromDrag = useCallback(
+    (categoryId: string) => {
+      if (!authoringCatalog) return
+      const category = authoringCatalog.toolCategories.find(
+        (entry) => entry.id === categoryId,
+      )
+      if (!category || category.tools.length === 0) return
+      setEditingDetail((current) => {
+        if (!current) return current
+        const existingNames = new Set(current.tools.map((t) => t.name))
+        const additions = category.tools
+          .filter((tool) => !existingNames.has(tool.name))
+          .map((tool) => ({
+            name: tool.name,
+            group: tool.group,
+            description: tool.description,
+            effectClass: tool.effectClass,
+            riskClass: tool.riskClass,
+            tags: [...tool.tags],
+            schemaFields: [...tool.schemaFields],
+            examples: [...tool.examples],
+          }))
+        if (additions.length === 0) return current
+        return { ...current, tools: [...current.tools, ...additions] }
+      })
+      closeDropPicker()
+    },
+    [authoringCatalog, closeDropPicker],
+  )
+
+  const addSkillFromDrag = useCallback(
+    (entry: AgentAuthoringAttachableSkillDto) => {
+      setEditingDetail((current) => {
+        if (!current) return current
+        if (current.attachedSkills.some((skill) => skill.sourceId === entry.sourceId)) {
+          return current
+        }
+        const id = uniqueEntityId(entry.attachment.id, current.attachedSkills)
+        return {
+          ...current,
+          attachedSkills: [
+            ...current.attachedSkills,
+            {
+              ...entry.attachment,
+              id,
+              sourceState: entry.sourceState,
+              trustState: entry.trustState,
+              availabilityStatus: entry.availabilityStatus,
+              availabilityReason: 'Skill source is available in the authoring catalog.',
+              repairHint: null,
+            },
+          ],
+        }
+      })
+      closeDropPicker()
+    },
+    [closeDropPicker],
+  )
+
+  const addDbTableFromDrag = useCallback(
+    (tableName: string) => {
+      if (!authoringCatalog) return
+      const entry = authoringCatalog.dbTables.find((db) => db.table === tableName)
+      if (!entry) return
+      setEditingDetail((current) => {
+        if (!current) return current
+        // Prevent duplicate (table+kind) pairs — buildAgentGraph keys nodes
+        // on `db:${kind}:${table}` so dupes would collapse into one node.
+        const exists = current.dbTouchpoints.reads.some((db) => db.table === entry.table)
+        if (exists) return current
+        return {
+          ...current,
+          dbTouchpoints: {
+            ...current.dbTouchpoints,
+            reads: [
+              ...current.dbTouchpoints.reads,
+              {
+                table: entry.table,
+                kind: 'read',
+                purpose: entry.purpose,
+                triggers: [],
+                columns: [...entry.columns],
+              },
+            ],
+          },
+        }
+      })
+      closeDropPicker()
+    },
+    [authoringCatalog, closeDropPicker],
+  )
+
+  const addConsumedArtifactFromDrag = useCallback(
+    (key: string) => {
+      if (!authoringCatalog) return
+      const entry = authoringCatalog.upstreamArtifacts.find(
+        (artifact) => `${artifact.sourceAgent}::${artifact.contract}` === key,
+      )
+      if (!entry) return
+      setEditingDetail((current) => {
+        if (!current) return current
+        const baseId = `${entry.sourceAgent}_${entry.contract}`
+        const id = uniqueEntityId(baseId, current.consumes)
+        return {
+          ...current,
+          consumes: [
+            ...current.consumes,
+            {
+              id,
+              label: entry.label,
+              description: entry.description,
+              sourceAgent: entry.sourceAgent,
+              contract: entry.contract,
+              sections: entry.sections.map((section) => section.id),
+              required: false,
+            },
+          ],
+        }
+      })
+      closeDropPicker()
+    },
+    [authoringCatalog, closeDropPicker],
+  )
+
+  const onEditingConnectStart = useCallback<
+    NonNullable<React.ComponentProps<typeof ReactFlow>['onConnectStart']>
+  >((_event, params) => {
+    const root = canvasRef.current
+    if (!params.nodeId) {
+      connectAttemptRef.current = null
+      root?.removeAttribute('data-drag-role')
+      root?.removeAttribute('data-drag-source-kind')
+      return
+    }
+    const handleType = (params.handleType as 'source' | 'target') ?? 'source'
+    connectAttemptRef.current = {
+      sourceId: params.nodeId,
+      sourceHandle: params.handleId ?? null,
+      handleType,
+    }
+    // Mark the canvas root so CSS can branch on the active drag's role and
+    // source kind. This drives the truthful highlighting: picker drags
+    // (header.tool, header.skills, etc.) suppress all target highlights;
+    // connection drags fall back to React Flow's `valid` class on
+    // legitimate target handles.
+    const sourceNode = reactFlowForDrop.getNode(params.nodeId)
+    const role = getHandleDragRole(sourceNode?.type, params.handleId, handleType)
+    root?.setAttribute('data-drag-role', role)
+    if (sourceNode?.type) {
+      root?.setAttribute('data-drag-source-kind', sourceNode.type)
+    } else {
+      root?.removeAttribute('data-drag-source-kind')
+    }
+  }, [reactFlowForDrop])
+
+  const onEditingConnectEnd = useCallback<
+    NonNullable<React.ComponentProps<typeof ReactFlow>['onConnectEnd']>
+  >(
+    (event) => {
+      const attempt = connectAttemptRef.current
+      connectAttemptRef.current = null
+      const root = canvasRef.current
+      root?.removeAttribute('data-drag-role')
+      root?.removeAttribute('data-drag-source-kind')
+      if (!attempt) return
+      // React Flow calls onConnect when the drop is on a valid handle, and
+      // calls onConnectEnd in BOTH cases (handle drop + empty drop). We only
+      // want to react to drops on empty canvas — detect by walking up from
+      // event.target to see if we hit the React Flow pane.
+      const target = (event.target as Element | null) ?? null
+      const onPane = Boolean(
+        target?.closest?.('.react-flow__pane') ||
+          (target?.classList && target.classList.contains('react-flow__pane')),
+      )
+      if (!onPane) return
+      const clientX =
+        'clientX' in event ? (event as MouseEvent).clientX : 0
+      const clientY =
+        'clientY' in event ? (event as MouseEvent).clientY : 0
+      const flowPos = reactFlowForDrop.screenToFlowPosition({
+        x: clientX,
+        y: clientY,
+      })
+
+      // Decide what kind of node to create. Single-option drags render
+      // immediately; multi-option drags open the inline picker.
+      if (attempt.sourceId === AGENT_GRAPH_HEADER_NODE_ID) {
+        if (attempt.sourceHandle === AGENT_GRAPH_HEADER_HANDLES.prompt) {
+          addPromptFromDrag()
+          return
+        }
+        if (attempt.sourceHandle === AGENT_GRAPH_HEADER_HANDLES.skills) {
+          setDropPicker({
+            kind: 'skill',
+            screenX: clientX,
+            screenY: clientY,
+            flowX: flowPos.x,
+            flowY: flowPos.y,
+            sourceId: attempt.sourceId,
+            sourceHandle: attempt.sourceHandle,
+            handleType: attempt.handleType,
+          })
+          return
+        }
+        if (attempt.sourceHandle === AGENT_GRAPH_HEADER_HANDLES.tool) {
+          setDropPicker({
+            kind: 'tool-category',
+            screenX: clientX,
+            screenY: clientY,
+            flowX: flowPos.x,
+            flowY: flowPos.y,
+            sourceId: attempt.sourceId,
+            sourceHandle: attempt.sourceHandle,
+            handleType: attempt.handleType,
+          })
+          return
+        }
+        if (attempt.sourceHandle === AGENT_GRAPH_HEADER_HANDLES.db) {
+          setDropPicker({
+            kind: 'db-table',
+            screenX: clientX,
+            screenY: clientY,
+            flowX: flowPos.x,
+            flowY: flowPos.y,
+            sourceId: attempt.sourceId,
+            sourceHandle: attempt.sourceHandle,
+            handleType: attempt.handleType,
+          })
+          return
+        }
+        if (attempt.sourceHandle === AGENT_GRAPH_HEADER_HANDLES.consumed) {
+          setDropPicker({
+            kind: 'consumed-artifact',
+            screenX: clientX,
+            screenY: clientY,
+            flowX: flowPos.x,
+            flowY: flowPos.y,
+            sourceId: attempt.sourceId,
+            sourceHandle: attempt.sourceHandle,
+            handleType: attempt.handleType,
+          })
+          return
+        }
+        if (attempt.sourceHandle === AGENT_GRAPH_HEADER_HANDLES.workflow) {
+          addStageFromDrag()
+          return
+        }
+        // header.output drag has no node to add — output already exists.
+        return
+      }
+      // Output node bottom source drag → add an output-section.
+      if (attempt.sourceId === AGENT_GRAPH_OUTPUT_NODE_ID && attempt.handleType === 'source') {
+        addOutputSectionFromDrag()
+        return
+      }
+    },
+    [addOutputSectionFromDrag, addPromptFromDrag, addStageFromDrag, reactFlowForDrop],
+  )
+
+  // Gate which target handles light up during a drag. React Flow adds the
+  // `valid` class only to handles where this returns true — so picker-role
+  // sources (header.tools, header.skills, etc.) keep every other handle
+  // dark, and connection-role sources only light up handles that would form
+  // a legitimate edge per ALLOWED_PAIRS.
+  const isValidEditingConnection = useCallback<
+    NonNullable<React.ComponentProps<typeof ReactFlow>['isValidConnection']>
+  >(
+    (conn) => {
+      if (!conn.source || !conn.target) return false
+      const sourceNode = reactFlowForDrop.getNode(conn.source)
+      const targetNode = reactFlowForDrop.getNode(conn.target)
+      if (!sourceNode || !targetNode) return false
+      const sourceRole = getHandleDragRole(sourceNode.type, conn.sourceHandle, 'source')
+      if (sourceRole === 'picker') return false
+      const targetRole = getHandleDragRole(targetNode.type, conn.targetHandle, 'target')
+      if (targetRole === 'picker') return false
+      return isEdgeAllowed(
+        sourceNode.type as AgentGraphNodeKind,
+        targetNode.type as AgentGraphNodeKind,
+      )
+    },
+    [reactFlowForDrop],
+  )
+
+  // Validation runs on the computed (layout-derived) nodes/edges in editing
+  // mode — those are the source of structural truth, not the React Flow
+  // working state which can have transient drag updates.
+  const editingValidation = useMemo(
+    () =>
+      editing
+        ? validateEdges(computedNodes, computedEdges)
+        : { invalidEdgeIds: new Set<string>(), diagnostics: [] },
+    [editing, computedNodes, computedEdges],
+  )
+  const editingStructuralDiagnostics = useMemo(
+    () => (editing ? validateStructure({ nodes: computedNodes }) : []),
+    [editing, computedNodes],
+  )
+  const decoratedEditingEdges = useMemo(
+    () =>
+      editing
+        ? applyEdgeValidationClasses(computedEdges, editingValidation.invalidEdgeIds)
+        : computedEdges,
+    [editing, computedEdges, editingValidation.invalidEdgeIds],
+  )
+
+  const editingCombinedDiagnostics = useMemo<
+    readonly AgentDefinitionValidationDiagnosticDto[]
+  >(
+    () => [
+      ...editingValidation.diagnostics.map((diagnostic) => ({
+        code: 'invalid_edge',
+        message: diagnostic.message,
+        path: diagnostic.edgeId,
+      })),
+      ...editingStructuralDiagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        path: diagnostic.path,
+      })),
+      ...editingServerDiagnostics,
+    ],
+    [
+      editingValidation.diagnostics,
+      editingStructuralDiagnostics,
+      editingServerDiagnostics,
+    ],
+  )
+
+  const handleEditingSave = useCallback(async () => {
+    if (!onSubmit || editingSaving) return
+    if (editingValidation.invalidEdgeIds.size > 0) return
+    if (editingStructuralDiagnostics.length > 0) return
+    setEditingSaving(true)
+    setEditingErrorMessage(null)
+    setEditingServerDiagnostics([])
+    setApprovalErrorMessage(null)
+    try {
+      const initialDefinitionId =
+        mode === 'edit' && editingInitial?.detail.ref.kind === 'custom'
+          ? editingInitial.detail.ref.definitionId
+          : null
+      const { snapshot, definitionId } = buildSnapshotFromGraph(
+        computedNodes as unknown as AgentGraphNode[],
+        computedEdges,
+        {
+          initialDefinitionId,
+          attachedSkills: editingDetail?.attachedSkills ?? [],
+        },
+      )
+      const submitMode = mode ?? 'create'
+      const dryRunResponse = await onSubmit({
+        snapshot,
+        mode: submitMode,
+        definitionId,
+        dryRun: true,
+      })
+      if (!dryRunResponse.approvalRequired) {
+        if (!dryRunResponse.applied) {
+          setEditingServerDiagnostics(dryRunResponse.validation.diagnostics)
+          setEditingErrorMessage(
+            dryRunResponse.message || 'Agent definition failed validation.',
+          )
+          return
+        }
+        // Should not happen with dryRun=true, but if a host pre-applies the
+        // write, propagate it to the parent so we don't lose the result.
+        onSaved?.(dryRunResponse)
+        return
+      }
+      if (!dryRunResponse.approvalReview) {
+        setEditingErrorMessage(
+          dryRunResponse.message ||
+            'Xero asked for operator approval but did not return a review payload.',
+        )
+        return
+      }
+      setPendingApproval({
+        review: dryRunResponse.approvalReview,
+        snapshot,
+        definitionId,
+        submitMode,
+      })
+    } catch (error) {
+      setEditingErrorMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setEditingSaving(false)
+    }
+  }, [
+    computedEdges,
+    computedNodes,
+    editingInitial,
+    editingDetail,
+    editingSaving,
+    editingStructuralDiagnostics.length,
+    editingValidation.invalidEdgeIds,
+    mode,
+    onSaved,
+    onSubmit,
+  ])
+
+  const handleApprovalConfirm = useCallback(async () => {
+    if (!onSubmit || !pendingApproval || editingSaving) return
+    setEditingSaving(true)
+    setApprovalErrorMessage(null)
+    try {
+      const response = await onSubmit({
+        snapshot: pendingApproval.snapshot,
+        mode: pendingApproval.submitMode,
+        definitionId: pendingApproval.definitionId ?? undefined,
+        dryRun: false,
+      })
+      if (!response.applied) {
+        setEditingServerDiagnostics(response.validation.diagnostics)
+        setApprovalErrorMessage(
+          response.message || 'Agent definition failed validation on save.',
+        )
+        return
+      }
+      setPendingApproval(null)
+      onSaved?.(response)
+    } catch (error) {
+      setApprovalErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      )
+    } finally {
+      setEditingSaving(false)
+    }
+  }, [editingSaving, onSaved, onSubmit, pendingApproval])
+
+  const handleApprovalCancel = useCallback(() => {
+    if (editingSaving) return
+    setPendingApproval(null)
+    setApprovalErrorMessage(null)
+  }, [editingSaving])
+
+  const editingInferredAdvanced = useMemo(() => {
+    if (!editing || !editingDetail) return emptyInferredAdvanced()
+    return inferAdvancedFromConnections(editingDetail)
+  }, [editing, editingDetail])
+
+  // ============================================================
+  // Effective-runtime preview state. Editing mode sends the unsaved canvas
+  // snapshot to the host preview adapter so the granular policy editor can
+  // surface authoritative inline diagnostics without showing a separate
+  // runtime preview panel.
+  // ============================================================
+  const previewEnabled = Boolean(onPreviewEffectiveRuntime)
+  const [effectiveRuntimePreviewState, setEffectiveRuntimePreviewState] = useState<{
+    loading: boolean
+    errorMessage: string | null
+    preview: AgentDefinitionPreviewResponseDto | null
+  }>({ loading: false, errorMessage: null, preview: null })
+
+  const buildPreviewSnapshot = useCallback((): {
+    snapshot: Record<string, unknown>
+    definitionId: string | null
+  } | null => {
+    try {
+      const initialDefinitionId =
+        editing && editingInitial?.detail.ref.kind === 'custom'
+          ? editingInitial.detail.ref.definitionId
+          : !editing && detail?.ref.kind === 'custom'
+            ? detail.ref.definitionId
+            : null
+      const attachedSkills = editing
+        ? (editingDetail?.attachedSkills ?? [])
+        : (detail?.attachedSkills ?? [])
+      const { snapshot, definitionId } = buildSnapshotFromGraph(
+        computedNodes as unknown as AgentGraphNode[],
+        computedEdges,
+        {
+          initialDefinitionId,
+          attachedSkills,
+        },
+      )
+      return { snapshot, definitionId }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setEffectiveRuntimePreviewState({
+        loading: false,
+        errorMessage: `Could not build snapshot from canvas: ${message}`,
+        preview: null,
+      })
+      return null
+    }
+  }, [
+    computedEdges,
+    computedNodes,
+    detail,
+    editing,
+    editingDetail,
+    editingInitial,
+  ])
+
+  const refreshEffectiveRuntimePreview = useCallback(async () => {
+    if (!onPreviewEffectiveRuntime) return
+    const built = buildPreviewSnapshot()
+    if (!built) return
+    setEffectiveRuntimePreviewState((prev) => ({
+      loading: true,
+      errorMessage: null,
+      preview: prev.preview,
+    }))
+    try {
+      const preview = await onPreviewEffectiveRuntime({
+        snapshot: built.snapshot,
+        definitionId: built.definitionId,
+      })
+      setEffectiveRuntimePreviewState({ loading: false, errorMessage: null, preview })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setEffectiveRuntimePreviewState((prev) => ({
+        loading: false,
+        errorMessage: message,
+        preview: prev.preview,
+      }))
+    }
+  }, [buildPreviewSnapshot, onPreviewEffectiveRuntime])
+
+  // Debounced auto-refresh of the effective-runtime preview while editing.
+  // This is what powers the granular policy editor's inline diagnostics
+  // and effective-tool surface — instead of re-implementing tool-policy
+  // resolution in TypeScript, we ship the canvas's current snapshot to the
+  // existing preview command and consume its diagnostics. Runs only in
+  // editing mode and only when the host provided a preview adapter.
+  useEffect(() => {
+    if (!editing) return
+    if (!previewEnabled) return
+    if (!editingDetail) return
+    const handle = window.setTimeout(() => {
+      void refreshEffectiveRuntimePreview()
+    }, 400)
+    return () => window.clearTimeout(handle)
+  }, [editing, previewEnabled, editingDetail, refreshEffectiveRuntimePreview])
+
+  // Tool-policy-related diagnostics, sourced first from the latest preview
+  // (the authoritative resolver) and falling back to whatever the server
+  // returned at last save. Surfaced to the properties panel via the
+  // CanvasModeContext so the granular policy editor can render them
+  // inline next to the offending control.
+  const policyDiagnostics = useMemo<AgentDefinitionValidationDiagnosticDto[]>(() => {
+    const fromPreview = effectiveRuntimePreviewState.preview?.validation?.diagnostics ?? []
+    const fromServer = editingServerDiagnostics
+    const merged: AgentDefinitionValidationDiagnosticDto[] = []
+    const seen = new Set<string>()
+    const consider = (entry: AgentDefinitionValidationDiagnosticDto) => {
+      if (!isToolPolicyDiagnosticCode(entry.code)) return
+      const key = `${entry.code}::${entry.path}::${entry.deniedTool ?? ''}::${
+        entry.deniedEffectClass ?? ''
+      }`
+      if (seen.has(key)) return
+      seen.add(key)
+      merged.push(entry)
+    }
+    fromPreview.forEach(consider)
+    fromServer.forEach(consider)
+    return merged
+  }, [effectiveRuntimePreviewState.preview, editingServerDiagnostics])
+
+  const editingStageList = useMemo<ReadonlyArray<{ id: string; title: string }>>(() => {
+    const phases = editingDetail?.workflowStructure?.phases ?? []
+    return phases.map((phase) => ({ id: phase.id, title: phase.title }))
+  }, [editingDetail?.workflowStructure?.phases])
+
+  const editingAgentToolNames = useMemo<ReadonlyArray<string>>(() => {
+    const tools = editingDetail?.tools ?? []
+    return tools.map((tool) => tool.name)
+  }, [editingDetail?.tools])
+
+  const canvasModeContextValue = useMemo<CanvasModeContextValue>(
+    () =>
+      editing
+        ? {
+            editing: true,
+            mode: mode ?? 'create',
+            updateNodeData: updateEditingNodeData,
+            removeNode: removeEditingNode,
+            removeToolGroup: removeEditingToolGroup,
+            authoringCatalog: authoringCatalog ?? null,
+            toolPackCatalog: toolPackCatalog ?? null,
+            inferredAdvanced: editingInferredAdvanced,
+            policyDiagnostics,
+            policyDiagnosticsLoading: effectiveRuntimePreviewState.loading,
+            stageList: editingStageList,
+            agentToolNames: editingAgentToolNames,
+          }
+        : {
+            editing: false,
+            mode: null,
+            updateNodeData: () => {},
+            removeNode: () => {},
+            removeToolGroup: () => {},
+            authoringCatalog: null,
+            toolPackCatalog: null,
+            inferredAdvanced: emptyInferredAdvanced(),
+            policyDiagnostics: [],
+            policyDiagnosticsLoading: false,
+            stageList: [],
+            agentToolNames: [],
+          },
+    [
+      authoringCatalog,
+      toolPackCatalog,
+      editing,
+      editingInferredAdvanced,
+      mode,
+      policyDiagnostics,
+      effectiveRuntimePreviewState.loading,
+      removeEditingNode,
+      removeEditingToolGroup,
+      updateEditingNodeData,
+      editingStageList,
+      editingAgentToolNames,
+    ],
+  )
+
+  // Publish editing status up to the embedding chrome so phase-view can
+  // render Save / Cancel buttons in its existing top-right cluster instead of
+  // having the canvas paint its own toolbar.
+  useEffect(() => {
+    if (!editing) {
+      onEditingStatusChange?.(null)
+      return
+    }
+    onEditingStatusChange?.({
+      saving: editingSaving,
+      saveDisabled:
+        editingSaving ||
+        editingValidation.invalidEdgeIds.size > 0 ||
+        editingStructuralDiagnostics.length > 0,
+      hasInvalidEdges: editingValidation.invalidEdgeIds.size > 0,
+      errorMessage: editingErrorMessage,
+      diagnosticCount: editingCombinedDiagnostics.length,
+      diagnostics: editingCombinedDiagnostics,
+      save: handleEditingSave,
+    })
+    return () => {
+      onEditingStatusChange?.(null)
+    }
+  }, [
+    editing,
+    editingSaving,
+    editingStructuralDiagnostics.length,
+    editingValidation.invalidEdgeIds.size,
+    editingErrorMessage,
+    editingCombinedDiagnostics,
+    handleEditingSave,
+    onEditingStatusChange,
+  ])
+
+  useEffect(() => {
+    if (exitTimerRef.current !== null) {
+      window.clearTimeout(exitTimerRef.current)
+      exitTimerRef.current = null
+    }
+
+    if (detail) {
+      setRenderedDetail(detail)
+      return
+    }
+
+    if (!renderedDetail) return
+
+    const timer = window.setTimeout(() => {
+      if (exitTimerRef.current === timer) {
+        exitTimerRef.current = null
+      }
+      setRenderedDetail(null)
+    }, AGENT_EXIT_TRANSITION_MS)
+    exitTimerRef.current = timer
+    return () => {
+      if (exitTimerRef.current === timer) {
+        window.clearTimeout(timer)
+        exitTimerRef.current = null
+      }
+    }
+  }, [detail, renderedDetail])
+
+  useEffect(() => {
+    if (emptyStateEntryFrameRef.current !== null) {
+      window.cancelAnimationFrame(emptyStateEntryFrameRef.current)
+      emptyStateEntryFrameRef.current = null
+    }
+
+    if (!emptyStateVisible) {
+      setEmptyStateEntered(false)
+      return
+    }
+
+    setEmptyStateEntered(false)
+    setEmptyStateEntryKey((key) => key + 1)
+    emptyStateEntryFrameRef.current = window.requestAnimationFrame(() => {
+      emptyStateEntryFrameRef.current = window.requestAnimationFrame(() => {
+        emptyStateEntryFrameRef.current = null
+        setEmptyStateEntered(true)
+      })
+    })
+
+    return () => {
+      if (emptyStateEntryFrameRef.current !== null) {
+        window.cancelAnimationFrame(emptyStateEntryFrameRef.current)
+        emptyStateEntryFrameRef.current = null
+      }
+    }
+  }, [emptyStateVisible])
+
+  // Reset expansion state when the rendered agent changes — a different agent has a
+  // different node id space, and stale entries would leak into its sizing.
+  const lastDetailRef = useRef(renderedDetail)
+  useEffect(() => {
+    if (lastDetailRef.current !== renderedDetail) {
+      lastDetailRef.current = renderedDetail
+      const emptyExpanded = new Set<string>()
+      const emptySizes = new Map<string, NodeSize>()
+      if (measurementFrameRef.current !== null) {
+        window.cancelAnimationFrame(measurementFrameRef.current)
+        measurementFrameRef.current = null
+      }
+      for (const timer of measurementSettleTimersRef.current.values()) {
+        window.clearTimeout(timer)
+      }
+      measurementSettleTimersRef.current.clear()
+      expandedIdsRef.current = emptyExpanded
+      measuredSizesRef.current = emptySizes
+      pendingMeasuredSizesRef.current = new Map()
+      nodeInternalsRefreshKeyRef.current = ''
+      setExpandedIds(emptyExpanded)
+      setMeasuredSizes(emptySizes)
+      canvasInteractingRef.current = false
+      canvasRef.current?.classList.remove('is-dragging')
+    }
+  }, [renderedDetail])
+
+  const viewFitKey =
+    hasIncomingDetail && storageKey.length > 0 && canvasBoundsKey.length > 0
+      ? `${storageKey}:${canvasBoundsKey}`
+      : ''
+  const lastViewFitKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (editing) return
+    if (!active) {
+      lastViewFitKeyRef.current = null
+      return
+    }
+
+    if (!hasIncomingDetail) {
+      lastViewFitKeyRef.current = null
+      void reactFlow.setViewport(EMPTY_CANVAS_DEFAULT_VIEWPORT, {
+        duration: FIT_VIEW_TRANSITION_MS,
+      })
+      return
+    }
+
+    if (
+      computedNodes.length === 0 ||
+      viewFitKey.length === 0 ||
+      lastViewFitKeyRef.current === viewFitKey
+    ) {
+      return
+    }
+
+    lastViewFitKeyRef.current = viewFitKey
+    const frame = window.requestAnimationFrame(() => {
+      void reactFlow.fitView({
+        ...FIT_VIEW_OPTIONS,
+        duration: FIT_VIEW_TRANSITION_MS,
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+    }
+  }, [active, computedNodes.length, editing, hasIncomingDetail, reactFlow, viewFitKey])
+
+  const effectiveCanvasMode = mode ?? 'create'
+  const isInitialFitAuthoring =
+    editing && (effectiveCanvasMode === 'create' || effectiveCanvasMode === 'duplicate')
+  const createModeFitNodeBounds = useMemo(
+    () => (isInitialFitAuthoring ? visibleNodeBounds(nodes) : null),
+    [isInitialFitAuthoring, nodes],
+  )
+  const createModeFitKey = createModeFitNodeBounds
+    ? `${canvasBoundsKey}:${viewportBoundsKey(createModeFitNodeBounds)}`
+    : ''
+  const createModeHasSelection = editing && nodes.some((node) => node.selected)
+  const initialCreateFitKeyRef = useRef<string | null>(null)
+  const initialCreateFitCanvasBoundsKeyRef = useRef<string | null>(null)
+  const initialCreateFitPassCountRef = useRef(0)
+  const createModeWasActiveRef = useRef(false)
+  const createModeViewportFittedRef = useRef(false)
+  const createModeInitialFitReadyRef = useRef(false)
+  const createModeInitialFitRevealTimerRef = useRef<number | null>(null)
+  const [createModeInitialFitReady, setCreateModeInitialFitReady] = useState(false)
+  const [createModeReentryFitNonce, setCreateModeReentryFitNonce] = useState(0)
+  const hideDuringInitialAuthoringFit = editing && effectiveCanvasMode === 'create'
+  useEffect(() => {
+    if (!isInitialFitAuthoring) {
+      createModeWasActiveRef.current = false
+      createModeViewportFittedRef.current = false
+      createModeInitialFitReadyRef.current = false
+      setCreateModeInitialFitReady(false)
+      if (createModeInitialFitRevealTimerRef.current !== null) {
+        window.clearTimeout(createModeInitialFitRevealTimerRef.current)
+        createModeInitialFitRevealTimerRef.current = null
+      }
+      return
+    }
+
+    if (!active) {
+      createModeWasActiveRef.current = false
+      createModeViewportFittedRef.current = false
+      // If the graph has already been revealed, keep it visible across
+      // Workflow <-> Agent tab switches. Re-entry can still refit the
+      // viewport, but it should not blank an already usable canvas.
+      if (!createModeInitialFitReadyRef.current) {
+        setCreateModeInitialFitReady(false)
+        if (createModeInitialFitRevealTimerRef.current !== null) {
+          window.clearTimeout(createModeInitialFitRevealTimerRef.current)
+          createModeInitialFitRevealTimerRef.current = null
+        }
+      }
+      return
+    }
+
+    if (!createModeWasActiveRef.current) {
+      initialCreateFitKeyRef.current = null
+      initialCreateFitCanvasBoundsKeyRef.current = null
+      initialCreateFitPassCountRef.current = 0
+      createModeViewportFittedRef.current = false
+      if (!createModeInitialFitReadyRef.current) {
+        setCreateModeInitialFitReady(false)
+      } else {
+        setCreateModeReentryFitNonce((nonce) => nonce + 1)
+      }
+    }
+    createModeWasActiveRef.current = true
+
+    // React Activity hides inactive panes by cleaning up effects without
+    // running an `active={false}` effect pass. Mark the canvas inactive during
+    // cleanup so returning to Workflow always gets a fresh create-mode fit.
+    return () => {
+      createModeWasActiveRef.current = false
+    }
+  }, [active, isInitialFitAuthoring])
+
+  useEffect(
+    () => () => {
+      if (createModeInitialFitRevealTimerRef.current !== null) {
+        window.clearTimeout(createModeInitialFitRevealTimerRef.current)
+        createModeInitialFitRevealTimerRef.current = null
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (!active || !isInitialFitAuthoring) {
+      initialCreateFitKeyRef.current = null
+      initialCreateFitCanvasBoundsKeyRef.current = null
+      initialCreateFitPassCountRef.current = 0
+      return
+    }
+    if (createModeHasSelection) {
+      return
+    }
+    const canvasBoundsChanged =
+      canvasBoundsKey.length > 0 &&
+      initialCreateFitCanvasBoundsKeyRef.current !== canvasBoundsKey
+    if (
+      !hasDetail ||
+      nodes.length === 0 ||
+      !canvasBounds ||
+      !createModeFitNodeBounds ||
+      !createModeFitKey ||
+      (initialCreateFitKeyRef.current === createModeFitKey && !canvasBoundsChanged) ||
+      (
+        !canvasBoundsChanged &&
+        initialCreateFitPassCountRef.current >= CREATE_MODE_INITIAL_FIT_MAX_PASSES
+      )
+    ) {
+      return
+    }
+
+    if (canvasBoundsChanged) {
+      initialCreateFitCanvasBoundsKeyRef.current = canvasBoundsKey
+      initialCreateFitPassCountRef.current = 0
+    }
+    initialCreateFitKeyRef.current = createModeFitKey
+    initialCreateFitPassCountRef.current += 1
+    let secondFrame: number | null = null
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const duration = createModeViewportFittedRef.current
+          ? CREATE_MODE_REFIT_TRANSITION_MS
+          : CREATE_MODE_INITIAL_FIT_TRANSITION_MS
+        void reactFlow.setViewport(
+          createModeInitialViewport(createModeFitNodeBounds, canvasBounds),
+          { duration },
+        )
+        createModeViewportFittedRef.current = true
+        if (!createModeInitialFitReadyRef.current) {
+          if (createModeInitialFitRevealTimerRef.current !== null) {
+            window.clearTimeout(createModeInitialFitRevealTimerRef.current)
+          }
+          createModeInitialFitRevealTimerRef.current = window.setTimeout(() => {
+            createModeInitialFitRevealTimerRef.current = null
+            createModeInitialFitReadyRef.current = true
+            setCreateModeInitialFitReady(true)
+          }, CREATE_MODE_INITIAL_FIT_REVEAL_DELAY_MS)
+        }
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame)
+      // Leave an already-scheduled reveal timer alone. This effect also
+      // re-runs for measurement/layout churn after the viewport fit, and
+      // clearing the timer there can strand create mode behind the hidden
+      // initial-fit veil. Inactive/unmount cleanup handles real exits.
+    }
+  }, [
+    active,
+    canvasBounds,
+    canvasBoundsKey,
+    createModeFitKey,
+    createModeFitNodeBounds,
+    createModeHasSelection,
+    hasDetail,
+    isInitialFitAuthoring,
+    nodes.length,
+    reactFlow,
+  ])
+
+  useEffect(() => {
+    if (
+      !active ||
+      !isInitialFitAuthoring ||
+      createModeReentryFitNonce === 0 ||
+      createModeHasSelection ||
+      !hasDetail ||
+      nodes.length === 0 ||
+      !canvasBounds ||
+      !createModeFitNodeBounds
+    ) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      if (canvasInteractingRef.current) return
+      if (nodesRef.current.some((node) => node.selected)) return
+      void reactFlow.setViewport(
+        createModeInitialViewport(createModeFitNodeBounds, canvasBounds),
+        { duration: CREATE_MODE_REFIT_TRANSITION_MS },
+      )
+    }, CREATE_MODE_REENTRY_SETTLE_REFIT_DELAY_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [
+    active,
+    canvasBounds,
+    createModeFitNodeBounds,
+    createModeHasSelection,
+    createModeReentryFitNonce,
+    hasDetail,
+    isInitialFitAuthoring,
+    nodes.length,
+    reactFlow,
+  ])
+
+  const editingAutoFitNodeCountRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!active) return
+    if (!editing || !hasDetail || nodes.length === 0) {
+      editingAutoFitNodeCountRef.current = null
+      editingSeedBaselineTargetRef.current = null
+      return
+    }
+
+    const seedBaselineTarget = editingSeedBaselineTargetRef.current
+    if (seedBaselineTarget) {
+      if (renderedDetail !== seedBaselineTarget) return
+      if (nodes.length !== computedNodes.length) return
+      editingSeedBaselineTargetRef.current = null
+      editingAutoFitNodeCountRef.current = nodes.length
+      return
+    }
+
+    const previousCount = editingAutoFitNodeCountRef.current
+    editingAutoFitNodeCountRef.current = nodes.length
+    if (previousCount === null || nodes.length <= previousCount) return
+
+    const frame = window.requestAnimationFrame(() => {
+      void reactFlow.fitView({
+        ...FIT_VIEW_OPTIONS,
+        duration: FIT_VIEW_TRANSITION_MS,
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+    }
+  }, [active, computedNodes.length, editing, hasDetail, nodes.length, reactFlow, renderedDetail])
+
+  const handleResetLayout = useCallback(() => {
+    if (hasProjectUiStateStorage) {
+      void onWriteProjectUiState?.(projectUiStateKey, null).catch(() => {})
+    } else if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(storageKey)
+      } catch {
+        // Ignore — storage may be disabled.
+      }
+    }
+    storedPositionsRef.current = {
+      key: hasProjectUiStateStorage ? projectUiStateKey : storageKey,
+      positions: {},
+    }
+    setStoredPositionsNonce((nonce) => nonce + 1)
+    // Editing mode keeps drag overrides in memory instead of durable storage,
+    // so a reset has to clear that map too — otherwise the layout pipeline
+    // keeps replaying the user's manual moves. We also force a fitView
+    // because the per-detail fit-view effect only runs on storageKey
+    // transitions, which don't apply in the unsaved authoring flow.
+    if (editing) {
+      setEditingPositionOverrides({})
+      window.requestAnimationFrame(() => {
+        void reactFlow.fitView({
+          ...FIT_VIEW_OPTIONS,
+          duration: FIT_VIEW_TRANSITION_MS,
+        })
+      })
+    }
+    canvasInteractingRef.current = false
+    canvasRef.current?.classList.remove('is-dragging')
+    setResetNonce((n) => n + 1)
+  }, [
+    editing,
+    hasProjectUiStateStorage,
+    onWriteProjectUiState,
+    projectUiStateKey,
+    reactFlow,
+    storageKey,
+  ])
+
+  // Resolve final ReactFlow inputs based on mode. Edit mode uses mutable
+  // editing state; view mode uses the layout-derived pipeline above. Both
+  // paths feed the same dots, controls, and JSX shell below so the canvas
+  // looks identical in either mode.
+  // Both modes share the layout-computed nodes (`nodes` from useNodesState
+  // syncs with computedNodes via the effect above). Editing mode just
+  // overrides edge styling to flag invalid pairings, and routes node-change
+  // events through a different handler so position drags/removals can
+  // mutate editingDetail / editingPositionOverrides.
+  const readOnlyNodes = useMemo(
+    () =>
+      nodes.map((node) =>
+        node.draggable === true ? { ...node, draggable: false } : node,
+      ),
+    [nodes],
+  )
+  const finalNodes = editing ? nodes : readOnlyNodes
+  const finalEdges = editing ? decoratedEditingEdges : computedEdges
+  const finalOnNodesChange = editing ? handleEditingNodesChange : handleNodesChange
+  const finalNodesDraggable = editing && !canvasInteractionsLocked
+  const showLayoutControls = editing
+  const showCanvasControls = hasDetail || editing
+  const showEmptyState = !editing && Boolean(emptyState)
+  // The properties / details panel is driven by React Flow's built-in selection.
+  // Only the first selected node is shown; layout chrome (lane labels, tool
+  // group frames) is ignored since it has no inspectable data.
+  const selectedAuthoringNode = useMemo(() => {
+    for (const node of finalNodes) {
+      if (!node.selected) continue
+      if (node.type === 'lane-label' || node.type === 'tool-group-frame') continue
+      return node as AgentGraphNode
+    }
+    return null
+  }, [finalNodes])
+  const clearAuthoringSelection = useCallback(() => {
+    setNodes((current) =>
+      current.some((node) => node.selected)
+        ? current.map((node) => (node.selected ? { ...node, selected: false } : node))
+        : current,
+    )
+  }, [setNodes])
+  // Pan/zoom to the selected node so the panel-driven editor has a clear visual
+  // anchor. Keyed on the node id so panning only fires when selection changes,
+  // not on every position drag. The horizontal offset compensates for the
+  // properties panel's footprint on the left so the node centers in the
+  // un-occluded portion of the canvas.
+  //
+  // Selecting a node can also trigger the host chrome to auto-collapse a
+  // sidebar (so the properties panel has a clean stage). That collapse fires
+  // a width transition on the canvas container — if we issue setCenter while
+  // the container is still resizing, the moving viewport cancels our pan
+  // mid-flight and lands the node off-target. To avoid that we wait until
+  // the container has been size-stable for a beat before kicking off the
+  // animation. When no resize is in progress we fire on the next frame.
+  const selectedAuthoringNodeId = selectedAuthoringNode?.id ?? null
+  useEffect(() => {
+    if (!active) return
+    if (!selectedAuthoringNodeId) return
+    if (typeof reactFlow.setCenter !== 'function') return
+    const root = canvasRef.current
+    if (!root) return
+
+    const fire = () => {
+      const target = nodesRef.current.find((node) => node.id === selectedAuthoringNodeId)
+      if (!target) return
+      const focusZoom = 1.05
+      const center = selectedNodeFocusCenter(
+        target,
+        nodesRef.current,
+        PROPERTIES_PANEL_FOCUS_FOOTPRINT_PX,
+        focusZoom,
+      )
+      void reactFlow.setCenter(center.x, center.y, { duration: 400, zoom: focusZoom })
+    }
+
+    let cancelled = false
+    let stableTimer: number | null = null
+    let lastWidth = root.clientWidth
+    const cleanup = () => {
+      cancelled = true
+      observer.disconnect()
+      if (stableTimer !== null) window.clearTimeout(stableTimer)
+      window.clearTimeout(initialTimer)
+    }
+    const fireOnce = () => {
+      if (cancelled) return
+      cleanup()
+      fire()
+    }
+    const observer = new ResizeObserver(() => {
+      if (cancelled) return
+      if (root.clientWidth === lastWidth) return
+      lastWidth = root.clientWidth
+      if (stableTimer !== null) window.clearTimeout(stableTimer)
+      // Wait ~120ms past the last width change so the sidebar's transition
+      // (or any other layout shift) is fully settled before we pan.
+      stableTimer = window.setTimeout(fireOnce, 120)
+    })
+    observer.observe(root)
+    // If no resize lands within 50ms the container is already stable — fire
+    // immediately so the no-sidebar case stays snappy.
+    const initialTimer = window.setTimeout(() => {
+      if (cancelled) return
+      if (stableTimer !== null) return
+      fireOnce()
+    }, 50)
+
+    return () => {
+      cancelled = true
+      observer.disconnect()
+      if (stableTimer !== null) window.clearTimeout(stableTimer)
+      window.clearTimeout(initialTimer)
+    }
+  }, [active, reactFlow, selectedAuthoringNodeId])
+
+  // Notify chrome whenever a node selection appears/disappears so it can
+  // collapse competing sidebars while the inline panel is up. We pass the
+  // boolean (not the id) because the host only cares about presence.
+  useEffect(() => {
+    if (!onSelectedNodeChange) return
+    onSelectedNodeChange(Boolean(selectedAuthoringNodeId))
+  }, [onSelectedNodeChange, selectedAuthoringNodeId])
+
+  return (
+    <CanvasModeProvider value={canvasModeContextValue}>
+      <AgentCanvasExpansionContext.Provider value={expansionValue}>
+        <div
+          ref={canvasRef}
+          className={`agent-visualization${isAgentExiting ? ' is-agent-exiting' : ''}${canvasInteractionsLocked ? ' is-locked' : ''}${editing ? ' is-editing' : ''}${hideDuringInitialAuthoringFit && !createModeInitialFitReady ? ' is-initial-fit-pending' : ''}${selectedAuthoringNodeId ? ' is-node-focused' : ''} h-full w-full`}
+          aria-label={editing ? 'Agent authoring canvas' : undefined}
+        >
+          <ReactFlow
+            nodes={finalNodes}
+            edges={finalEdges}
+            onNodesChange={finalOnNodesChange}
+            onEdgesChange={editing ? handleEditingEdgesChange : undefined}
+            onConnect={editing ? handleEditingConnect : undefined}
+            onConnectStart={editing ? onEditingConnectStart : undefined}
+            onConnectEnd={editing ? onEditingConnectEnd : undefined}
+            isValidConnection={editing ? isValidEditingConnection : undefined}
+            nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
+            nodesDraggable={finalNodesDraggable}
+            nodesConnectable={editing && !canvasInteractionsLocked}
+            nodesFocusable
+            edgesFocusable={editing}
+            edgesReconnectable={editing && !canvasInteractionsLocked}
+            elementsSelectable
+            selectNodesOnDrag={false}
+            elevateNodesOnSelect={false}
+            elevateEdgesOnSelect={false}
+            onlyRenderVisibleElements={ONLY_RENDER_VISIBLE_ELEMENTS}
+            onMoveStart={editing ? undefined : handleMoveStart}
+            onMoveEnd={editing ? undefined : handleMoveEnd}
+            onNodeDragStart={editing ? undefined : handleNodeDragStart}
+            onNodeDragStop={editing ? undefined : handleNodeDragStop}
+            defaultViewport={EMPTY_CANVAS_DEFAULT_VIEWPORT}
+            fitView={!editing && hasDetail && FIT_VIEW_ON_INIT}
+            fitViewOptions={FIT_VIEW_OPTIONS}
+            minZoom={0.2}
+            maxZoom={2}
+            snapToGrid={snapToGrid}
+            snapGrid={SNAP_GRID}
+            width={canvasBounds?.width}
+            height={canvasBounds?.height}
+            proOptions={REACT_FLOW_PRO_OPTIONS}
+            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+            deleteKeyCode={editing ? ['Delete', 'Backspace'] : null}
+          >
+            <AgentCanvasDots />
+            <StageToolFanOverlay ref={stageToolFanRef} entries={stageToolFanEntries} />
+            {showEmptyState ? (
+              <div
+                key={emptyStateEntryKey}
+                aria-hidden={!emptyStateVisible}
+                className={
+                  emptyStateIsVisible
+                    ? 'agent-visualization__empty-state is-visible'
+                    : 'agent-visualization__empty-state is-hidden'
+                }
+              >
+                {emptyState}
+              </div>
+            ) : null}
+            {showCanvasControls ? (
+              <AgentCanvasControls
+                showLayoutControls={showLayoutControls}
+                layoutControlsDisabled={canvasInteractionsLocked}
+                locked={canvasLocked}
+                snapToGrid={snapToGrid}
+                onZoomIn={handleZoomIn}
+                onZoomOut={handleZoomOut}
+                onFitView={handleFitView}
+                onToggleLock={handleToggleCanvasLock}
+                onToggleSnapToGrid={handleToggleSnapToGrid}
+                onResetLayout={handleResetLayout}
+              />
+            ) : null}
+          </ReactFlow>
+          {editing && dropPicker ? (
+            <DropPicker
+              kind={dropPicker.kind}
+              screenX={dropPicker.screenX}
+              screenY={dropPicker.screenY}
+              catalog={authoringCatalog}
+              currentProfile={editingDetail?.header.baseCapabilityProfile ?? null}
+              onSelectSkill={addSkillFromDrag}
+              onSearchSkills={onSearchAttachableSkills}
+              onResolveSkill={onResolveAttachableSkill}
+              onSelectToolCategory={addToolCategoryFromDrag}
+              onSelectDbTable={addDbTableFromDrag}
+              onSelectConsumedArtifact={addConsumedArtifactFromDrag}
+              onClose={closeDropPicker}
+            />
+          ) : null}
+          {editing && editingStageList.length === 0 && editingDetail ? (
+            <AddStageChip
+              agentTools={editingDetail.tools}
+              onAddBlankStage={addStageFromDrag}
+              onApplyPreset={applyStagePresetFromChip}
+            />
+          ) : null}
+          {editing ? (
+            <NodePropertiesPanel
+              selectedNode={selectedAuthoringNode}
+              onClose={clearAuthoringSelection}
+            />
+          ) : (
+            <NodeDetailsPanel
+              selectedNode={selectedAuthoringNode}
+              onClose={clearAuthoringSelection}
+            />
+          )}
+          <AgentApprovalReviewDialog
+            open={pendingApproval !== null}
+            review={pendingApproval?.review ?? null}
+            busy={editingSaving}
+            errorMessage={approvalErrorMessage}
+            onApprove={() => {
+              void handleApprovalConfirm()
+            }}
+            onCancel={handleApprovalCancel}
+          />
+        </div>
+      </AgentCanvasExpansionContext.Provider>
+    </CanvasModeProvider>
+  )
+}
+
+
+export function AgentVisualization(props: AgentVisualizationProps) {
+  return (
+    <ReactFlowProvider>
+      <AgentVisualizationInner {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+// =====================================================================
+// Editing helpers — used by AgentVisualizationInner when `editing` is true.
+// The same inner component renders both modes so dots, controls, focus,
+// and chrome are guaranteed identical between view and edit.
+// =====================================================================
+
+const PROTECTED_NODE_IDS = new Set([AGENT_GRAPH_HEADER_NODE_ID, AGENT_GRAPH_OUTPUT_NODE_ID])
+
+const EDITING_DEFAULT_EDGE_OPTIONS = {
+  type: 'smoothstep',
+  animated: false,
+} as const
+
+interface EditingPositionCounters {
+  prompt: number
+  skills: number
+  tool: number
+  'db-table': number
+  'output-section': number
+  'consumed-artifact': number
+}
+
+const EDITING_BLANK_COUNTERS: EditingPositionCounters = {
+  prompt: 0,
+  skills: 0,
+  tool: 0,
+  'db-table': 0,
+  'output-section': 0,
+  'consumed-artifact': 0,
+}
+
+/**
+ * Approximate the lane positions used by the viewing canvas's category layout
+ * — but without running the real layout pass. Newly-added nodes (whether by
+ * palette click or by drop) that don't get an explicit cursor position fall
+ * here and snap into the right band; the user can drag them anywhere
+ * afterwards. Position values pick predictable column x's plus a vertical
+ * offset based on how many nodes of the same kind already exist.
+ */
+function defaultLanePosition(
+  kind: AgentGraphNodeKind,
+  index: number,
+): { x: number; y: number } {
+  switch (kind) {
+    case 'agent-header':
+      return { x: 0, y: 0 }
+    case 'agent-output':
+      return { x: 0, y: 480 }
+    case 'prompt':
+      return { x: -380, y: -260 + index * 130 }
+    case 'skills':
+      return { x: -700, y: -180 + index * 120 }
+    case 'tool':
+      return { x: 380, y: -80 + index * 70 }
+    case 'db-table':
+      return { x: -380, y: 220 + index * 150 }
+    case 'db-group-frame':
+      return { x: 360, y: 200 }
+    case 'output-section':
+      return { x: 380, y: 480 + index * 80 }
+    case 'consumed-artifact':
+      return { x: -780, y: index * 130 }
+    case 'stage':
+      // Stages stack below the output band so a state machine reads
+      // left-to-right under the rest of the agent. Index spacing matches
+      // the stage node's measured height plus a comfortable gutter.
+      return { x: -200 + index * 320, y: 780 }
+    case 'stage-group-frame':
+      return { x: -240, y: 720 }
+  }
+}
+
+/**
+ * Collapse the viewing graph's group-frame chrome so the editing canvas
+ * works with a flat node list. Frames are a viewing-time visual grouping;
+ * authoring tools and DB touchpoints as standalone nodes keeps the data model
+ * tractable for the snapshot serializer.
+ */
+function flattenForEditing(graph: AgentGraph): AgentGraph {
+  const frameIds = new Set(
+    graph.nodes
+      .filter((node) => node.type === 'tool-group-frame' || node.type === 'db-group-frame')
+      .map((node) => node.id),
+  )
+  const toolIds = new Set(
+    graph.nodes.filter((node) => node.type === 'tool').map((node) => node.id),
+  )
+  const dbIds = new Set(
+    graph.nodes.filter((node) => node.type === 'db-table').map((node) => node.id),
+  )
+
+  const counters: EditingPositionCounters = { ...EDITING_BLANK_COUNTERS }
+  const nodes: AgentGraphNode[] = []
+  for (const node of graph.nodes) {
+    if (node.type === 'tool-group-frame') continue
+    if (node.type === 'db-group-frame') continue
+    if (node.type === 'stage-group-frame') continue
+    if (node.type === 'lane-label') continue
+    let next: AgentGraphNode = node
+    if (node.type === 'tool' || node.type === 'db-table') {
+      const stripped = { ...node }
+      delete (stripped as { parentId?: string }).parentId
+      delete (stripped as { extent?: 'parent' | unknown }).extent
+      delete (stripped as { draggable?: boolean }).draggable
+      delete (stripped as { style?: unknown }).style
+      next = { ...stripped, draggable: true } as AgentGraphNode
+    }
+    const kind = next.type as AgentGraphNodeKind | undefined
+    let position = next.position
+    if (
+      (position?.x === 0 && position?.y === 0 && kind && kind !== 'agent-header') ||
+      !position
+    ) {
+      const slot =
+        kind === 'agent-output'
+          ? 0
+          : kind && kind in counters
+            ? counters[kind as keyof EditingPositionCounters]++
+            : 0
+      position = defaultLanePosition(kind ?? 'prompt', slot)
+    }
+    nodes.push({ ...next, position } as AgentGraphNode)
+  }
+
+  const edges: Edge[] = []
+  for (const edge of graph.edges) {
+    if (frameIds.has(edge.source) || frameIds.has(edge.target)) continue
+    edges.push(edge)
+  }
+  // Re-link header → tool directly so tools that lost their frame anchor still
+  // show as part of the agent in the editing graph.
+  const seenHeaderToolEdges = new Set(
+    edges
+      .filter((edge) => edge.source === AGENT_GRAPH_HEADER_NODE_ID && toolIds.has(edge.target))
+      .map((edge) => edge.target),
+  )
+  for (const toolId of toolIds) {
+    if (seenHeaderToolEdges.has(toolId)) continue
+    edges.push({
+      id: `e:header->${toolId}`,
+      source: AGENT_GRAPH_HEADER_NODE_ID,
+      target: toolId,
+      type: 'smoothstep',
+      data: { category: 'tool' },
+      className: 'agent-edge agent-edge-tool',
+    })
+  }
+  const seenHeaderDbEdges = new Set(
+    edges
+      .filter((edge) => edge.source === AGENT_GRAPH_HEADER_NODE_ID && dbIds.has(edge.target))
+      .map((edge) => edge.target),
+  )
+  for (const dbId of dbIds) {
+    if (seenHeaderDbEdges.has(dbId)) continue
+    edges.push({
+      id: `e:header->${dbId}`,
+      source: AGENT_GRAPH_HEADER_NODE_ID,
+      target: dbId,
+      type: 'smoothstep',
+      data: { category: 'db-table' },
+      className: 'agent-edge agent-edge-db',
+    })
+  }
+
+  return { nodes, edges }
+}
+
+function nextEditingId(kind: AgentGraphNodeKind, counter: number): string {
+  return `${kind}:new:${counter}`
+}
+
+function makeEditingNode(
+  kind: CanvasPaletteKind,
+  counter: number,
+  position: { x: number; y: number },
+): AgentGraphNode | null {
+  const id = nextEditingId(kind, counter)
+  const base = { id, position }
+  switch (kind) {
+    case 'prompt':
+      return {
+        ...base,
+        type: 'prompt',
+        data: {
+          prompt: {
+            id: `prompt_${counter}`,
+            label: `Prompt ${counter}`,
+            role: 'system',
+            source: 'custom',
+            body: '',
+          },
+        },
+      }
+    case 'tool':
+      return {
+        ...base,
+        type: 'tool',
+        data: {
+          tool: {
+            name: `tool_${counter}`,
+            group: 'core',
+            description: '',
+            effectClass: 'observe',
+            riskClass: 'standard',
+            tags: [],
+            schemaFields: [],
+            examples: [],
+          },
+          directConnectionHandles: { source: false, target: false },
+        },
+      }
+    case 'db-table':
+      return {
+        ...base,
+        type: 'db-table',
+        data: {
+          table: `table_${counter}`,
+          touchpoint: 'read',
+          purpose: '',
+          triggers: [],
+          columns: [],
+        },
+      }
+    case 'output-section':
+      return {
+        ...base,
+        type: 'output-section',
+        data: {
+          section: {
+            id: `section_${counter}`,
+            label: `Section ${counter}`,
+            description: '',
+            emphasis: 'standard',
+            producedByTools: [],
+          },
+        },
+      }
+    case 'consumed-artifact':
+      return {
+        ...base,
+        type: 'consumed-artifact',
+        data: {
+          artifact: {
+            id: `artifact_${counter}`,
+            label: `Artifact ${counter}`,
+            description: '',
+            sourceAgent: 'ask',
+            contract: 'answer',
+            sections: [],
+            required: false,
+          },
+        },
+      }
+    case 'stage':
+      return {
+        ...base,
+        type: 'stage',
+        data: {
+          phase: {
+            id: `phase_${counter}`,
+            title: `Phase ${counter}`,
+            description: '',
+            allowedTools: [],
+            requiredChecks: [],
+            branches: [],
+          },
+          isStart: counter === 1,
+        },
+      }
+  }
+}
+
+
+function EditingDiagnosticsPanel({
+  diagnostics,
+}: {
+  diagnostics: readonly AgentDefinitionValidationDiagnosticDto[]
+}) {
+  return (
+    <div
+      className="pointer-events-auto absolute bottom-3 left-2.5 right-2.5 z-10 max-h-48 overflow-y-auto rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-[12px] shadow-md backdrop-blur"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <p className="font-semibold text-destructive">Validation issues</p>
+      <ul className="mt-1.5 flex flex-col gap-1">
+        {diagnostics.map((diagnostic, index) => (
+          <li key={`${diagnostic.code}-${index}`} className="text-foreground/80">
+            <span className="font-mono text-[11px] text-muted-foreground">{diagnostic.path}</span>{' '}
+            — {diagnostic.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// Re-exports so tests/consumers can compose without re-importing the graph internals.
+export type { AgentGraphEdge, AgentGraphNode }

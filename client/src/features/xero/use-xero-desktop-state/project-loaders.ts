@@ -1,7 +1,14 @@
 import { startTransition } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { getDesktopErrorMessage, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
-import { applyRuntimeRun, applyRuntimeSession, mapProjectSnapshot, type ProjectDetailView } from '@/src/lib/xero-model'
+import {
+  applyRuntimeRun,
+  applyRuntimeSession,
+  mapProjectSnapshot,
+  type ProjectDetailView,
+  type ProjectLoadBundleDiagnosticDto,
+  type ProjectLoadBundleDto,
+} from '@/src/lib/xero-model'
 import { mapAutonomousRunInspection } from '@/src/lib/xero-model/autonomous'
 import {
   mapNotificationBroker,
@@ -126,6 +133,11 @@ function combineLoadErrors(...errors: Array<string | null | undefined>): string 
   }
 
   return messages.join(' ')
+}
+
+function isSupersededProjectLoadError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'project_load_bundle_superseded' || code === 'backend_job_stale_result'
 }
 
 interface NotificationRouteLoaderArgs {
@@ -260,6 +272,9 @@ interface ProjectLoadSetters {
   setAutonomousRuns: SetState<AutonomousRunRecords>
   setNotificationSyncSummaries: SetState<NotificationSyncSummaryRecords>
   setNotificationSyncErrors: SetState<NotificationRouteErrorRecords>
+  setNotificationRoutes: SetState<NotificationRouteRecords>
+  setNotificationRouteLoadStatuses: SetState<NotificationRouteStatusRecords>
+  setNotificationRouteLoadErrors: SetState<NotificationRouteErrorRecords>
   setRuntimeLoadErrors: SetState<RuntimeLoadErrorRecords>
   setRuntimeRunLoadErrors: SetState<RuntimeLoadErrorRecords>
   setAutonomousRunLoadErrors: SetState<RuntimeLoadErrorRecords>
@@ -282,6 +297,7 @@ interface ProjectLoadArgs {
   adapter: XeroDesktopAdapter
   projectId: string
   source: ProjectLoadSource
+  applyCachedProject?: boolean
   refs: ProjectLoadRefs
   setters: ProjectLoadSetters
   resetRepositoryDiffs: (status: RepositoryStatusView | null) => void
@@ -332,10 +348,203 @@ function applyAutonomousInspectionRecords(
   }
 }
 
+function bundleDiagnostic(
+  bundle: ProjectLoadBundleDto,
+  section: string,
+): ProjectLoadBundleDiagnosticDto | null {
+  return bundle.diagnostics.find((diagnostic) => diagnostic.section === section) ?? null
+}
+
+function operatorErrorFromDiagnostic(
+  diagnostic: ProjectLoadBundleDiagnosticDto,
+): OperatorActionErrorView {
+  return {
+    code: diagnostic.code,
+    message: diagnostic.message,
+    retryable: diagnostic.retryable,
+  }
+}
+
+function diagnosticMessage(
+  bundle: ProjectLoadBundleDto,
+  section: string,
+): string | null {
+  return bundleDiagnostic(bundle, section)?.message ?? null
+}
+
+async function loadProjectStateFromBundle({
+  adapter,
+  projectId,
+  requestId,
+  bundleLoader,
+  includeNotificationRoutes,
+  cachedRepositoryStatus,
+  refs,
+  setters,
+  resetRepositoryDiffs,
+}: ProjectLoadArgs & {
+  requestId: number
+  bundleLoader: NonNullable<XeroDesktopAdapter['getProjectLoadBundle']>
+  includeNotificationRoutes: boolean
+  cachedRepositoryStatus: RepositoryStatusView | null
+}): Promise<ProjectDetailView | null> {
+  const bundle = await bundleLoader({
+    projectId,
+    includeNotificationRoutes,
+  })
+
+  if (refs.latestLoadRequestRef.current !== requestId) {
+    return null
+  }
+
+  const finalDispatches =
+    bundle.notificationDispatches.length > 0
+      ? bundle.notificationDispatches
+      : bundle.projectSnapshot.notificationDispatches ?? []
+  refs.notificationDispatchesRef.current[projectId] = finalDispatches
+
+  const snapshotProject = mapProjectSnapshot(bundle.projectSnapshot, {
+    notificationDispatches: finalDispatches,
+  })
+  const selectedAgentSessionId = snapshotProject.selectedAgentSession?.agentSessionId ?? null
+  const runtimeRunDiagnostic = bundleDiagnostic(bundle, 'runtimeRun')
+  const status = bundle.repositoryStatus ? mapRepositoryStatus(bundle.repositoryStatus) : cachedRepositoryStatus
+  const runtime = bundle.runtimeSession ? mapRuntimeSession(bundle.runtimeSession) : refs.runtimeSessionsRef.current[projectId] ?? null
+  const cachedRuntimeRun = refs.runtimeRunsRef.current[projectId] ?? null
+  let runtimeRun = bundle.runtimeRun
+    ? mapRuntimeRun(bundle.runtimeRun)
+    : runtimeRunDiagnostic
+      ? cachedRuntimeRun
+      : null
+  if (runtimeRun?.agentSessionId !== selectedAgentSessionId) {
+    runtimeRun = null
+  }
+  let runtimeRunLoadError = runtimeRunDiagnostic?.message ?? null
+  if (!bundle.runtimeRun && !runtimeRunDiagnostic && selectedAgentSessionId) {
+    try {
+      const response = await adapter.getRuntimeRun(projectId, selectedAgentSessionId)
+      const loadedRuntimeRun = response ? mapRuntimeRun(response) : null
+      runtimeRun = loadedRuntimeRun?.agentSessionId === selectedAgentSessionId ? loadedRuntimeRun : null
+      runtimeRunLoadError = null
+    } catch (error) {
+      runtimeRun = cachedRuntimeRun?.agentSessionId === selectedAgentSessionId ? cachedRuntimeRun : null
+      runtimeRunLoadError = getDesktopErrorMessage(error)
+    }
+  }
+  const autonomousInspection = bundle.autonomousRun
+    ? mapAutonomousRunInspection(bundle.autonomousRun)
+    : {
+        autonomousRun:
+          refs.autonomousRunsRef.current[projectId] ?? snapshotProject.autonomousRun ?? null,
+      }
+  const autonomousRun = autonomousInspection.autonomousRun
+  const nextSummary = mapProjectSummary(bundle.projectSnapshot.project)
+  const finalizedProject = applyAutonomousRunState(
+    applyRuntimeRun(
+      runtime
+        ? applyRuntimeSession(
+            status ? applyRepositoryStatus(snapshotProject, status) : snapshotProject,
+            runtime,
+          )
+        : status ? applyRepositoryStatus(snapshotProject, status) : snapshotProject,
+      runtimeRun,
+    ),
+    autonomousRun,
+  )
+  const finalizedProjectWithBroker = {
+    ...finalizedProject,
+    notificationBroker: mapNotificationBroker(projectId, finalDispatches),
+  }
+
+  setters.setProjects((currentProjects) =>
+    upsertProjectListItem(
+      currentProjects,
+      runtime ? applyRuntimeToProjectList(nextSummary, runtime) : nextSummary,
+    ),
+  )
+
+  if (includeNotificationRoutes) {
+    const routeDiagnostic = bundleDiagnostic(bundle, 'notificationRoutes')
+    if (routeDiagnostic) {
+      setters.setNotificationRouteLoadStatuses((currentStatuses) => ({
+        ...currentStatuses,
+        [projectId]: 'error',
+      }))
+      setters.setNotificationRouteLoadErrors((currentErrors) => ({
+        ...currentErrors,
+        [projectId]: operatorErrorFromDiagnostic(routeDiagnostic),
+      }))
+    } else {
+      setters.setNotificationRoutes((currentRoutes) => ({
+        ...currentRoutes,
+        [projectId]: bundle.notificationRoutes,
+      }))
+      setters.setNotificationRouteLoadStatuses((currentStatuses) => ({
+        ...currentStatuses,
+        [projectId]: 'ready',
+      }))
+      setters.setNotificationRouteLoadErrors((currentErrors) => ({
+        ...currentErrors,
+        [projectId]: null,
+      }))
+    }
+  }
+
+  startTransition(() => {
+    if (runtime) {
+      setters.setRuntimeSessions((currentRuntimeSessions) => ({
+        ...currentRuntimeSessions,
+        [projectId]: runtime,
+      }))
+    }
+    if (runtimeRun) {
+      setters.setRuntimeRuns((currentRuntimeRuns) => ({
+        ...currentRuntimeRuns,
+        [projectId]: runtimeRun,
+      }))
+    } else if (runtimeRunLoadError === null) {
+      setters.setRuntimeRuns((currentRuntimeRuns) => removeProjectRecord(currentRuntimeRuns, projectId))
+    }
+    applyAutonomousInspectionRecords(projectId, autonomousInspection, setters, {
+      allowRemovals: bundleDiagnostic(bundle, 'autonomousRun') === null,
+    })
+    setters.setRuntimeLoadErrors((currentErrors) => ({
+      ...currentErrors,
+      [projectId]: diagnosticMessage(bundle, 'runtimeSession'),
+    }))
+    setters.setRuntimeRunLoadErrors((currentErrors) => ({
+      ...currentErrors,
+      [projectId]: runtimeRunLoadError,
+    }))
+    setters.setAutonomousRunLoadErrors((currentErrors) => ({
+      ...currentErrors,
+      [projectId]: diagnosticMessage(bundle, 'autonomousRun'),
+    }))
+  })
+
+  setters.setRepositoryStatus(status)
+  resetRepositoryDiffs(status)
+  setters.setActiveProjectId(projectId)
+  setters.setActiveProject(finalizedProjectWithBroker)
+  setters.setErrorMessage(
+    combineLoadErrors(
+      diagnosticMessage(bundle, 'repositoryStatus'),
+      diagnosticMessage(bundle, 'notificationDispatches'),
+      diagnosticMessage(bundle, 'notificationRoutes'),
+      diagnosticMessage(bundle, 'runtimeSession'),
+      runtimeRunLoadError,
+      diagnosticMessage(bundle, 'autonomousRun'),
+    ),
+  )
+
+  return finalizedProjectWithBroker
+}
+
 export async function loadProjectState({
   adapter,
   projectId,
   source,
+  applyCachedProject = true,
   refs,
   setters,
   resetRepositoryDiffs,
@@ -364,11 +573,49 @@ export async function loadProjectState({
 
   const cachedProject = refs.projectDetailsRef.current[projectId] ?? null
   const cachedRepositoryStatus = cachedProject?.repositoryStatus ?? null
-  if (cachedProject) {
+  if (cachedProject && applyCachedProject) {
     setters.setRepositoryStatus(cachedRepositoryStatus)
     setters.setActiveProjectId(projectId)
     setters.setActiveProject(cachedProject)
     resetRepositoryDiffs(cachedRepositoryStatus)
+  }
+
+  const shouldRefreshRoutes =
+    source !== 'runtime_run:updated' && source !== 'runtime_stream:action_required'
+  // Project rail clicks must land after the lightweight snapshot; the bundle
+  // hydrates secondary state and can include expensive git/runtime work.
+  const bundleLoader = source === 'selection' ? undefined : adapter.getProjectLoadBundle
+  if (bundleLoader) {
+    try {
+      const result = await loadProjectStateFromBundle({
+        adapter,
+        projectId,
+        source,
+        applyCachedProject,
+        refs,
+        setters,
+        resetRepositoryDiffs,
+        loadNotificationRoutes,
+        getOperatorActionError,
+        requestId,
+        bundleLoader,
+        includeNotificationRoutes: shouldRefreshRoutes,
+        cachedRepositoryStatus,
+      })
+      if (refs.latestLoadRequestRef.current === requestId) {
+        setters.setIsProjectLoading(false)
+      }
+      return result
+    } catch (error) {
+      if (
+        refs.latestLoadRequestRef.current !== requestId ||
+        isSupersededProjectLoadError(error)
+      ) {
+        return null
+      }
+      // Fall through to the legacy fan-out loader when running against an
+      // older backend or if the bundle command itself fails before diagnostics.
+    }
   }
 
   const runtimePromise: Promise<RuntimeLoadResult> = adapter
@@ -402,7 +649,6 @@ export async function loadProjectState({
       error: getDesktopErrorMessage(error),
     }))
 
-  const shouldRefreshRoutes = source !== 'runtime_run:updated' && source !== 'runtime_stream:action_required'
   const routePromise: Promise<{
     ok: boolean
     routes: NotificationRouteDto[]

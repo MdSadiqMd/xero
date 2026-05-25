@@ -78,9 +78,7 @@ fn merge_from_managed_root(sdk: &mut AndroidSdk, root: &Path) {
 /// Probe the host for an Android SDK. Order of precedence:
 /// 1. `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or `ANDROID_SDK_HOME` env vars.
 /// 2. `which adb` / `which emulator` (covers `brew install android-platform-tools`).
-/// 3. `~/Library/Android/sdk` (Android Studio default on macOS).
-/// 4. `~/Android/Sdk` (Android Studio default on Linux).
-/// 5. `%LOCALAPPDATA%/Android/Sdk` (Android Studio default on Windows).
+/// 3. Platform Android Studio defaults.
 pub fn probe() -> AndroidSdk {
     let env_root = env::var("ANDROID_HOME")
         .ok()
@@ -127,11 +125,34 @@ pub fn probe() -> AndroidSdk {
 
 fn default_sdk_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
+
+    #[cfg(target_os = "macos")]
     if let Some(home) = dirs::home_dir() {
         out.push(home.join("Library/Android/sdk"));
-        out.push(home.join("Android/Sdk"));
-        out.push(home.join("AppData/Local/Android/Sdk"));
     }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(home) = dirs::home_dir() {
+        out.push(home.join("Android/Sdk"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            out.push(PathBuf::from(local_app_data).join("Android").join("Sdk"));
+        }
+        if let Some(home) = dirs::home_dir() {
+            let fallback = home
+                .join("AppData")
+                .join("Local")
+                .join("Android")
+                .join("Sdk");
+            if !out.contains(&fallback) {
+                out.push(fallback);
+            }
+        }
+    }
+
     out
 }
 

@@ -4,10 +4,11 @@ use rusqlite::{params, OptionalExtension};
 use tauri::{AppHandle, Runtime};
 use xero_agent_core::{
     provider_capability_catalog, provider_preflight_snapshot,
-    run_openai_compatible_provider_preflight_probe, OpenAiCompatibleProviderPreflightProbeRequest,
-    ProviderCapabilityCatalogInput, ProviderPreflightError, ProviderPreflightErrorClass,
-    ProviderPreflightInput, ProviderPreflightRequiredFeatures, ProviderPreflightSnapshot,
-    ProviderPreflightSource, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
+    run_openai_compatible_provider_preflight_probe, run_xai_provider_preflight_probe,
+    OpenAiCompatibleProviderPreflightProbeRequest, ProviderCapabilityCatalogInput,
+    ProviderPreflightError, ProviderPreflightErrorClass, ProviderPreflightInput,
+    ProviderPreflightRequiredFeatures, ProviderPreflightSnapshot, ProviderPreflightSource,
+    XaiProviderPreflightProbeRequest, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
 };
 
 use crate::{
@@ -19,21 +20,25 @@ use crate::{
         get_runtime_settings::runtime_settings_snapshot_for_provider_profile, CommandError,
         CommandResult, SessionContextLimitConfidenceDto, SessionContextLimitSourceDto,
     },
-    provider_credentials::{ProviderCredentialProfile, ProviderCredentialsView},
+    provider_credentials::{
+        ProviderCredentialLink, ProviderCredentialProfile, ProviderCredentialsView,
+    },
     provider_models::{
         catalog_age_seconds, load_provider_model_catalog, provider_capability_catalog_for_catalog,
         ProviderModelCatalog, ProviderModelCatalogSource, ProviderModelRecord,
         ProviderModelThinkingEffort,
     },
     runtime::{
-        AZURE_OPENAI_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID,
+        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, CURSOR_PROVIDER_ID,
+        DEEPSEEK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID,
         OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
-        OPENROUTER_PROVIDER_ID,
+        OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID, XAI_PROVIDER_ID,
     },
     state::DesktopState,
 };
 
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 const PROVIDER_PREFLIGHT_LIVE_PROBE_TIMEOUT_MS: u64 = 5_000;
 
 pub(crate) fn run_selected_provider_preflight<R: Runtime>(
@@ -82,25 +87,80 @@ pub(crate) fn run_selected_provider_preflight<R: Runtime>(
         &catalog,
     )? {
         Some(snapshot) => Some(snapshot),
-        None => live_openai_compatible_preflight_for_profile(
+        None => match live_xai_preflight_for_profile(
             state,
             &provider_profiles,
             profile,
             selected_model_id,
-            required_features,
+            required_features.clone(),
             &catalog,
-        )?,
+        )? {
+            Some(snapshot) => Some(snapshot),
+            None => live_openai_compatible_preflight_for_profile(
+                state,
+                &provider_profiles,
+                profile,
+                selected_model_id,
+                required_features,
+                &catalog,
+            )?,
+        },
     };
-    let snapshot = live_snapshot.unwrap_or(catalog_snapshot);
+    let snapshot = bind_provider_preflight_cache_for_profile(
+        state,
+        &provider_profiles,
+        profile,
+        live_snapshot.unwrap_or(catalog_snapshot),
+    )?;
     persist_provider_preflight_snapshot(&state.global_db_path(app)?, &snapshot)?;
-    eprintln!(
-        "[runtime-latency] run_selected_provider_preflight profile_id={profile_id} provider_id={} model_id={} source={:?} duration_ms={}",
-        snapshot.provider_id,
-        snapshot.model_id,
-        snapshot.source,
-        started.elapsed().as_millis()
-    );
+    if std::env::var_os("XERO_RUNTIME_LATENCY_LOG").is_some() {
+        eprintln!(
+            "[runtime-latency] run_selected_provider_preflight profile_id={profile_id} provider_id={} model_id={} source={:?} duration_ms={}",
+            snapshot.provider_id,
+            snapshot.model_id,
+            snapshot.source,
+            started.elapsed().as_millis()
+        );
+    }
     Ok(snapshot)
+}
+
+pub(crate) fn current_provider_preflight_cache_binding<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    profile_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    required_features: &ProviderPreflightRequiredFeatures,
+) -> CommandResult<Option<xero_agent_core::ProviderPreflightCacheBinding>> {
+    let provider_profiles =
+        crate::commands::provider_credentials::load_provider_credentials_view(app, state)?;
+    let profile = provider_profiles
+        .profile(profile_id)
+        .or_else(|| {
+            provider_profiles
+                .profiles()
+                .iter()
+                .find(|profile| profile.provider_id == profile_id)
+        })
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_not_found",
+                format!("Xero could not find provider `{profile_id}` for preflight cache reuse."),
+            )
+        })?;
+    if profile.provider_id != provider_id {
+        return Ok(None);
+    }
+    let (endpoint_fingerprint, account_class) =
+        provider_preflight_cache_binding_parts(state, &provider_profiles, profile)?;
+    Ok(Some(xero_agent_core::provider_preflight_cache_binding(
+        provider_id,
+        model_id,
+        &endpoint_fingerprint,
+        &account_class,
+        required_features,
+    )))
 }
 
 pub(crate) fn latest_provider_preflight_snapshot<R: Runtime>(
@@ -116,6 +176,122 @@ pub(crate) fn latest_provider_preflight_snapshot<R: Runtime>(
         provider_id,
         model_id,
     )
+}
+
+fn bind_provider_preflight_cache_for_profile(
+    state: &DesktopState,
+    provider_profiles: &ProviderCredentialsView,
+    profile: &ProviderCredentialProfile,
+    snapshot: ProviderPreflightSnapshot,
+) -> CommandResult<ProviderPreflightSnapshot> {
+    let (endpoint_fingerprint, account_class) =
+        provider_preflight_cache_binding_parts(state, provider_profiles, profile)?;
+    Ok(xero_agent_core::bind_provider_preflight_cache(
+        snapshot,
+        &endpoint_fingerprint,
+        &account_class,
+    ))
+}
+
+fn provider_preflight_cache_binding_parts(
+    state: &DesktopState,
+    provider_profiles: &ProviderCredentialsView,
+    profile: &ProviderCredentialProfile,
+) -> CommandResult<(String, String)> {
+    let endpoint_fingerprint = match profile.provider_id.as_str() {
+        OPENAI_CODEX_PROVIDER_ID => "https://chatgpt.com/backend-api/codex/responses".into(),
+        XAI_PROVIDER_ID => format!("{XAI_BASE_URL}/responses"),
+        CURSOR_PROVIDER_ID => "cursor-sdk://local-harness".into(),
+        OPENAI_API_PROVIDER_ID
+        | DEEPSEEK_PROVIDER_ID
+        | GITHUB_MODELS_PROVIDER_ID
+        | AZURE_OPENAI_PROVIDER_ID
+        | GEMINI_AI_STUDIO_PROVIDER_ID
+        | OLLAMA_PROVIDER_ID => {
+            let endpoint = resolve_openai_compatible_endpoint_for_profile(
+                profile,
+                &state.openai_compatible_auth_config(),
+            )
+            .map_err(|error| {
+                CommandError::user_fixable(
+                    error.code,
+                    format!(
+                        "Xero could not resolve provider preflight cache endpoint: {}",
+                        error.message
+                    ),
+                )
+            })?;
+            match endpoint.api_version.as_deref() {
+                Some(api_version) if !api_version.trim().is_empty() => {
+                    format!("{}?api-version={api_version}", endpoint.effective_base_url)
+                }
+                _ => endpoint.effective_base_url,
+            }
+        }
+        OPENROUTER_PROVIDER_ID => OPENROUTER_BASE_URL.into(),
+        ANTHROPIC_PROVIDER_ID => profile
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://api.anthropic.com".into()),
+        BEDROCK_PROVIDER_ID => format!(
+            "bedrock:{}",
+            profile
+                .region
+                .as_deref()
+                .map(str::trim)
+                .filter(|region| !region.is_empty())
+                .unwrap_or("unknown-region")
+        ),
+        VERTEX_PROVIDER_ID => format!(
+            "vertex:{}:{}",
+            profile
+                .project_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|project_id| !project_id.is_empty())
+                .unwrap_or("unknown-project"),
+            profile
+                .region
+                .as_deref()
+                .map(str::trim)
+                .filter(|region| !region.is_empty())
+                .unwrap_or("unknown-region")
+        ),
+        _ => format!("{}:{}", profile.runtime_kind, profile.provider_id),
+    };
+
+    let account_class = match profile.credential_link.as_ref() {
+        Some(ProviderCredentialLink::OpenAiCodex {
+            account_id,
+            updated_at,
+            ..
+        }) => format!(
+            "openai_codex:{}:{updated_at}",
+            xero_agent_core::runtime_trace_id("provider-account", &[account_id])
+        ),
+        Some(ProviderCredentialLink::Xai {
+            account_id,
+            updated_at,
+            ..
+        }) => format!(
+            "xai:{}:{updated_at}",
+            xero_agent_core::runtime_trace_id("provider-account", &[account_id])
+        ),
+        Some(ProviderCredentialLink::ApiKey { updated_at }) => format!("api_key:{updated_at}"),
+        Some(ProviderCredentialLink::Local { updated_at }) => format!("local:{updated_at}"),
+        Some(ProviderCredentialLink::Ambient { updated_at }) => format!("ambient:{updated_at}"),
+        None => {
+            let runtime_settings =
+                runtime_settings_snapshot_for_provider_profile(provider_profiles, profile)?;
+            if runtime_settings.provider_api_key.is_some() {
+                "api_key:unlinked".into()
+            } else {
+                "none".into()
+            }
+        }
+    };
+
+    Ok((endpoint_fingerprint, account_class))
 }
 
 pub(crate) fn static_provider_preflight_snapshot(
@@ -162,6 +338,68 @@ pub(crate) fn static_provider_preflight_snapshot(
     })
 }
 
+fn live_xai_preflight_for_profile(
+    _state: &DesktopState,
+    provider_profiles: &ProviderCredentialsView,
+    profile: &ProviderCredentialProfile,
+    selected_model_id: &str,
+    required_features: ProviderPreflightRequiredFeatures,
+    catalog: &ProviderModelCatalog,
+) -> CommandResult<Option<ProviderPreflightSnapshot>> {
+    if profile.provider_id != XAI_PROVIDER_ID {
+        return Ok(None);
+    }
+
+    let selected_model = catalog
+        .models
+        .iter()
+        .find(|model| model.model_id == selected_model_id);
+    if selected_model.is_none() {
+        return Ok(None);
+    }
+    let context_window_tokens = selected_model.and_then(|model| model.context_window_tokens);
+    let max_output_tokens = selected_model.and_then(|model| model.max_output_tokens);
+
+    Ok(Some(run_xai_provider_preflight_probe(
+        XaiProviderPreflightProbeRequest {
+            profile_id: profile.profile_id.clone(),
+            provider_id: profile.provider_id.clone(),
+            model_id: selected_model_id.into(),
+            base_url: XAI_BASE_URL.into(),
+            bearer_token: xai_preflight_bearer_token(provider_profiles, profile),
+            timeout_ms: PROVIDER_PREFLIGHT_LIVE_PROBE_TIMEOUT_MS,
+            required_features,
+            credential_proof: Some("app_data_profile".into()),
+            context_window_tokens,
+            max_output_tokens,
+            context_limit_source: selected_model
+                .and_then(|model| model.context_limit_source.as_ref())
+                .map(context_limit_source_label)
+                .or_else(|| context_window_tokens.map(|_| "provider_catalog".into())),
+            context_limit_confidence: selected_model
+                .and_then(|model| model.context_limit_confidence.as_ref())
+                .map(context_limit_confidence_label)
+                .or_else(|| context_window_tokens.map(|_| "medium".into())),
+            thinking_supported: selected_model
+                .map(|model| model.thinking.supported)
+                .unwrap_or(false),
+            thinking_efforts: selected_model
+                .map(|model| {
+                    model
+                        .thinking
+                        .effort_options
+                        .iter()
+                        .map(thinking_effort_label)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            thinking_default_effort: selected_model
+                .and_then(|model| model.thinking.default_effort.as_ref())
+                .map(thinking_effort_label),
+        },
+    )))
+}
+
 fn live_openai_compatible_preflight_for_profile(
     state: &DesktopState,
     provider_profiles: &ProviderCredentialsView,
@@ -174,6 +412,7 @@ fn live_openai_compatible_preflight_for_profile(
         runtime_settings_snapshot_for_provider_profile(provider_profiles, profile)?;
     let (base_url, api_key) = match profile.provider_id.as_str() {
         OPENAI_API_PROVIDER_ID
+        | DEEPSEEK_PROVIDER_ID
         | GITHUB_MODELS_PROVIDER_ID
         | AZURE_OPENAI_PROVIDER_ID
         | GEMINI_AI_STUDIO_PROVIDER_ID
@@ -500,13 +739,30 @@ fn context_limit_source_label(source: &SessionContextLimitSourceDto) -> String {
 
 fn thinking_effort_label(effort: &ProviderModelThinkingEffort) -> String {
     match effort {
+        ProviderModelThinkingEffort::None => "none",
         ProviderModelThinkingEffort::Minimal => "minimal",
         ProviderModelThinkingEffort::Low => "low",
         ProviderModelThinkingEffort::Medium => "medium",
         ProviderModelThinkingEffort::High => "high",
-        ProviderModelThinkingEffort::XHigh => "xhigh",
+        ProviderModelThinkingEffort::XHigh => "x_high",
     }
     .into()
+}
+
+fn xai_preflight_bearer_token(
+    provider_profiles: &ProviderCredentialsView,
+    profile: &ProviderCredentialProfile,
+) -> Option<String> {
+    provider_profiles
+        .matched_api_key_credential_for_profile(&profile.profile_id)
+        .map(|entry| entry.api_key.clone())
+        .or_else(|| {
+            provider_profiles
+                .record_for_provider(XAI_PROVIDER_ID)
+                .and_then(|record| record.oauth_access_token.clone())
+        })
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
 }
 
 fn provider_credentials_ready_for_preflight<R: Runtime>(

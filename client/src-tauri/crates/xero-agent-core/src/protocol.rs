@@ -172,24 +172,24 @@ impl RuntimeTraceContext {
             && self
                 .parent_span_id
                 .as_deref()
-                .map_or(true, |span_id| is_lower_hex_len(span_id, 16))
+                .is_none_or(|span_id| is_lower_hex_len(span_id, 16))
             && self.run_trace_id == self.trace_id
             && self
                 .provider_turn_trace_id
                 .as_deref()
-                .map_or(true, |trace_id| is_lower_hex_len(trace_id, 32))
+                .is_none_or(|trace_id| is_lower_hex_len(trace_id, 32))
             && self
                 .tool_call_trace_id
                 .as_deref()
-                .map_or(true, |trace_id| is_lower_hex_len(trace_id, 32))
+                .is_none_or(|trace_id| is_lower_hex_len(trace_id, 32))
             && self
                 .approval_decision_trace_id
                 .as_deref()
-                .map_or(true, |trace_id| is_lower_hex_len(trace_id, 32))
+                .is_none_or(|trace_id| is_lower_hex_len(trace_id, 32))
             && self
                 .storage_write_trace_id
                 .as_deref()
-                .map_or(true, |trace_id| is_lower_hex_len(trace_id, 32))
+                .is_none_or(|trace_id| is_lower_hex_len(trace_id, 32))
     }
 }
 
@@ -1273,9 +1273,7 @@ fn diagnose_trace(
             }
             RuntimeProtocolEventPayload::SandboxLifecycleUpdate { phase, detail, .. } => {
                 if text_indicates_denial(phase)
-                    || detail
-                        .as_deref()
-                        .is_some_and(|detail| text_indicates_denial(detail))
+                    || detail.as_deref().is_some_and(text_indicates_denial)
                 {
                     signals.push(event_signal(
                         trace,
@@ -2417,7 +2415,7 @@ fn redaction_category_for_key(
     parent_unapproved_memory: bool,
 ) -> Option<TraceRedactionCategory> {
     let key = key?;
-    let normalized = key.to_ascii_lowercase().replace('_', "").replace('-', "");
+    let normalized = key.to_ascii_lowercase().replace(['_', '-'], "");
     if parent_unapproved_memory
         && matches!(
             normalized.as_str(),
@@ -3216,6 +3214,10 @@ fn runtime_protocol_payload_from_json(
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false),
         },
+        RuntimeEventKind::SubagentLifecycle => RuntimeProtocolEventPayload::Untyped {
+            event_kind: RuntimeEventKind::SubagentLifecycle,
+            payload: payload.clone(),
+        },
     }
 }
 
@@ -3450,6 +3452,10 @@ mod tests {
             RuntimeTraceContext::for_context_manifest(&trace_id, "run-good", "manifest-good", 0);
         RuntimeTrace::from_snapshot(RunSnapshot {
             trace_id: trace_id.clone(),
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-real".into(),
             agent_session_id: "session-real".into(),
             run_id: "run-good".into(),
@@ -3652,6 +3658,9 @@ mod tests {
                 },
                 controls: Some(RunControls {
                     runtime_agent_id: "engineer".into(),
+                    agent_definition_id: None,
+                    agent_definition_version: None,
+                    thinking_effort: None,
                     approval_mode: "suggest".into(),
                     plan_mode_required: true,
                 }),
@@ -3776,6 +3785,10 @@ mod tests {
         let trace_id = runtime_trace_id_for_run("project-1", "run-secret");
         let snapshot = RunSnapshot {
             trace_id: trace_id.clone(),
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-1".into(),
             agent_session_id: "session-1".into(),
             run_id: "run-secret".into(),
@@ -3904,6 +3917,10 @@ mod tests {
             RuntimeTraceContext::for_context_manifest(&trace_id, "run-real", "manifest-real", 0);
         let trace = RuntimeTrace::from_snapshot(RunSnapshot {
             trace_id: trace_id.clone(),
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-real".into(),
             agent_session_id: "session-real".into(),
             run_id: "run-real".into(),
@@ -4117,6 +4134,10 @@ mod tests {
         mismatched_preflight["checkedAt"] = json!("2026-05-03T12:00:01Z");
         let trace = RuntimeTrace::from_snapshot(RunSnapshot {
             trace_id: trace_id.clone(),
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-1".into(),
             agent_session_id: "session-1".into(),
             run_id: "run-phase0".into(),
@@ -4252,6 +4273,10 @@ mod tests {
         let trace_id = runtime_trace_id_for_run("project-1", "run-missing-observability");
         let trace = RuntimeTrace::from_snapshot(RunSnapshot {
             trace_id: trace_id.clone(),
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-1".into(),
             agent_session_id: "session-1".into(),
             run_id: "run-missing-observability".into(),
@@ -4307,6 +4332,10 @@ mod tests {
         );
         let trace = RuntimeTrace::from_snapshot(RunSnapshot {
             trace_id: trace_id.clone(),
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-1".into(),
             agent_session_id: "session-1".into(),
             run_id: "run-legacy-tool".into(),
@@ -4467,6 +4496,10 @@ mod tests {
         };
         let trace = RuntimeTrace::from_snapshot(RunSnapshot {
             trace_id,
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: "engineer".into(),
+            agent_definition_version: 1,
+            system_prompt: "test system prompt".into(),
             project_id: "project-1".into(),
             agent_session_id: "session-1".into(),
             run_id: "run-gap".into(),

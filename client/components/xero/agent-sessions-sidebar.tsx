@@ -20,6 +20,7 @@ import {
   FileText,
   Loader2,
   MessageSquare,
+  Monitor,
   PanelLeftClose,
   PanelLeftOpen,
   Pin,
@@ -51,6 +52,8 @@ interface AgentSessionsSidebarProps {
   onDeleteSession?: (agentSessionId: string) => Promise<void>
   onSearchSessions?: (query: string) => Promise<SessionTranscriptSearchResultSnippetDto[]>
   onOpenSearchResult?: (result: SessionTranscriptSearchResultSnippetDto) => void
+  onReadProjectUiState?: (key: string) => Promise<unknown | null>
+  onWriteProjectUiState?: (key: string, value: unknown | null) => Promise<void>
   pendingSessionId?: string | null
   isCreating?: boolean
   collapsed?: boolean
@@ -70,6 +73,7 @@ interface AgentSessionsSidebarProps {
 type ArchivedLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
 const PINNED_SESSIONS_STORAGE_PREFIX = 'xero:pinned-sessions:'
+const PINNED_SESSIONS_UI_STATE_KEY = 'agent-sessions.pinned.v1'
 const MIN_WIDTH = 220
 const DEFAULT_WIDTH = 260
 const MAX_WIDTH = 560
@@ -78,6 +82,12 @@ const WIDTH_STORAGE_KEY = 'xero.agentSessions.width'
 const STRIP_WIDTH = 6
 const STRIP_COLLAPSE_GHOST_DURATION_MS = 110
 const STRIP_EXPAND_DURATION_MS = 140
+const SESSION_ENTRY_DELETE_ANIMATION_MS = 150
+const SESSION_ENTRY_DELETE_FALLBACK_MS = SESSION_ENTRY_DELETE_ANIMATION_MS + 50
+const SESSION_ENTRY_ENTER_ANIMATION_CLASS =
+  'animate-in fade-in-0 slide-in-from-right-4 duration-300 ease-out'
+const SESSION_ENTRY_DELETE_ANIMATION_CLASS =
+  'animate-out fade-out-0 slide-out-to-left-4 fill-mode-forwards duration-150 ease-out pointer-events-none'
 
 export function readPinnedSessionIds(projectId: string | null): Set<string> {
   if (!projectId || typeof window === 'undefined') return new Set()
@@ -90,6 +100,11 @@ export function readPinnedSessionIds(projectId: string | null): Set<string> {
   } catch {
     return new Set()
   }
+}
+
+function parsePinnedSessionIds(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set()
+  return new Set(value.filter((id): id is string => typeof id === 'string'))
 }
 
 function writePinnedSessionIds(projectId: string | null, ids: Set<string>) {
@@ -154,6 +169,8 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
   onDeleteSession,
   onSearchSessions,
   onOpenSearchResult,
+  onReadProjectUiState,
+  onWriteProjectUiState,
   pendingSessionId,
   isCreating,
   collapsed = false,
@@ -175,7 +192,9 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
     [sessions],
   )
 
-  const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => readPinnedSessionIds(projectId))
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(() =>
+    onReadProjectUiState ? new Set() : readPinnedSessionIds(projectId),
+  )
   const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
@@ -190,6 +209,7 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
   const [archivedSessions, setArchivedSessions] = useState<readonly AgentSessionView[]>([])
   const [archivedStatus, setArchivedStatus] = useState<ArchivedLoadStatus>('idle')
   const [archivedError, setArchivedError] = useState<string | null>(null)
+  const [archivedExitingIds, setArchivedExitingIds] = useState<Set<string>>(() => new Set())
   const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [archivedActionError, setArchivedActionError] = useState<string | null>(null)
@@ -217,8 +237,31 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
   }, [])
 
   useEffect(() => {
-    setPinnedIds(readPinnedSessionIds(projectId))
-  }, [projectId])
+    if (!projectId) {
+      setPinnedIds(new Set())
+      return
+    }
+
+    if (!onReadProjectUiState) {
+      setPinnedIds(readPinnedSessionIds(projectId))
+      return
+    }
+
+    let cancelled = false
+    onReadProjectUiState(PINNED_SESSIONS_UI_STATE_KEY)
+      .then((value) => {
+        if (cancelled) return
+        setPinnedIds(parsePinnedSessionIds(value))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPinnedIds(new Set())
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [onReadProjectUiState, projectId])
 
   useLayoutEffect(() => {
     const wasStripMode = wasStripModeRef.current
@@ -340,9 +383,11 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
     try {
       const loaded = await onLoadArchivedSessions(projectId)
       setArchivedSessions(loaded)
+      setArchivedExitingIds(new Set())
       setArchivedStatus('loaded')
     } catch (error) {
       setArchivedSessions([])
+      setArchivedExitingIds(new Set())
       setArchivedError(
         error instanceof Error ? error.message : 'Failed to load archived sessions.',
       )
@@ -352,6 +397,10 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
 
   useEffect(() => {
     setArchivedVisible(false)
+    setArchivedSessions([])
+    setArchivedExitingIds(new Set())
+    setArchivedStatus('idle')
+    setArchivedActionError(null)
   }, [projectId])
 
   useEffect(() => {
@@ -390,9 +439,11 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
     setArchivedActionError(null)
     try {
       await onDeleteSession(targetId)
-      setArchivedSessions((prev) =>
-        prev.filter((entry) => entry.agentSessionId !== targetId),
-      )
+      setArchivedExitingIds((prev) => {
+        const next = new Set(prev)
+        next.add(targetId)
+        return next
+      })
     } catch (error) {
       setArchivedActionError(
         error instanceof Error ? error.message : 'Failed to delete session.',
@@ -401,6 +452,29 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
       setPendingDeleteId(null)
     }
   }, [onDeleteSession])
+
+  const handleArchivedExitAnimationEnd = useCallback((agentSessionId: string) => {
+    setArchivedSessions((prev) =>
+      prev.filter((entry) => entry.agentSessionId !== agentSessionId),
+    )
+    setArchivedExitingIds((prev) => {
+      if (!prev.has(agentSessionId)) return prev
+      const next = new Set(prev)
+      next.delete(agentSessionId)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (archivedExitingIds.size === 0 || typeof window === 'undefined') return
+    const timeout = window.setTimeout(() => {
+      setArchivedSessions((prev) =>
+        prev.filter((entry) => !archivedExitingIds.has(entry.agentSessionId)),
+      )
+      setArchivedExitingIds(new Set())
+    }, SESSION_ENTRY_DELETE_FALLBACK_MS)
+    return () => window.clearTimeout(timeout)
+  }, [archivedExitingIds])
 
   const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (collapsed || event.button !== 0) return
@@ -464,11 +538,15 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
         } else {
           next.add(agentSessionId)
         }
-        writePinnedSessionIds(projectId, next)
+        if (projectId && onWriteProjectUiState) {
+          void onWriteProjectUiState(PINNED_SESSIONS_UI_STATE_KEY, [...next]).catch(() => {})
+        } else {
+          writePinnedSessionIds(projectId, next)
+        }
         return next
       })
     },
-    [projectId],
+    [onWriteProjectUiState, projectId],
   )
 
   const isFirstSyncRef = useRef(true)
@@ -538,6 +616,16 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
     )
   }, [])
 
+  useEffect(() => {
+    if (!entries.some((entry) => entry.state === 'exiting') || typeof window === 'undefined') {
+      return
+    }
+    const timeout = window.setTimeout(() => {
+      setEntries((prev) => prev.filter((entry) => entry.state !== 'exiting'))
+    }, SESSION_ENTRY_DELETE_FALLBACK_MS)
+    return () => window.clearTimeout(timeout)
+  }, [entries])
+
   const pinnedEntries = useMemo(
     () => entries.filter((entry) => pinnedIds.has(entry.session.agentSessionId)),
     [entries, pinnedIds],
@@ -551,10 +639,8 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
     <li
       key={entry.session.agentSessionId}
       className={cn(
-        entry.state === 'entering' &&
-          'animate-in fade-in-0 slide-in-from-right-4 duration-300 ease-out',
-        entry.state === 'exiting' &&
-          'animate-out fade-out-0 slide-out-to-left-4 fill-mode-forwards duration-300 ease-out pointer-events-none',
+        entry.state === 'entering' && SESSION_ENTRY_ENTER_ANIMATION_CLASS,
+        entry.state === 'exiting' && SESSION_ENTRY_DELETE_ANIMATION_CLASS,
       )}
       onAnimationEnd={(event) => {
         if (event.target !== event.currentTarget) return
@@ -603,7 +689,7 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
               pressed={searchOpen}
               size="sm"
             >
-              <Search className="h-3.5 w-3.5" />
+              <Search className="size-3" />
             </Toggle>
           ) : null}
           {archiveSupported ? (
@@ -618,7 +704,7 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
               pressed={archivedVisible}
               size="sm"
             >
-              <Archive className="h-3.5 w-3.5" />
+              <Archive className="size-3" />
             </Toggle>
           ) : null}
           <button
@@ -632,9 +718,9 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
             type="button"
           >
             {isCreating ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="size-3 animate-spin" />
             ) : (
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="size-3" />
             )}
           </button>
           {showOverlay && onPin ? (
@@ -647,7 +733,7 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
               onClick={onPin}
               type="button"
             >
-              <PanelLeftOpen className="h-3.5 w-3.5" />
+              <PanelLeftOpen className="size-3" />
             </button>
           ) : !showOverlay && onCollapse ? (
             <button
@@ -659,7 +745,7 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
               onClick={onCollapse}
               type="button"
             >
-              <PanelLeftClose className="h-3.5 w-3.5" />
+              <PanelLeftClose className="size-3" />
             </button>
           ) : null}
         </div>
@@ -781,20 +867,32 @@ export const AgentSessionsSidebar = memo(function AgentSessionsSidebar({
                     </div>
                   ) : (
                     <ul className="flex flex-col px-1.5 pb-1.5">
-                      {archivedSessions.map((session) => (
-                        <li key={session.agentSessionId}>
-                          <AgentArchivedSessionsSidebarItem
-                            session={session}
-                            isRestoring={pendingRestoreId === session.agentSessionId}
-                            isDeleting={pendingDeleteId === session.agentSessionId}
-                            isAnyActionPending={
-                              pendingRestoreId !== null || pendingDeleteId !== null
-                            }
-                            onRestore={handleRestoreArchivedSession}
-                            onDelete={handleDeleteArchivedSession}
-                          />
-                        </li>
-                      ))}
+                      {archivedSessions.map((session) => {
+                        const isExiting = archivedExitingIds.has(session.agentSessionId)
+                        return (
+                          <li
+                            key={session.agentSessionId}
+                            className={cn(isExiting && SESSION_ENTRY_DELETE_ANIMATION_CLASS)}
+                            onAnimationEnd={(event) => {
+                              if (event.target !== event.currentTarget || !isExiting) return
+                              handleArchivedExitAnimationEnd(session.agentSessionId)
+                            }}
+                          >
+                            <AgentArchivedSessionsSidebarItem
+                              session={session}
+                              isRestoring={pendingRestoreId === session.agentSessionId}
+                              isDeleting={pendingDeleteId === session.agentSessionId}
+                              isAnyActionPending={
+                                pendingRestoreId !== null ||
+                                pendingDeleteId !== null ||
+                                isExiting
+                              }
+                              onRestore={handleRestoreArchivedSession}
+                              onDelete={handleDeleteArchivedSession}
+                            />
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                   {archivedActionError ? (
@@ -1035,6 +1133,9 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
     }
   }, [canArchive, isPending])
 
+  const SessionIcon = session.isComputerUse ? Monitor : MessageSquare
+  const sessionKindLabel = session.isComputerUse ? 'Computer' : null
+
   if (compact === 'icon') {
     return (
       <div {...dragWrapperProps} className="w-full">
@@ -1061,7 +1162,7 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
           {isPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <MessageSquare className="h-3.5 w-3.5" />
+            <SessionIcon className="h-3.5 w-3.5" />
           )}
           {isPinned ? (
             <Pin
@@ -1100,7 +1201,7 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
           {isPending ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
-            <MessageSquare className="h-2.5 w-2.5" />
+            <SessionIcon className="h-2.5 w-2.5" />
           )}
         </span>
         <span
@@ -1147,7 +1248,14 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
         title={session.title}
         type="button"
       >
-        <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <SessionIcon
+            aria-hidden="true"
+            className={cn(
+              'h-3.5 w-3.5 shrink-0',
+              session.isComputerUse ? 'text-primary' : 'text-muted-foreground/70',
+            )}
+          />
           <span
             className={cn(
               'truncate text-[12.5px] font-medium leading-tight',
@@ -1161,6 +1269,11 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
               aria-hidden
               className="h-2.5 w-2.5 shrink-0 -rotate-45 text-muted-foreground/70"
             />
+          ) : null}
+          {sessionKindLabel ? (
+            <span className="rounded-sm border border-primary/20 bg-primary/10 px-1 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-primary">
+              {sessionKindLabel}
+            </span>
           ) : null}
           {paneNumber != null ? (
             <span
@@ -1295,6 +1408,8 @@ const AgentArchivedSessionsSidebarItem = memo(function AgentArchivedSessionsSide
     }
   }, [isAnyActionPending])
 
+  const SessionIcon = session.isComputerUse ? Monitor : MessageSquare
+
   return (
     <div className="group relative">
       <div
@@ -1305,10 +1420,22 @@ const AgentArchivedSessionsSidebarItem = memo(function AgentArchivedSessionsSide
         )}
         title={session.title}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <SessionIcon
+            aria-hidden="true"
+            className={cn(
+              'h-3.5 w-3.5 shrink-0',
+              session.isComputerUse ? 'text-primary' : 'text-muted-foreground/70',
+            )}
+          />
           <span className="truncate text-[12.5px] font-medium leading-tight text-foreground/85 group-hover:text-foreground">
             {session.title}
           </span>
+          {session.isComputerUse ? (
+            <span className="rounded-sm border border-primary/20 bg-primary/10 px-1 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-primary">
+              Computer
+            </span>
+          ) : null}
         </div>
       </div>
 

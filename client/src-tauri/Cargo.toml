@@ -1,11 +1,11 @@
 [workspace]
-members = [".", "crates/xero-agent-core", "crates/xero-cli"]
+members = [".", "crates/xero-agent-core", "crates/xero-cli", "crates/xero-remote-bridge"]
 exclude = ["crates/cookie-importer"]
 resolver = "2"
 
 [package]
 name = "xero-desktop"
-version = "0.1.0"
+version = "0.1.13"
 edition = "2021"
 default-run = "xero-desktop"
 description = "Xero desktop host"
@@ -18,6 +18,14 @@ path = "src/main.rs"
 [[bin]]
 name = "xero-harness-evals"
 path = "src/bin/xero_harness_evals.rs"
+
+[[bin]]
+name = "tool-harness"
+path = "src/bin/tool_harness.rs"
+
+[[bin]]
+name = "xero"
+path = "src/bin/xero_tui.rs"
 
 [lib]
 name = "xero_desktop_lib"
@@ -66,10 +74,12 @@ arc-swap = "1"
 base64 = "0.22"
 bs58 = "0.5"
 byteorder = "1"
+crossterm = "0.28"
+csv = "1"
 dirs = "5"
 ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "rand_core"] }
 flate2 = "1"
-git2 = "0.20"
+git2 = { version = "0.20", features = ["vendored-openssl"] }
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 xcap = "0.6"
@@ -77,9 +87,11 @@ ignore = "0.4"
 libc = "0.2"
 mime_guess = "2"
 openh264 = { version = "0.6", optional = true }
+pulldown-cmark = "0.12"
 prost = { version = "0.13", optional = true }
 quick-xml = "0.36"
 rand = "0.8"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm", "scrolling-regions"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -90,13 +102,15 @@ futures = "0.3"
 lancedb = { version = "0.27", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 sha2 = "0.10"
 tauri = { version = "2", features = ["macos-private-api", "test", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2.5.3"
 tempfile = "3"
 thiserror = "2"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
+toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 tokio-stream = { version = "0.1", optional = true }
 tonic = { version = "0.12", optional = true }
@@ -105,13 +119,18 @@ url = "2"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 xero-agent-core = { path = "crates/xero-agent-core" }
+xero-cli = { path = "crates/xero-cli" }
+xero-remote-bridge = { path = "crates/xero-remote-bridge" }
+tauri-plugin-updater = { version = "2.10", default-features = false, features = ["rustls-tls"] }
+tauri-plugin-process = "2.3"
+portable-pty = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.23", features = ["elcapitan"] }
 core-foundation = "0.9"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace", "libc"] }
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSURL", "libc"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSString", "NSURL", "libc"] }
 
 [dev-dependencies]
 tempfile = "3"

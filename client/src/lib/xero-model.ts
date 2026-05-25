@@ -6,7 +6,9 @@ import {
   mapRepository,
   phaseSummarySchema,
   projectSummarySchema,
+  repositoryStatusResponseSchema,
   repositorySummarySchema,
+  type RepositoryStatusResponseDto,
   type RepositoryStatusView,
   type RepositoryView,
 } from './xero-model/project'
@@ -26,23 +28,31 @@ import {
 import {
   mapNotificationBroker,
   notificationDispatchSchema,
+  notificationRouteSchema,
   notificationReplyClaimSchema,
   type NotificationBrokerView,
   type NotificationDispatchDto,
+  type NotificationRouteDto,
 } from './xero-model/notifications'
 import {
   autonomousRunSchema,
+  autonomousRunStateSchema,
   mapAutonomousRun,
+  type AutonomousRunStateDto,
   type AutonomousRunView,
 } from './xero-model/autonomous'
 import {
   agentSessionSchema,
   mapAgentSession,
+  runtimeRunSchema,
+  runtimeSessionSchema,
   selectAgentSessionId,
   type AgentSessionView,
+  type RuntimeRunDto,
   type RuntimeRunView,
+  type RuntimeSessionDto,
   type RuntimeSessionView,
-} from './xero-model/runtime'
+} from '@xero/ui/model/runtime'
 
 export type { Phase, PhaseStatus, Project } from '@/components/xero/data'
 export {
@@ -54,7 +64,7 @@ export {
   safePercent,
   toolResultSummarySchema,
   webToolResultContentKindSchema,
-} from './xero-model/shared'
+} from '@xero/ui/model/shared'
 export type {
   BrowserComputerUseActionStatusDto,
   BrowserComputerUseSurfaceDto,
@@ -63,27 +73,30 @@ export type {
   PayloadBudgetDiagnosticDto,
   ToolResultSummaryDto,
   WebToolResultContentKindDto,
-} from './xero-model/shared'
+} from '@xero/ui/model/shared'
 export * from './xero-model/project'
 export * from './xero-model/operator-actions'
 export * from './xero-model/notifications'
-export * from './xero-model/runtime'
+export * from '@xero/ui/model/runtime'
 export * from './xero-model/provider-credentials'
 export * from './xero-model/provider-models'
 export * from './xero-model/diagnostics'
 export * from './xero-model/autonomous'
 export * from './xero-model/agent'
 export * from './xero-model/agent-definition'
-export * from './xero-model/runtime-stream'
+export * from '@xero/ui/model/runtime-stream'
 export * from './xero-model/mcp'
 export * from './xero-model/skills'
 export * from './xero-model/session-context'
 export * from './xero-model/dictation'
 export * from './xero-model/browser'
+export * from './xero-model/adrenaline-mode'
 export * from './xero-model/soul'
 export * from './xero-model/usage'
 export * from './xero-model/environment'
 export * from './xero-model/developer-storage'
+export * from '@xero/ui/model/code-history'
+export * from './xero-model/wipe-data'
 
 export const projectSnapshotResponseSchema = z
   .object({
@@ -110,6 +123,41 @@ export const projectSnapshotResponseSchema = z
 
 export type ProjectSnapshotResponseDto = z.infer<typeof projectSnapshotResponseSchema>
 
+export const projectLoadBundleRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    includeNotificationRoutes: z.boolean().default(false),
+  })
+  .strict()
+export type ProjectLoadBundleRequestDto = z.infer<typeof projectLoadBundleRequestSchema>
+
+export const projectLoadBundleDiagnosticSchema = z
+  .object({
+    section: z.string().trim().min(1),
+    code: z.string().trim().min(1),
+    message: z.string(),
+    retryable: z.boolean(),
+  })
+  .strict()
+export type ProjectLoadBundleDiagnosticDto = z.infer<
+  typeof projectLoadBundleDiagnosticSchema
+>
+
+export const projectLoadBundleSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    projectSnapshot: projectSnapshotResponseSchema,
+    repositoryStatus: repositoryStatusResponseSchema.nullable().optional(),
+    runtimeSession: runtimeSessionSchema.nullable().optional(),
+    runtimeRun: runtimeRunSchema.nullable().optional(),
+    autonomousRun: autonomousRunStateSchema.nullable().optional(),
+    notificationDispatches: z.array(notificationDispatchSchema).default([]),
+    notificationRoutes: z.array(notificationRouteSchema).default([]),
+    diagnostics: z.array(projectLoadBundleDiagnosticSchema).default([]),
+  })
+  .strict()
+export type ProjectLoadBundleDto = z.infer<typeof projectLoadBundleSchema>
+
 export interface ProjectDetailView extends Project {
   branchLabel: string
   runtimeLabel: string
@@ -128,6 +176,18 @@ export interface ProjectDetailView extends Project {
   runtimeSession?: RuntimeSessionView | null
   runtimeRun?: RuntimeRunView | null
   autonomousRun?: AutonomousRunView | null
+}
+
+export interface ProjectLoadBundleView {
+  projectId: string
+  projectSnapshot: ProjectSnapshotResponseDto
+  repositoryStatus: RepositoryStatusResponseDto | null
+  runtimeSession: RuntimeSessionDto | null
+  runtimeRun: RuntimeRunDto | null
+  autonomousRun: AutonomousRunStateDto | null
+  notificationDispatches: NotificationDispatchDto[]
+  notificationRoutes: NotificationRouteDto[]
+  diagnostics: ProjectLoadBundleDiagnosticDto[]
 }
 
 export function mapProjectSnapshot(

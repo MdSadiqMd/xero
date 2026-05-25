@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     env, fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -13,36 +14,38 @@ use reqwest::{
     blocking::{Client, Response},
     header::{ACCEPT, CONTENT_TYPE},
 };
-use serde_json::{json, Value as JsonValue};
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use xero_agent_core::domain_tool_pack_ids_for_tool;
 
 use super::{
-    deferred_tool_catalog,
+    deferred_tool_catalog, persist_subagent_task_for_parent,
     process::apply_sanitized_command_environment,
     repo_scope::{normalize_relative_path, path_to_forward_slash, WalkErrorCodes, WalkState},
-    tool_allowed_for_runtime_agent, tool_catalog_activation_groups, AutonomousCodeDiagnostic,
-    AutonomousCodeIntelAction, AutonomousCodeIntelOutput, AutonomousCodeIntelRequest,
-    AutonomousCodeSymbol, AutonomousCommandRequest, AutonomousDynamicToolDescriptor,
-    AutonomousDynamicToolRoute, AutonomousLspAction, AutonomousLspInstallCommand,
-    AutonomousLspInstallSuggestion, AutonomousLspOutput, AutonomousLspRequest,
-    AutonomousLspServerStatus, AutonomousMcpAction, AutonomousMcpOutput, AutonomousMcpRequest,
+    tool_allowed_for_runtime_agent, tool_available_on_current_host, tool_catalog_activation_groups,
+    tool_effect_class, AutonomousCodeDiagnostic, AutonomousCodeIntelAction,
+    AutonomousCodeIntelOutput, AutonomousCodeIntelRequest, AutonomousCodeSymbol,
+    AutonomousCommandRequest, AutonomousDynamicToolDescriptor, AutonomousDynamicToolRoute,
+    AutonomousLspAction, AutonomousLspInstallCommand, AutonomousLspInstallSuggestion,
+    AutonomousLspOutput, AutonomousLspRequest, AutonomousLspServerStatus, AutonomousMcpAction,
+    AutonomousMcpOutput, AutonomousMcpRequest, AutonomousMcpResultArtifact,
     AutonomousMcpServerSummary, AutonomousNotebookEditOutput, AutonomousNotebookEditRequest,
     AutonomousPowerShellRequest, AutonomousSubagentAction, AutonomousSubagentInputRecord,
     AutonomousSubagentOutput, AutonomousSubagentRequest, AutonomousSubagentRole,
-    AutonomousSubagentTask, AutonomousTodoAction, AutonomousTodoItem, AutonomousTodoOutput,
-    AutonomousTodoRequest, AutonomousTodoStatus, AutonomousToolCatalogEntry, AutonomousToolOutput,
-    AutonomousToolResult, AutonomousToolRuntime, AutonomousToolSearchMatch,
-    AutonomousToolSearchOutput, AutonomousToolSearchRequest, AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX,
-    AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP,
-    AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL,
-    AUTONOMOUS_TOOL_SUBAGENT, AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AutonomousSubagentTask, AutonomousTodoAction, AutonomousTodoItem, AutonomousTodoMode,
+    AutonomousTodoOutput, AutonomousTodoRequest, AutonomousTodoStatus, AutonomousToolCatalogEntry,
+    AutonomousToolEffectClass, AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime,
+    AutonomousToolSearchMatch, AutonomousToolSearchOutput, AutonomousToolSearchRequest,
+    AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX, AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_COMMAND_VERIFY,
+    AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP, AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+    AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL, AUTONOMOUS_TOOL_SUBAGENT,
+    AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
 };
 
 use crate::{
     auth::now_timestamp,
     commands::{validate_non_empty, CommandError, CommandResult, RuntimeAgentIdDto},
-    db::project_store,
+    db::{project_app_data_dir_for_repo, project_store},
     mcp::{load_mcp_registry_from_path, McpConnectionStatus, McpServerRecord, McpTransport},
     runtime::autonomous_skill_runtime::{
         sanitize_skill_tool_model_text, XeroSkillSourceKind, XeroSkillToolAccessStatus,
@@ -54,6 +57,14 @@ const DEFAULT_PRIORITY_TOOL_LIMIT: usize = 25;
 const MAX_PRIORITY_TOOL_LIMIT: usize = 100;
 const DEFAULT_MCP_TIMEOUT_MS: u64 = 5_000;
 const MAX_MCP_TIMEOUT_MS: u64 = 30_000;
+const MCP_RESULT_ARTIFACT_THRESHOLD_BYTES: usize = 64 * 1024;
+const MCP_RESULT_ARTIFACT_DIR: &str = "tool-artifacts/mcp";
+const MAX_MCP_DESCRIPTOR_TEXT_CHARS: usize = 1_200;
+const MAX_MCP_SCHEMA_DEPTH: usize = 6;
+const MAX_MCP_SCHEMA_PROPERTIES: usize = 32;
+const MAX_MCP_SCHEMA_PROPERTY_NAME_CHARS: usize = 96;
+const MAX_MCP_SCHEMA_ARRAY_ITEMS: usize = 32;
+const MAX_MCP_SCHEMA_STRING_CHARS: usize = 512;
 const DEFAULT_LSP_TIMEOUT_MS: u64 = 3_000;
 const MAX_LSP_TIMEOUT_MS: u64 = 15_000;
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -76,14 +87,49 @@ impl AutonomousToolRuntime {
 
         let catalog = deferred_tool_catalog(self.skill_tool_enabled())
             .into_iter()
-            .filter(|entry| tool_allowed_for_runtime_agent(runtime_agent_id, entry.tool_name))
+            .filter(|entry| {
+                tool_allowed_for_runtime_agent(runtime_agent_id, entry.tool_name)
+                    && tool_available_on_current_host(entry.tool_name)
+            })
             .collect::<Vec<_>>();
         let mut searched_catalog_size = catalog.len();
         for entry in catalog {
             let runtime_available = self.tool_available_by_runtime(entry.tool_name);
-            let score = tool_search_score(&query, &query_terms, &entry);
+            let base_score = tool_search_score(&query, &query_terms, &entry);
+            let contextual_boost = tool_search_contextual_boost(
+                runtime_agent_id,
+                entry.tool_name,
+                entry.group,
+                &query_terms,
+            );
+            let score = base_score.saturating_add(contextual_boost);
             if score > 0 {
                 let activation_groups = tool_catalog_activation_groups(entry.tool_name);
+                let why_matched = tool_search_why_matched(ToolSearchWhyFields {
+                    query: &query,
+                    query_terms: &query_terms,
+                    name: entry.tool_name,
+                    group: entry.group,
+                    description: entry.description,
+                    tags: &entry
+                        .tags
+                        .iter()
+                        .map(|tag| (*tag).to_owned())
+                        .collect::<Vec<_>>(),
+                    schema_fields: &entry
+                        .schema_fields
+                        .iter()
+                        .map(|field| (*field).to_owned())
+                        .collect::<Vec<_>>(),
+                    examples: &entry
+                        .examples
+                        .iter()
+                        .map(|example| (*example).to_owned())
+                        .collect::<Vec<_>>(),
+                    activation_groups: &activation_groups,
+                    risk_class: entry.risk_class,
+                    contextual_boost,
+                });
                 matches.push((
                     score,
                     AutonomousToolSearchMatch {
@@ -101,13 +147,11 @@ impl AutonomousToolRuntime {
                             .iter()
                             .map(|field| (*field).to_owned())
                             .collect(),
-                        examples: entry
-                            .examples
-                            .iter()
-                            .map(|example| (*example).to_owned())
-                            .collect(),
+                        examples: relevant_tool_search_examples(entry.examples, &query_terms),
                         risk_class: entry.risk_class.into(),
+                        effect_class: tool_effect_class(entry.tool_name).as_str().into(),
                         runtime_available,
+                        why_matched,
                         source: None,
                         trust: None,
                         approval_status: None,
@@ -183,6 +227,13 @@ impl AutonomousToolRuntime {
                     .as_deref()
                     .ok_or_else(|| CommandError::invalid_request("title"))?;
                 validate_non_empty(title, "title")?;
+                let mode = request.mode.unwrap_or(AutonomousTodoMode::Plan);
+                if mode == AutonomousTodoMode::DebugEvidence && request.debug_stage.is_none() {
+                    return Err(CommandError::user_fixable(
+                        "autonomous_tool_todo_debug_stage_required",
+                        "debug_evidence todo items require debugStage.",
+                    ));
+                }
                 let id = request
                     .id
                     .as_deref()
@@ -194,6 +245,21 @@ impl AutonomousToolRuntime {
                     title: title.trim().into(),
                     notes: normalize_optional_text(request.notes),
                     status: request.status.unwrap_or(AutonomousTodoStatus::Pending),
+                    mode,
+                    debug_stage: request.debug_stage,
+                    evidence: normalize_optional_text(request.evidence),
+                    phase_id: request
+                        .phase_id
+                        .as_deref()
+                        .map(normalize_todo_id)
+                        .transpose()?,
+                    phase_title: normalize_optional_text(request.phase_title),
+                    slice_id: request
+                        .slice_id
+                        .as_deref()
+                        .map(normalize_todo_id)
+                        .transpose()?,
+                    handoff_note: normalize_optional_text(request.handoff_note),
                     updated_at: now_timestamp(),
                 };
                 todos.insert(id, item.clone());
@@ -264,7 +330,7 @@ impl AutonomousToolRuntime {
             }
             AutonomousSubagentAction::Close => {
                 let task_id = required_normalized_id(request.task_id.as_deref(), "taskId")?;
-                self.close_subagent(&task_id)
+                self.close_subagent(&task_id, request.decision)
             }
             AutonomousSubagentAction::Integrate => {
                 let task_id = required_normalized_id(request.task_id.as_deref(), "taskId")?;
@@ -289,6 +355,7 @@ impl AutonomousToolRuntime {
         let role = request
             .role
             .ok_or_else(|| CommandError::invalid_request("role"))?;
+        self.enforce_declared_subagent_role(role)?;
         let write_set = normalize_subagent_write_set(request.write_set)?;
         if role.requires_write_set() && write_set.is_empty() {
             return Err(CommandError::user_fixable(
@@ -343,6 +410,11 @@ impl AutonomousToolRuntime {
                 max_tool_calls,
                 max_tokens,
                 max_cost_micros,
+                used_tool_calls: 0,
+                used_tokens: 0,
+                used_cost_micros: 0,
+                budget_status: "within_budget".into(),
+                budget_diagnostic: None,
                 status: if self.subagent_executor.is_some() {
                     "running".into()
                 } else {
@@ -375,6 +447,13 @@ impl AutonomousToolRuntime {
             }
             return Err(error);
         }
+        if let Err(error) = self.persist_subagent_task(&task) {
+            let _ = self.release_subagent_write_set_reservations(&task, "subagent_persist_failed");
+            if let Ok(mut tasks) = self.subagent_tasks.lock() {
+                tasks.remove(&task.subagent_id);
+            }
+            return Err(error);
+        }
         let initially_reserved_task = task.clone();
         let task = if let Some(executor) = &self.subagent_executor {
             match executor.execute_subagent(task.clone(), self.subagent_tasks.clone()) {
@@ -401,7 +480,7 @@ impl AutonomousToolRuntime {
         } else if !subagent_status_holds_reservation(&task.status) {
             self.release_subagent_write_set_reservations(&task, "subagent_terminal")?;
         }
-        let active_tasks = upsert_and_list_subagent_tasks(&self.subagent_tasks, &task)?;
+        let active_tasks = self.upsert_persist_and_list_subagent_tasks(&task)?;
 
         Ok(AutonomousToolResult {
             tool_name: AUTONOMOUS_TOOL_SUBAGENT.into(),
@@ -464,7 +543,16 @@ impl AutonomousToolRuntime {
             .ok_or_else(|| CommandError::invalid_request("prompt"))?;
         validate_non_empty(prompt, "prompt")?;
         let mut task = self.subagent_task(task_id)?;
-        if matches!(task.status.as_str(), "cancelled" | "closed" | "interrupted") {
+        if matches!(
+            task.status.as_str(),
+            "cancelled"
+                | "closed"
+                | "interrupted"
+                | "completed"
+                | "failed"
+                | "handed_off"
+                | "budget_exhausted"
+        ) {
             return Err(CommandError::user_fixable(
                 "autonomous_tool_subagent_not_accepting_input",
                 format!(
@@ -481,7 +569,7 @@ impl AutonomousToolRuntime {
             text: prompt.trim().into(),
             created_at: now_timestamp(),
         });
-        let active_tasks = upsert_and_list_subagent_tasks(&self.subagent_tasks, &task)?;
+        let active_tasks = self.upsert_persist_and_list_subagent_tasks(&task)?;
         Ok(AutonomousToolResult {
             tool_name: AUTONOMOUS_TOOL_SUBAGENT.into(),
             summary: format!("Subagent task `{}` recorded {kind}.", task.subagent_id),
@@ -502,7 +590,10 @@ impl AutonomousToolRuntime {
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(1_000).min(30_000));
         let deadline = Instant::now() + timeout;
         let mut task = self.subagent_task(task_id)?;
-        while matches!(task.status.as_str(), "registered" | "running") && Instant::now() < deadline
+        while matches!(
+            task.status.as_str(),
+            "registered" | "starting" | "running" | "cancelling"
+        ) && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(25));
             task = self.subagent_task(task_id)?;
@@ -524,7 +615,7 @@ impl AutonomousToolRuntime {
         let mut task = self.cancelled_subagent_task(task_id)?;
         task.status = "interrupted".into();
         self.release_subagent_write_set_reservations(&task, "subagent_interrupted")?;
-        let active_tasks = upsert_and_list_subagent_tasks(&self.subagent_tasks, &task)?;
+        let active_tasks = self.upsert_persist_and_list_subagent_tasks(&task)?;
         Ok(AutonomousToolResult {
             tool_name: AUTONOMOUS_TOOL_SUBAGENT.into(),
             summary: format!("Subagent task `{}` was interrupted.", task.subagent_id),
@@ -540,7 +631,7 @@ impl AutonomousToolRuntime {
     fn cancel_subagent(&self, task_id: &str) -> CommandResult<AutonomousToolResult> {
         let task = self.cancelled_subagent_task(task_id)?;
         self.release_subagent_write_set_reservations(&task, "subagent_cancelled")?;
-        let active_tasks = upsert_and_list_subagent_tasks(&self.subagent_tasks, &task)?;
+        let active_tasks = self.upsert_persist_and_list_subagent_tasks(&task)?;
         Ok(AutonomousToolResult {
             tool_name: AUTONOMOUS_TOOL_SUBAGENT.into(),
             summary: format!("Subagent task `{}` is cancelled.", task.subagent_id),
@@ -553,15 +644,29 @@ impl AutonomousToolRuntime {
         })
     }
 
-    fn close_subagent(&self, task_id: &str) -> CommandResult<AutonomousToolResult> {
+    fn close_subagent(
+        &self,
+        task_id: &str,
+        decision: Option<String>,
+    ) -> CommandResult<AutonomousToolResult> {
+        let decision = normalize_optional_text(decision).ok_or_else(|| {
+            CommandError::user_fixable(
+                "autonomous_tool_subagent_close_decision_required",
+                "Xero requires a parent decision when closing subagent output without integration.",
+            )
+        })?;
         let mut task = self.subagent_task(task_id)?;
-        if matches!(task.status.as_str(), "registered" | "running") {
+        if matches!(
+            task.status.as_str(),
+            "registered" | "starting" | "running" | "paused" | "cancelling"
+        ) {
             task = self.cancelled_subagent_task(task_id)?;
         }
         task.status = "closed".into();
         task.completed_at.get_or_insert_with(now_timestamp);
+        task.parent_decision = Some(decision);
         self.release_subagent_write_set_reservations(&task, "subagent_closed")?;
-        let active_tasks = upsert_and_list_subagent_tasks(&self.subagent_tasks, &task)?;
+        let active_tasks = self.upsert_persist_and_list_subagent_tasks(&task)?;
         Ok(AutonomousToolResult {
             tool_name: AUTONOMOUS_TOOL_SUBAGENT.into(),
             summary: format!("Subagent task `{}` was closed.", task.subagent_id),
@@ -627,7 +732,13 @@ impl AutonomousToolRuntime {
             })?;
             if !matches!(
                 task.status.as_str(),
-                "completed" | "failed" | "cancelled" | "interrupted" | "closed"
+                "completed"
+                    | "failed"
+                    | "budget_exhausted"
+                    | "handed_off"
+                    | "cancelled"
+                    | "interrupted"
+                    | "closed"
             ) {
                 return Err(CommandError::user_fixable(
                     "autonomous_tool_subagent_not_ready",
@@ -642,15 +753,7 @@ impl AutonomousToolRuntime {
             task.clone()
         };
         self.release_subagent_write_set_reservations(&task, "subagent_integrated")?;
-        let active_tasks = {
-            let tasks = self.subagent_tasks.lock().map_err(|_| {
-                CommandError::system_fault(
-                    "autonomous_tool_subagent_lock_failed",
-                    "Xero could not lock the owned-agent subagent task store.",
-                )
-            })?;
-            tasks.values().cloned().collect::<Vec<_>>()
-        };
+        let active_tasks = self.upsert_persist_and_list_subagent_tasks(&task)?;
         Ok(AutonomousToolResult {
             tool_name: AUTONOMOUS_TOOL_SUBAGENT.into(),
             summary: format!("Subagent task `{}` was integrated.", task.subagent_id),
@@ -797,7 +900,12 @@ impl AutonomousToolRuntime {
         }
         let running = tasks
             .values()
-            .filter(|task| matches!(task.status.as_str(), "registered" | "running"))
+            .filter(|task| {
+                matches!(
+                    task.status.as_str(),
+                    "registered" | "starting" | "running" | "paused" | "cancelling"
+                )
+            })
             .count();
         if running >= self.subagent_limits.max_concurrent_child_runs {
             return Err(CommandError::user_fixable(
@@ -809,6 +917,19 @@ impl AutonomousToolRuntime {
             ));
         }
         Ok(())
+    }
+
+    fn enforce_declared_subagent_role(&self, role: AutonomousSubagentRole) -> CommandResult<()> {
+        let Some(policy) = self.agent_tool_policy.as_ref() else {
+            return Ok(());
+        };
+        if policy.allows_subagent_role(role) {
+            return Ok(());
+        }
+        Err(CommandError::policy_denied(format!(
+            "Xero refused to spawn a {} subagent because this custom agent policy did not declare that child role in allowedSubagentRoles.",
+            role.label()
+        )))
     }
 
     fn subagent_task(&self, task_id: &str) -> CommandResult<AutonomousSubagentTask> {
@@ -834,6 +955,27 @@ impl AutonomousToolRuntime {
             )
         })?;
         Ok(tasks.values().cloned().collect())
+    }
+
+    fn persist_subagent_task(&self, task: &AutonomousSubagentTask) -> CommandResult<()> {
+        let Some(context) = self.agent_run_context.as_ref() else {
+            return Ok(());
+        };
+        persist_subagent_task_for_parent(
+            &self.repo_root,
+            &context.project_id,
+            &context.run_id,
+            task,
+        )
+    }
+
+    fn upsert_persist_and_list_subagent_tasks(
+        &self,
+        task: &AutonomousSubagentTask,
+    ) -> CommandResult<Vec<AutonomousSubagentTask>> {
+        let active_tasks = upsert_and_list_subagent_tasks(&self.subagent_tasks, task)?;
+        self.persist_subagent_task(task)?;
+        Ok(active_tasks)
     }
 
     fn cancelled_subagent_task(&self, task_id: &str) -> CommandResult<AutonomousSubagentTask> {
@@ -1287,6 +1429,12 @@ impl AutonomousToolRuntime {
         let servers = registry
             .servers
             .iter()
+            .filter(|server| {
+                self.agent_tool_policy
+                    .as_ref()
+                    .map(|policy| policy.allows_mcp_server(&server.id))
+                    .unwrap_or(true)
+            })
             .map(mcp_server_summary)
             .collect::<Vec<_>>();
 
@@ -1301,6 +1449,9 @@ impl AutonomousToolRuntime {
                     server_id: None,
                     capability_name: None,
                     result: None,
+                    result_artifact: None,
+                    result_truncated: false,
+                    result_original_bytes: None,
                 }),
             }),
             AutonomousMcpAction::ListTools
@@ -1310,10 +1461,23 @@ impl AutonomousToolRuntime {
             | AutonomousMcpAction::ReadResource
             | AutonomousMcpAction::GetPrompt => {
                 let server_id = required_trimmed(request.server_id.as_deref(), "serverId")?;
+                if !self
+                    .agent_tool_policy
+                    .as_ref()
+                    .map(|policy| policy.allows_mcp_server(&server_id))
+                    .unwrap_or(true)
+                {
+                    return Err(CommandError::user_fixable(
+                        "autonomous_tool_mcp_server_policy_denied",
+                        format!("Custom agent policy does not allow MCP server `{server_id}`."),
+                    ));
+                }
                 let server = connected_mcp_server(&registry.servers, &server_id)?;
                 let timeout = normalize_mcp_timeout(request.timeout_ms)?;
                 let (method, params, capability_name) = mcp_method_and_params(&request)?;
                 let result = invoke_mcp_server(server, method, params, timeout)?;
+                let result =
+                    prepare_mcp_result_for_output(&self.repo_root, &server.id, method, result)?;
                 Ok(AutonomousToolResult {
                     tool_name: AUTONOMOUS_TOOL_MCP.into(),
                     summary: format!("Invoked MCP `{method}` on server `{}`.", server.id),
@@ -1323,7 +1487,10 @@ impl AutonomousToolRuntime {
                         servers,
                         server_id: Some(server.id.clone()),
                         capability_name,
-                        result: Some(result),
+                        result: Some(result.result),
+                        result_artifact: result.artifact,
+                        result_truncated: result.truncated,
+                        result_original_bytes: result.original_bytes,
                     }),
                 })
             }
@@ -1370,6 +1537,19 @@ impl AutonomousToolRuntime {
                     AUTONOMOUS_TOOL_MCP.into()
                 }
             };
+            let why_matched = tool_search_why_matched(ToolSearchWhyFields {
+                query,
+                query_terms,
+                name: &name_for_search,
+                group: "mcp",
+                description: &capability.description,
+                tags: &tags,
+                schema_fields: &schema_fields,
+                examples: &examples,
+                activation_groups: &["mcp_invoke".into()],
+                risk_class: capability.risk_class(),
+                contextual_boost: 0,
+            });
             matches.push((
                 score,
                 AutonomousToolSearchMatch {
@@ -1385,7 +1565,9 @@ impl AutonomousToolRuntime {
                     schema_fields,
                     examples,
                     risk_class: capability.risk_class().into(),
+                    effect_class: AutonomousToolEffectClass::ExternalService.as_str().into(),
                     runtime_available: true,
+                    why_matched,
                     source: Some(capability.server_id),
                     trust: Some("connected_mcp_server".into()),
                     approval_status: Some("allowed".into()),
@@ -1465,6 +1647,19 @@ impl AutonomousToolRuntime {
             if score == 0 {
                 continue;
             }
+            let why_matched = tool_search_why_matched(ToolSearchWhyFields {
+                query,
+                query_terms,
+                name: &candidate.skill_id,
+                group: "skills",
+                description: &description,
+                tags: &tags,
+                schema_fields: &schema_fields,
+                examples: &examples,
+                activation_groups: &["skills".into()],
+                risk_class: "skill_runtime",
+                contextual_boost: 0,
+            });
             matches.push((
                 score,
                 AutonomousToolSearchMatch {
@@ -1480,7 +1675,9 @@ impl AutonomousToolRuntime {
                     schema_fields,
                     examples,
                     risk_class: "skill_runtime".into(),
+                    effect_class: AutonomousToolEffectClass::SkillRuntime.as_str().into(),
                     runtime_available: candidate.access.status != XeroSkillToolAccessStatus::Denied,
+                    why_matched,
                     source: Some(candidate.source_id),
                     trust: Some(trust.into()),
                     approval_status: Some(approval_status.into()),
@@ -1518,6 +1715,12 @@ impl AutonomousToolRuntime {
             .servers
             .iter()
             .filter(|server| server.connection.status == McpConnectionStatus::Connected)
+            .filter(|server| {
+                self.agent_tool_policy
+                    .as_ref()
+                    .map(|policy| policy.allows_mcp_server(&server.id))
+                    .unwrap_or(true)
+            })
         {
             capabilities.extend(list_mcp_catalog_capabilities(server));
         }
@@ -1655,9 +1858,9 @@ impl McpCatalogCapability {
         let display_description = if description.trim().is_empty() {
             "No MCP description provided.".into()
         } else {
-            description
+            truncate_mcp_model_text(&description, MAX_MCP_DESCRIPTOR_TEXT_CHARS)
         };
-        match self.kind {
+        let description = match self.kind {
             McpCatalogCapabilityKind::Tool => format!(
                 "MCP tool `{}` from server `{}` (`{}`): {display_description}",
                 self.name, self.server_name, self.server_id
@@ -1672,7 +1875,8 @@ impl McpCatalogCapability {
                 "MCP prompt `{}` from server `{}` (`{}`): {display_description}",
                 self.name, self.server_name, self.server_id
             ),
-        }
+        };
+        truncate_mcp_model_text(&description, MAX_MCP_DESCRIPTOR_TEXT_CHARS)
     }
 
     fn dynamic_descriptor(&self) -> AutonomousDynamicToolDescriptor {
@@ -2005,6 +2209,20 @@ struct ToolSearchScoreFields<'a> {
     risk_class: &'a str,
 }
 
+struct ToolSearchWhyFields<'a> {
+    query: &'a str,
+    query_terms: &'a [String],
+    name: &'a str,
+    group: &'a str,
+    description: &'a str,
+    tags: &'a [String],
+    schema_fields: &'a [String],
+    examples: &'a [String],
+    activation_groups: &'a [String],
+    risk_class: &'a str,
+    contextual_boost: u32,
+}
+
 fn tool_search_score(
     query: &str,
     query_terms: &[String],
@@ -2095,7 +2313,7 @@ fn tool_search_score_fields(fields: ToolSearchScoreFields<'_>) -> u32 {
         }
     }
 
-    if fields.name == "command"
+    if fields.name == AUTONOMOUS_TOOL_COMMAND_VERIFY
         && query_terms.iter().any(|term| {
             matches!(
                 term.as_str(),
@@ -2117,6 +2335,135 @@ fn tool_search_score_fields(fields: ToolSearchScoreFields<'_>) -> u32 {
     }
 
     score
+}
+
+fn tool_search_contextual_boost(
+    runtime_agent_id: RuntimeAgentIdDto,
+    tool_name: &str,
+    group: &str,
+    query_terms: &[String],
+) -> u32 {
+    let wants_mutation = query_terms.iter().any(|term| {
+        matches!(
+            term.as_str(),
+            "edit"
+                | "write"
+                | "change"
+                | "modify"
+                | "update"
+                | "create"
+                | "delete"
+                | "rename"
+                | "copy"
+                | "patch"
+        )
+    });
+    let wants_verification = query_terms.iter().any(|term| {
+        matches!(
+            term.as_str(),
+            "test" | "tests" | "build" | "lint" | "format" | "verify" | "compile"
+        )
+    });
+    let wants_observation = query_terms.iter().any(|term| {
+        matches!(
+            term.as_str(),
+            "read" | "search" | "find" | "list" | "stat" | "hash" | "inspect" | "metadata"
+        )
+    });
+
+    let mut boost = 0;
+    match runtime_agent_id {
+        RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug | RuntimeAgentIdDto::Generalist => {
+            if wants_mutation && group == "mutation" {
+                boost += 35;
+            }
+            if wants_verification && tool_name == AUTONOMOUS_TOOL_COMMAND_VERIFY {
+                boost += 35;
+            }
+        }
+        RuntimeAgentIdDto::Plan
+        | RuntimeAgentIdDto::Ask
+        | RuntimeAgentIdDto::ComputerUse
+        | RuntimeAgentIdDto::Crawl => {
+            if wants_observation && matches!(group, "core" | "intelligence") {
+                boost += 25;
+            }
+        }
+        RuntimeAgentIdDto::AgentCreate => {
+            if group == "agent_builder" {
+                boost += 25;
+            }
+        }
+    }
+    boost
+}
+
+fn tool_search_why_matched(fields: ToolSearchWhyFields<'_>) -> Vec<String> {
+    let query = fields.query;
+    let normalized_name = fields.name.replace('_', " ").to_ascii_lowercase();
+    let name = fields.name.to_ascii_lowercase();
+    let group = fields.group.to_ascii_lowercase();
+    let description = fields.description.to_ascii_lowercase();
+    let tags = fields.tags.join(" ").to_ascii_lowercase();
+    let schema_fields = fields.schema_fields.join(" ").to_ascii_lowercase();
+    let examples = fields.examples.join(" ").to_ascii_lowercase();
+    let activation_groups = fields.activation_groups.join(" ").to_ascii_lowercase();
+    let risk_class = fields.risk_class.to_ascii_lowercase();
+    let mut reasons = Vec::new();
+
+    if name == query || normalized_name == query {
+        reasons.push("exact tool-name match".into());
+    } else if name.contains(query) || normalized_name.contains(query) {
+        reasons.push("tool name contains query".into());
+    } else if group == query || group.contains(query) {
+        reasons.push("activation group matches query".into());
+    }
+
+    for term in fields.query_terms {
+        if reasons.len() >= 3 {
+            break;
+        }
+        let reason = if tags.contains(term) {
+            Some(format!("tag matched `{term}`"))
+        } else if schema_fields.contains(term) {
+            Some(format!("schema field matched `{term}`"))
+        } else if activation_groups.contains(term) {
+            Some(format!("activation group matched `{term}`"))
+        } else if description.contains(term) {
+            Some(format!("description matched `{term}`"))
+        } else if risk_class.contains(term) {
+            Some(format!("risk class matched `{term}`"))
+        } else if examples.contains(term) {
+            Some(format!("example matched `{term}`"))
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            if !reasons.contains(&reason) {
+                reasons.push(reason);
+            }
+        }
+    }
+
+    if fields.contextual_boost > 0 && reasons.len() < 3 {
+        reasons.push("boosted for current agent mode and likely next action".into());
+    }
+    if reasons.is_empty() {
+        reasons.push("catalog metadata matched query".into());
+    }
+    reasons
+}
+
+fn relevant_tool_search_examples(examples: &[&'static str], query_terms: &[String]) -> Vec<String> {
+    examples
+        .iter()
+        .filter(|example| {
+            let lower = example.to_ascii_lowercase();
+            query_terms.iter().any(|term| lower.contains(term.as_str()))
+        })
+        .take(1)
+        .map(|example| (*example).to_owned())
+        .collect()
 }
 
 fn list_mcp_catalog_capabilities(server: &McpServerRecord) -> Vec<McpCatalogCapability> {
@@ -2287,14 +2634,136 @@ fn mcp_provider_input_schema(schema: Option<&JsonValue>) -> JsonValue {
             "properties": {}
         });
     };
-    let mut normalized = object.clone();
+    let mut normalized = mcp_bounded_schema_object(object, 0);
     normalized
         .entry("type")
         .or_insert_with(|| JsonValue::String("object".into()));
+    if !normalized
+        .get("properties")
+        .is_some_and(JsonValue::is_object)
+    {
+        normalized.insert("properties".into(), JsonValue::Object(JsonMap::new()));
+    }
     normalized
-        .entry("properties")
-        .or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
+        .entry("additionalProperties")
+        .or_insert(JsonValue::Bool(true));
     JsonValue::Object(normalized)
+}
+
+fn mcp_bounded_schema_value(value: &JsonValue, depth: usize) -> JsonValue {
+    if depth >= MAX_MCP_SCHEMA_DEPTH {
+        return json!({
+            "xeroOmitted": true,
+            "reason": "mcp_schema_depth_cap",
+        });
+    }
+    match value {
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) => value.clone(),
+        JsonValue::String(text) => {
+            JsonValue::String(truncate_mcp_model_text(text, MAX_MCP_SCHEMA_STRING_CHARS))
+        }
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .iter()
+                .take(MAX_MCP_SCHEMA_ARRAY_ITEMS)
+                .map(|item| mcp_bounded_schema_value(item, depth + 1))
+                .collect(),
+        ),
+        JsonValue::Object(object) => {
+            JsonValue::Object(mcp_bounded_schema_object(object, depth + 1))
+        }
+    }
+}
+
+fn mcp_bounded_schema_object(
+    object: &JsonMap<String, JsonValue>,
+    depth: usize,
+) -> JsonMap<String, JsonValue> {
+    if depth >= MAX_MCP_SCHEMA_DEPTH {
+        let mut omitted = JsonMap::new();
+        omitted.insert("xeroOmitted".into(), JsonValue::Bool(true));
+        omitted.insert(
+            "reason".into(),
+            JsonValue::String("mcp_schema_depth_cap".into()),
+        );
+        return omitted;
+    }
+
+    let mut output = JsonMap::new();
+    let mut property_names = BTreeSet::new();
+    let mut omitted_properties = 0_usize;
+    let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
+
+    for key in keys {
+        if key == "required" {
+            continue;
+        }
+        let Some(value) = object.get(key) else {
+            continue;
+        };
+        if key == "properties" {
+            let Some(properties) = value.as_object() else {
+                output.insert("properties".into(), JsonValue::Object(JsonMap::new()));
+                continue;
+            };
+            let mut bounded_properties = JsonMap::new();
+            let mut property_keys = properties.keys().map(String::as_str).collect::<Vec<_>>();
+            property_keys.sort_unstable();
+            for property_key in property_keys {
+                let property_name_too_long =
+                    property_key.chars().count() > MAX_MCP_SCHEMA_PROPERTY_NAME_CHARS;
+                if bounded_properties.len() >= MAX_MCP_SCHEMA_PROPERTIES || property_name_too_long {
+                    omitted_properties = omitted_properties.saturating_add(1);
+                    continue;
+                }
+                if let Some(property_schema) = properties.get(property_key) {
+                    property_names.insert(property_key.to_owned());
+                    bounded_properties.insert(
+                        property_key.to_owned(),
+                        mcp_bounded_schema_value(property_schema, depth + 1),
+                    );
+                }
+            }
+            output.insert("properties".into(), JsonValue::Object(bounded_properties));
+            if omitted_properties > 0 {
+                output.insert("xeroOmittedProperties".into(), json!(omitted_properties));
+            }
+            continue;
+        }
+        output.insert(key.to_owned(), mcp_bounded_schema_value(value, depth + 1));
+    }
+
+    if let Some(required) = object.get("required").and_then(JsonValue::as_array) {
+        let required = required
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .filter(|name| property_names.is_empty() || property_names.contains(*name))
+            .take(MAX_MCP_SCHEMA_ARRAY_ITEMS)
+            .map(|name| JsonValue::String(name.to_owned()))
+            .collect::<Vec<_>>();
+        if !required.is_empty() {
+            output.insert("required".into(), JsonValue::Array(required));
+        }
+    }
+
+    output
+}
+
+fn truncate_mcp_model_text(value: &str, max_chars: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return value.to_owned();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let mut output = value
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    output.push_str("...");
+    output
 }
 
 fn skill_source_kind_label(kind: XeroSkillSourceKind) -> &'static str {
@@ -2316,6 +2785,142 @@ fn skill_trust_label(trust: XeroSkillTrustState) -> &'static str {
         XeroSkillTrustState::ApprovalRequired => "approval_required",
         XeroSkillTrustState::Untrusted => "untrusted",
         XeroSkillTrustState::Blocked => "blocked",
+    }
+}
+
+struct PreparedMcpResult {
+    result: JsonValue,
+    artifact: Option<AutonomousMcpResultArtifact>,
+    truncated: bool,
+    original_bytes: Option<usize>,
+}
+
+fn prepare_mcp_result_for_output(
+    repo_root: &Path,
+    server_id: &str,
+    method: &str,
+    result: JsonValue,
+) -> CommandResult<PreparedMcpResult> {
+    let result_bytes = serde_json::to_vec(&result).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_mcp_result_artifact_failed",
+            format!("Xero could not serialize MCP result for artifact sizing: {error}"),
+        )
+    })?;
+    if result_bytes.len() <= MCP_RESULT_ARTIFACT_THRESHOLD_BYTES {
+        return Ok(PreparedMcpResult {
+            result,
+            artifact: None,
+            truncated: false,
+            original_bytes: None,
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(server_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(method.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(&result_bytes);
+    let artifact_id = format!("{:x}", hasher.finalize())
+        .chars()
+        .take(16)
+        .collect::<String>();
+    let dir = project_app_data_dir_for_repo(repo_root).join(MCP_RESULT_ARTIFACT_DIR);
+    fs::create_dir_all(&dir).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_mcp_result_artifact_failed",
+            format!(
+                "Xero could not create MCP result artifact directory {}: {error}",
+                dir.display()
+            ),
+        )
+    })?;
+    let path = dir.join(format!("result-{artifact_id}.json"));
+    let summary = mcp_result_artifact_summary(&result, &artifact_id);
+    let artifact_envelope = json!({
+        "schema": "xero.mcp_result_artifact.v1",
+        "artifactId": artifact_id.as_str(),
+        "serverId": server_id,
+        "method": method,
+        "byteCount": result_bytes.len(),
+        "result": result,
+    });
+    let artifact_bytes = serde_json::to_vec_pretty(&artifact_envelope).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_mcp_result_artifact_failed",
+            format!("Xero could not serialize MCP result artifact: {error}"),
+        )
+    })?;
+    fs::write(&path, artifact_bytes).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_mcp_result_artifact_failed",
+            format!(
+                "Xero could not write MCP result artifact {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    Ok(PreparedMcpResult {
+        result: summary,
+        artifact: Some(AutonomousMcpResultArtifact {
+            id: artifact_id,
+            path: path.display().to_string(),
+            byte_count: result_bytes.len(),
+        }),
+        truncated: true,
+        original_bytes: Some(result_bytes.len()),
+    })
+}
+
+fn mcp_result_artifact_summary(result: &JsonValue, artifact_id: &str) -> JsonValue {
+    match result {
+        JsonValue::Object(fields) => {
+            let mut keys = fields.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            keys.truncate(16);
+            json!({
+                "xeroOmitted": true,
+                "reason": "mcp_result_artifact",
+                "artifactId": artifact_id,
+                "shape": "object",
+                "topLevelKeyCount": fields.len(),
+                "topLevelKeys": keys,
+            })
+        }
+        JsonValue::Array(items) => json!({
+            "xeroOmitted": true,
+            "reason": "mcp_result_artifact",
+            "artifactId": artifact_id,
+            "shape": "array",
+            "itemCount": items.len(),
+        }),
+        JsonValue::String(text) => json!({
+            "xeroOmitted": true,
+            "reason": "mcp_result_artifact",
+            "artifactId": artifact_id,
+            "shape": "string",
+            "charCount": text.chars().count(),
+        }),
+        JsonValue::Null => json!({
+            "xeroOmitted": true,
+            "reason": "mcp_result_artifact",
+            "artifactId": artifact_id,
+            "shape": "null",
+        }),
+        JsonValue::Bool(_) => json!({
+            "xeroOmitted": true,
+            "reason": "mcp_result_artifact",
+            "artifactId": artifact_id,
+            "shape": "bool",
+        }),
+        JsonValue::Number(_) => json!({
+            "xeroOmitted": true,
+            "reason": "mcp_result_artifact",
+            "artifactId": artifact_id,
+            "shape": "number",
+        }),
     }
 }
 
@@ -2384,7 +2989,10 @@ fn enforce_disjoint_writer_write_set(
     }
     for task in tasks.values() {
         if !task.role.allows_write_set()
-            || !matches!(task.status.as_str(), "registered" | "running")
+            || !matches!(
+                task.status.as_str(),
+                "registered" | "starting" | "running" | "paused" | "cancelling"
+            )
         {
             continue;
         }
@@ -2410,7 +3018,10 @@ fn enforce_disjoint_writer_write_set(
 }
 
 fn subagent_status_holds_reservation(status: &str) -> bool {
-    matches!(status, "registered" | "running")
+    matches!(
+        status,
+        "registered" | "starting" | "running" | "paused" | "cancelling"
+    )
 }
 
 fn subagent_write_sets_overlap(left: &str, right: &str) -> bool {
@@ -2477,6 +3088,11 @@ fn empty_subagent_status_task() -> AutonomousSubagentTask {
         max_tool_calls: 0,
         max_tokens: 0,
         max_cost_micros: 0,
+        used_tool_calls: 0,
+        used_tokens: 0,
+        used_cost_micros: 0,
+        budget_status: "within_budget".into(),
+        budget_diagnostic: None,
         status: "none".into(),
         created_at: now,
         started_at: None,
@@ -3827,5 +4443,93 @@ mod tests {
                         "typescript-language-server",
                     ]
         }));
+    }
+
+    #[test]
+    fn mcp_dynamic_descriptors_cap_untrusted_text_and_schema() {
+        let mut properties = JsonMap::new();
+        for index in 0..(MAX_MCP_SCHEMA_PROPERTIES + 8) {
+            properties.insert(
+                format!("field_{index:02}"),
+                json!({
+                    "type": "string",
+                    "description": "schema prose ".repeat(MAX_MCP_SCHEMA_STRING_CHARS),
+                }),
+            );
+        }
+        properties.insert(
+            "x".repeat(MAX_MCP_SCHEMA_PROPERTY_NAME_CHARS + 1),
+            json!({ "type": "string" }),
+        );
+        let capability = McpCatalogCapability {
+            server_id: "workspace".into(),
+            server_name: "Workspace".into(),
+            kind: McpCatalogCapabilityKind::Tool,
+            name: "echo".into(),
+            uri: None,
+            description: "external descriptor ".repeat(MAX_MCP_DESCRIPTOR_TEXT_CHARS),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": properties,
+                "required": ["field_00", "field_31", "field_39"],
+            })),
+            prompt_arguments: Vec::new(),
+        };
+
+        let descriptor = capability.dynamic_descriptor();
+        assert!(descriptor
+            .name
+            .starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX));
+        assert!(descriptor.description.chars().count() <= MAX_MCP_DESCRIPTOR_TEXT_CHARS);
+        assert!(descriptor.description.ends_with("..."));
+        let schema_properties = descriptor
+            .input_schema
+            .get("properties")
+            .and_then(JsonValue::as_object)
+            .expect("bounded properties");
+        assert_eq!(schema_properties.len(), MAX_MCP_SCHEMA_PROPERTIES);
+        assert_eq!(
+            descriptor.input_schema["xeroOmittedProperties"].as_u64(),
+            Some(9)
+        );
+        let field_description = schema_properties["field_00"]["description"]
+            .as_str()
+            .expect("field description");
+        assert!(field_description.chars().count() <= MAX_MCP_SCHEMA_STRING_CHARS);
+        assert_eq!(
+            descriptor.input_schema["required"],
+            json!(["field_00", "field_31"])
+        );
+    }
+
+    #[test]
+    fn mcp_large_results_persist_to_project_app_data_artifacts() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let large_result = json!({
+            "content": "result line\n".repeat(MCP_RESULT_ARTIFACT_THRESHOLD_BYTES / 4),
+            "metadata": {
+                "server": "fixture"
+            }
+        });
+
+        let prepared =
+            prepare_mcp_result_for_output(tempdir.path(), "fixture", "tools/call", large_result)
+                .expect("prepare MCP result");
+        let artifact = prepared.artifact.expect("artifact");
+        let artifact_path = Path::new(&artifact.path);
+        let expected_dir =
+            project_app_data_dir_for_repo(tempdir.path()).join(MCP_RESULT_ARTIFACT_DIR);
+
+        assert!(prepared.truncated);
+        assert!(prepared.original_bytes.unwrap_or_default() > MCP_RESULT_ARTIFACT_THRESHOLD_BYTES);
+        assert!(artifact_path.starts_with(&expected_dir));
+        assert!(artifact_path.is_file());
+        assert_eq!(prepared.result["reason"], json!("mcp_result_artifact"));
+        assert_eq!(prepared.result["artifactId"], json!(artifact.id));
+        let artifact_text = fs::read_to_string(artifact_path).expect("read MCP artifact");
+        assert!(artifact_text.contains("\"schema\": \"xero.mcp_result_artifact.v1\""));
+        assert!(artifact_text.contains("result line"));
+
+        let _ = fs::remove_dir_all(project_app_data_dir_for_repo(tempdir.path()));
     }
 }

@@ -88,6 +88,7 @@ fn runtime_with_approval(
             thinking_effort: None,
             approval_mode,
             plan_mode_required: false,
+            auto_compact_enabled: true,
             revision: 1,
             applied_at: "2026-04-22T00:00:00Z".into(),
         },
@@ -484,6 +485,9 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
             mode: None,
             start_line: Some(1),
             line_count: Some(2),
+            cursor: None,
+            around_pattern: None,
+            max_bytes_per_file: None,
             byte_offset: None,
             byte_count: None,
             include_line_hashes: false,
@@ -502,6 +506,10 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
         .write(AutonomousWriteRequest {
             path: "notes/proof.txt".into(),
             content: "bridge proof\n".into(),
+            expected_hash: None,
+            create_only: false,
+            overwrite: None,
+            preview: false,
         })
         .expect("write imported repo file");
     match written.output {
@@ -515,7 +523,11 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
     let find = runtime
         .find(AutonomousFindRequest {
             pattern: "*.txt".into(),
+            mode: None,
             path: Some("notes".into()),
+            max_depth: None,
+            max_results: None,
+            cursor: None,
         })
         .expect("find imported repo files inside notes");
     match find.output {
@@ -538,6 +550,7 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
             expected_hash: None,
             start_line_hash: None,
             end_line_hash: None,
+            preview: false,
         })
         .expect("edit imported repo readme");
     match edited.output {

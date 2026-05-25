@@ -1,7 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Xero",
-  "version": "0.1.0",
+  "mainBinaryName": "xero-desktop",
+  "version": "0.1.13",
   "identifier": "dev.sn0w.xero",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -61,9 +62,23 @@
     },
     "macOSPrivateApi": true
   },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDREQzMxREU5RjI5QTNFQzcKUldUSFBwcnk2UjNEVGFTWWNnUjUxcGEybUk0dGdSTEVKKzZ2MmkxYit4d0Q0ODJ3QW5nWm4zaVMK",
+      "endpoints": [
+        "https://github.com/hyperpush-org/xero/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Hyperpush",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

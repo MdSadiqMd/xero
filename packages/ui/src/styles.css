@@ -1,0 +1,1798 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Theme palettes
+ *
+ * Each theme lives in its own selector. The active theme is applied as a
+ * `.theme-<id>` class on `<html>` by the React `ThemeProvider`. `:root`
+ * mirrors the default palette so the first paint (before React mounts) is
+ * still rendered with sensible colors.
+ *
+ * To add a new theme:
+ *   1. Append an entry to `packages/ui/src/theme.ts`.
+ *   2. Duplicate one of the blocks below and fill in the palette — keep the
+ *      variable names identical, only the values change.
+ * ------------------------------------------------------------------------- */
+
+:root,
+.theme-dusk {
+  --background: #121212;
+  --foreground: #f8f9fa;
+
+  --card: #1a1a1a;
+  --card-foreground: #f8f9fa;
+
+  --popover: #1a1a1a;
+  --popover-foreground: #f8f9fa;
+
+  --primary: #d4a574;
+  --primary-foreground: #0a0e12;
+
+  --secondary: #242423;
+  --secondary-foreground: #f8f9fa;
+
+  --muted: #2d2d2d;
+  --muted-foreground: #a8aeb5;
+
+  --accent: #242423;
+  --accent-foreground: #f8f9fa;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #f8f9fa;
+
+  --success: #4ade80;
+  --success-foreground: #0a0e12;
+
+  --warning: #f5b962;
+  --warning-foreground: #0a0e12;
+
+  --info: #7cc1e8;
+  --info-foreground: #0a0e12;
+
+  --border: #2d2d2d;
+  --input: #2d2d2d;
+  --ring: #d4a574;
+
+  --chart-1: #d4a574;
+  --chart-2: #c19460;
+  --chart-3: #ad834c;
+  --chart-4: #997338;
+  --chart-5: #856324;
+
+  --radius: 0.5rem;
+  --window-corner-radius: 10px;
+
+  --sidebar: #161616;
+  --sidebar-foreground: #f8f9fa;
+  --sidebar-primary: #d4a574;
+  --sidebar-primary-foreground: #0a0e12;
+  --sidebar-accent: #242423;
+  --sidebar-accent-foreground: #f8f9fa;
+  --sidebar-border: #2d2d2d;
+  --sidebar-ring: #d4a574;
+
+  --shell-background: #101010;
+  --scrollbar-thumb: oklch(0.25 0 0);
+  --scrollbar-thumb-hover: oklch(0.32 0 0);
+}
+
+.theme-midnight {
+  --background: #1e1e1e;
+  --foreground: #d4d4d4;
+
+  --card: #252526;
+  --card-foreground: #d4d4d4;
+
+  --popover: #252526;
+  --popover-foreground: #d4d4d4;
+
+  --primary: #4ea1ff;
+  --primary-foreground: #0a1220;
+
+  --secondary: #2a2d2e;
+  --secondary-foreground: #d4d4d4;
+
+  --muted: #303033;
+  --muted-foreground: #9ca4b0;
+
+  --accent: #094771;
+  --accent-foreground: #ffffff;
+
+  --destructive: #f48771;
+  --destructive-foreground: #1e1e1e;
+
+  --success: #89d185;
+  --success-foreground: #0a1220;
+
+  --warning: #fbbf24;
+  --warning-foreground: #0a1220;
+
+  --info: #4ea1ff;
+  --info-foreground: #0a1220;
+
+  --border: #3c3c3c;
+  --input: #3c3c3c;
+  --ring: #4ea1ff;
+
+  --chart-1: #4ea1ff;
+  --chart-2: #6fb4ff;
+  --chart-3: #3b8fe0;
+  --chart-4: #2e76bf;
+  --chart-5: #235b96;
+
+  --sidebar: #181818;
+  --sidebar-foreground: #cccccc;
+  --sidebar-primary: #4ea1ff;
+  --sidebar-primary-foreground: #0a1220;
+  --sidebar-accent: #2a2d2e;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #252526;
+  --sidebar-ring: #4ea1ff;
+
+  --shell-background: #1e1e1e;
+  --scrollbar-thumb: rgba(121, 121, 121, 0.4);
+  --scrollbar-thumb-hover: rgba(100, 100, 100, 0.7);
+}
+
+.theme-nord {
+  --background: #2e3440;
+  --foreground: #d8dee9;
+
+  --card: #3b4252;
+  --card-foreground: #eceff4;
+
+  --popover: #3b4252;
+  --popover-foreground: #eceff4;
+
+  --primary: #88c0d0;
+  --primary-foreground: #2e3440;
+
+  --secondary: #434c5e;
+  --secondary-foreground: #eceff4;
+
+  --muted: #434c5e;
+  --muted-foreground: #929aac;
+
+  --accent: #4c566a;
+  --accent-foreground: #eceff4;
+
+  --destructive: #bf616a;
+  --destructive-foreground: #eceff4;
+
+  --success: #a3be8c;
+  --success-foreground: #2e3440;
+
+  --warning: #ebcb8b;
+  --warning-foreground: #2e3440;
+
+  --info: #81a1c1;
+  --info-foreground: #2e3440;
+
+  --border: #434c5e;
+  --input: #434c5e;
+  --ring: #88c0d0;
+
+  --chart-1: #88c0d0;
+  --chart-2: #81a1c1;
+  --chart-3: #5e81ac;
+  --chart-4: #8fbcbb;
+  --chart-5: #a3be8c;
+
+  --sidebar: #272c36;
+  --sidebar-foreground: #d8dee9;
+  --sidebar-primary: #88c0d0;
+  --sidebar-primary-foreground: #2e3440;
+  --sidebar-accent: #3b4252;
+  --sidebar-accent-foreground: #eceff4;
+  --sidebar-border: #3b4252;
+  --sidebar-ring: #88c0d0;
+
+  --shell-background: #2e3440;
+  --scrollbar-thumb: rgba(136, 192, 208, 0.22);
+  --scrollbar-thumb-hover: rgba(136, 192, 208, 0.42);
+}
+
+.theme-dracula {
+  --background: #282a36;
+  --foreground: #f8f8f2;
+
+  --card: #343746;
+  --card-foreground: #f8f8f2;
+
+  --popover: #343746;
+  --popover-foreground: #f8f8f2;
+
+  --primary: #bd93f9;
+  --primary-foreground: #1a1b24;
+
+  --secondary: #44475a;
+  --secondary-foreground: #f8f8f2;
+
+  --muted: #44475a;
+  --muted-foreground: #a6adcb;
+
+  --accent: #44475a;
+  --accent-foreground: #f8f8f2;
+
+  --destructive: #ff5555;
+  --destructive-foreground: #1a1b24;
+
+  --success: #50fa7b;
+  --success-foreground: #1a1b24;
+
+  --warning: #ffb86c;
+  --warning-foreground: #1a1b24;
+
+  --info: #8be9fd;
+  --info-foreground: #1a1b24;
+
+  --border: #44475a;
+  --input: #44475a;
+  --ring: #bd93f9;
+
+  --chart-1: #bd93f9;
+  --chart-2: #ff79c6;
+  --chart-3: #8be9fd;
+  --chart-4: #50fa7b;
+  --chart-5: #ffb86c;
+
+  --sidebar: #21222c;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #bd93f9;
+  --sidebar-primary-foreground: #1a1b24;
+  --sidebar-accent: #44475a;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #343746;
+  --sidebar-ring: #bd93f9;
+
+  --shell-background: #282a36;
+  --scrollbar-thumb: rgba(189, 147, 249, 0.22);
+  --scrollbar-thumb-hover: rgba(189, 147, 249, 0.42);
+}
+
+.theme-solarized-dark {
+  --background: #002b36;
+  --foreground: #93a1a1;
+
+  --card: #073642;
+  --card-foreground: #eee8d5;
+
+  --popover: #073642;
+  --popover-foreground: #eee8d5;
+
+  --primary: #b58900;
+  --primary-foreground: #002b36;
+
+  --secondary: #073642;
+  --secondary-foreground: #93a1a1;
+
+  --muted: #073642;
+  --muted-foreground: #839496;
+
+  --accent: #586e75;
+  --accent-foreground: #eee8d5;
+
+  --destructive: #dc322f;
+  --destructive-foreground: #eee8d5;
+
+  --success: #859900;
+  --success-foreground: #002b36;
+
+  --warning: #cb4b16;
+  --warning-foreground: #002b36;
+
+  --info: #268bd2;
+  --info-foreground: #002b36;
+
+  --border: #073642;
+  --input: #073642;
+  --ring: #b58900;
+
+  --chart-1: #b58900;
+  --chart-2: #268bd2;
+  --chart-3: #2aa198;
+  --chart-4: #859900;
+  --chart-5: #cb4b16;
+
+  --sidebar: #00212b;
+  --sidebar-foreground: #93a1a1;
+  --sidebar-primary: #b58900;
+  --sidebar-primary-foreground: #002b36;
+  --sidebar-accent: #073642;
+  --sidebar-accent-foreground: #eee8d5;
+  --sidebar-border: #073642;
+  --sidebar-ring: #b58900;
+
+  --shell-background: #002b36;
+  --scrollbar-thumb: rgba(147, 161, 161, 0.22);
+  --scrollbar-thumb-hover: rgba(147, 161, 161, 0.42);
+}
+
+.theme-monokai {
+  --background: #272822;
+  --foreground: #f8f8f2;
+
+  --card: #2f302a;
+  --card-foreground: #f8f8f2;
+
+  --popover: #2f302a;
+  --popover-foreground: #f8f8f2;
+
+  --primary: #f92672;
+  --primary-foreground: #1a1b14;
+
+  --secondary: #3e3d32;
+  --secondary-foreground: #f8f8f2;
+
+  --muted: #3e3d32;
+  --muted-foreground: #aba897;
+
+  --accent: #49483e;
+  --accent-foreground: #f8f8f2;
+
+  --destructive: #f92672;
+  --destructive-foreground: #f8f8f2;
+
+  --success: #a6e22e;
+  --success-foreground: #1a1b14;
+
+  --warning: #fd971f;
+  --warning-foreground: #1a1b14;
+
+  --info: #66d9ef;
+  --info-foreground: #1a1b14;
+
+  --border: #3e3d32;
+  --input: #3e3d32;
+  --ring: #f92672;
+
+  --chart-1: #f92672;
+  --chart-2: #a6e22e;
+  --chart-3: #66d9ef;
+  --chart-4: #fd971f;
+  --chart-5: #ae81ff;
+
+  --sidebar: #1e1f1c;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #f92672;
+  --sidebar-primary-foreground: #1a1b14;
+  --sidebar-accent: #3e3d32;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #2f302a;
+  --sidebar-ring: #f92672;
+
+  --shell-background: #272822;
+  --scrollbar-thumb: rgba(249, 38, 114, 0.22);
+  --scrollbar-thumb-hover: rgba(249, 38, 114, 0.42);
+}
+
+.theme-carbon {
+  --background: #0a0a0a;
+  --foreground: #e6e6e6;
+
+  --card: #141414;
+  --card-foreground: #e6e6e6;
+
+  --popover: #141414;
+  --popover-foreground: #e6e6e6;
+
+  --primary: #fafafa;
+  --primary-foreground: #0a0a0a;
+
+  --secondary: #1f1f1f;
+  --secondary-foreground: #e6e6e6;
+
+  --muted: #1f1f1f;
+  --muted-foreground: #999999;
+
+  --accent: #262626;
+  --accent-foreground: #fafafa;
+
+  --destructive: #dc2626;
+  --destructive-foreground: #fafafa;
+
+  --success: #16a34a;
+  --success-foreground: #0a0a0a;
+
+  --warning: #fbbf24;
+  --warning-foreground: #0a0a0a;
+
+  --info: #7cc8f5;
+  --info-foreground: #0a0a0a;
+
+  --border: #262626;
+  --input: #262626;
+  --ring: #fafafa;
+
+  --chart-1: #fafafa;
+  --chart-2: #d4d4d4;
+  --chart-3: #a3a3a3;
+  --chart-4: #737373;
+  --chart-5: #525252;
+
+  --sidebar: #0d0d0d;
+  --sidebar-foreground: #e6e6e6;
+  --sidebar-primary: #fafafa;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #1f1f1f;
+  --sidebar-ring: #fafafa;
+
+  --shell-background: #050505;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+}
+
+.theme-gruvbox-dark {
+  --background: #282828;
+  --foreground: #ebdbb2;
+
+  --card: #32302f;
+  --card-foreground: #ebdbb2;
+
+  --popover: #32302f;
+  --popover-foreground: #ebdbb2;
+
+  --primary: #fabd2f;
+  --primary-foreground: #282828;
+
+  --secondary: #3c3836;
+  --secondary-foreground: #ebdbb2;
+
+  --muted: #3c3836;
+  --muted-foreground: #a89984;
+
+  --accent: #504945;
+  --accent-foreground: #ebdbb2;
+
+  --destructive: #fb4934;
+  --destructive-foreground: #282828;
+
+  --success: #b8bb26;
+  --success-foreground: #282828;
+
+  --warning: #fe8019;
+  --warning-foreground: #282828;
+
+  --info: #83a598;
+  --info-foreground: #282828;
+
+  --border: #3c3836;
+  --input: #3c3836;
+  --ring: #fabd2f;
+
+  --chart-1: #fabd2f;
+  --chart-2: #fe8019;
+  --chart-3: #b8bb26;
+  --chart-4: #83a598;
+  --chart-5: #d3869b;
+
+  --sidebar: #1d2021;
+  --sidebar-foreground: #ebdbb2;
+  --sidebar-primary: #fabd2f;
+  --sidebar-primary-foreground: #282828;
+  --sidebar-accent: #504945;
+  --sidebar-accent-foreground: #ebdbb2;
+  --sidebar-border: #3c3836;
+  --sidebar-ring: #fabd2f;
+
+  --shell-background: #1d2021;
+  --scrollbar-thumb: rgba(250, 189, 47, 0.22);
+  --scrollbar-thumb-hover: rgba(250, 189, 47, 0.42);
+}
+
+.theme-solarized-light {
+  --background: #fdf6e3;
+  --foreground: #586e75;
+
+  --card: #fdf6e3;
+  --card-foreground: #586e75;
+
+  --popover: #fdf6e3;
+  --popover-foreground: #586e75;
+
+  --primary: #b58900;
+  --primary-foreground: #fdf6e3;
+
+  --secondary: #eee8d5;
+  --secondary-foreground: #586e75;
+
+  --muted: #eee8d5;
+  --muted-foreground: #657b83;
+
+  --accent: #eee8d5;
+  --accent-foreground: #073642;
+
+  --destructive: #dc322f;
+  --destructive-foreground: #fdf6e3;
+
+  --success: #859900;
+  --success-foreground: #fdf6e3;
+
+  --warning: #cb4b16;
+  --warning-foreground: #fdf6e3;
+
+  --info: #268bd2;
+  --info-foreground: #fdf6e3;
+
+  --border: #d8d0b3;
+  --input: #d8d0b3;
+  --ring: #b58900;
+
+  --chart-1: #b58900;
+  --chart-2: #268bd2;
+  --chart-3: #2aa198;
+  --chart-4: #859900;
+  --chart-5: #cb4b16;
+
+  --sidebar: #eee8d5;
+  --sidebar-foreground: #586e75;
+  --sidebar-primary: #b58900;
+  --sidebar-primary-foreground: #fdf6e3;
+  --sidebar-accent: #fdf6e3;
+  --sidebar-accent-foreground: #073642;
+  --sidebar-border: #cdc4a4;
+  --sidebar-ring: #b58900;
+
+  --shell-background: #fdf6e3;
+  --scrollbar-thumb: rgba(88, 110, 117, 0.25);
+  --scrollbar-thumb-hover: rgba(88, 110, 117, 0.45);
+}
+
+.theme-daylight {
+  --background: #ffffff;
+  --foreground: #1f2328;
+
+  --card: #ffffff;
+  --card-foreground: #1f2328;
+
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
+
+  --primary: #0969da;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f3f4f6;
+  --secondary-foreground: #1f2328;
+
+  --muted: #eef1f4;
+  --muted-foreground: #4b5763;
+
+  --accent: #dbeafe;
+  --accent-foreground: #0f2a4a;
+
+  --destructive: #cf222e;
+  --destructive-foreground: #ffffff;
+
+  --success: #1a7f37;
+  --success-foreground: #ffffff;
+
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+
+  --info: #1d4ed8;
+  --info-foreground: #ffffff;
+
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --ring: #0969da;
+
+  --chart-1: #0969da;
+  --chart-2: #388bfd;
+  --chart-3: #2a6ac2;
+  --chart-4: #1f4d8b;
+  --chart-5: #153a6a;
+
+  --sidebar: #f6f8fa;
+  --sidebar-foreground: #1f2328;
+  --sidebar-primary: #0969da;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dbeafe;
+  --sidebar-accent-foreground: #0f2a4a;
+  --sidebar-border: #d0d7de;
+  --sidebar-ring: #0969da;
+
+  --shell-background: #ffffff;
+  --scrollbar-thumb: rgba(100, 116, 139, 0.35);
+  --scrollbar-thumb-hover: rgba(71, 85, 105, 0.55);
+}
+
+.theme-tokyo-night {
+  --background: #1a1b26;
+  --foreground: #c0caf5;
+
+  --card: #24283b;
+  --card-foreground: #c0caf5;
+
+  --popover: #24283b;
+  --popover-foreground: #c0caf5;
+
+  --primary: #7aa2f7;
+  --primary-foreground: #1a1b26;
+
+  --secondary: #2f334d;
+  --secondary-foreground: #c0caf5;
+
+  --muted: #292e42;
+  --muted-foreground: #a9b1d6;
+
+  --accent: #414868;
+  --accent-foreground: #c0caf5;
+
+  --destructive: #f7768e;
+  --destructive-foreground: #1a1b26;
+
+  --success: #9ece6a;
+  --success-foreground: #1a1b26;
+
+  --warning: #e0af68;
+  --warning-foreground: #1a1b26;
+
+  --info: #7dcfff;
+  --info-foreground: #1a1b26;
+
+  --border: #2f334d;
+  --input: #2f334d;
+  --ring: #7aa2f7;
+
+  --chart-1: #7aa2f7;
+  --chart-2: #bb9af7;
+  --chart-3: #7dcfff;
+  --chart-4: #9ece6a;
+  --chart-5: #e0af68;
+
+  --sidebar: #16161e;
+  --sidebar-foreground: #c0caf5;
+  --sidebar-primary: #7aa2f7;
+  --sidebar-primary-foreground: #1a1b26;
+  --sidebar-accent: #414868;
+  --sidebar-accent-foreground: #c0caf5;
+  --sidebar-border: #2f334d;
+  --sidebar-ring: #7aa2f7;
+
+  --shell-background: #16161e;
+  --scrollbar-thumb: rgba(122, 162, 247, 0.22);
+  --scrollbar-thumb-hover: rgba(122, 162, 247, 0.42);
+}
+
+.theme-catppuccin-mocha {
+  --background: #1e1e2e;
+  --foreground: #cdd6f4;
+
+  --card: #181825;
+  --card-foreground: #cdd6f4;
+
+  --popover: #181825;
+  --popover-foreground: #cdd6f4;
+
+  --primary: #cba6f7;
+  --primary-foreground: #1e1e2e;
+
+  --secondary: #313244;
+  --secondary-foreground: #cdd6f4;
+
+  --muted: #313244;
+  --muted-foreground: #a6adc8;
+
+  --accent: #45475a;
+  --accent-foreground: #cdd6f4;
+
+  --destructive: #f38ba8;
+  --destructive-foreground: #1e1e2e;
+
+  --success: #a6e3a1;
+  --success-foreground: #1e1e2e;
+
+  --warning: #fab387;
+  --warning-foreground: #1e1e2e;
+
+  --info: #89b4fa;
+  --info-foreground: #1e1e2e;
+
+  --border: #45475a;
+  --input: #45475a;
+  --ring: #cba6f7;
+
+  --chart-1: #cba6f7;
+  --chart-2: #f5c2e7;
+  --chart-3: #89b4fa;
+  --chart-4: #a6e3a1;
+  --chart-5: #fab387;
+
+  --sidebar: #11111b;
+  --sidebar-foreground: #cdd6f4;
+  --sidebar-primary: #cba6f7;
+  --sidebar-primary-foreground: #1e1e2e;
+  --sidebar-accent: #45475a;
+  --sidebar-accent-foreground: #cdd6f4;
+  --sidebar-border: #313244;
+  --sidebar-ring: #cba6f7;
+
+  --shell-background: #11111b;
+  --scrollbar-thumb: rgba(203, 166, 247, 0.22);
+  --scrollbar-thumb-hover: rgba(203, 166, 247, 0.42);
+}
+
+.theme-rose-pine-dawn {
+  --background: #faf4ed;
+  --foreground: #575279;
+
+  --card: #fffaf3;
+  --card-foreground: #575279;
+
+  --popover: #fffaf3;
+  --popover-foreground: #575279;
+
+  --primary: #d7827e;
+  --primary-foreground: #faf4ed;
+
+  --secondary: #f2e9e1;
+  --secondary-foreground: #575279;
+
+  --muted: #f2e9e1;
+  --muted-foreground: #797593;
+
+  --accent: #dfdad9;
+  --accent-foreground: #575279;
+
+  --destructive: #b4637a;
+  --destructive-foreground: #faf4ed;
+
+  --success: #56949f;
+  --success-foreground: #faf4ed;
+
+  --warning: #ea9d34;
+  --warning-foreground: #faf4ed;
+
+  --info: #286983;
+  --info-foreground: #faf4ed;
+
+  --border: #cecacd;
+  --input: #cecacd;
+  --ring: #d7827e;
+
+  --chart-1: #d7827e;
+  --chart-2: #ea9d34;
+  --chart-3: #56949f;
+  --chart-4: #286983;
+  --chart-5: #907aa9;
+
+  --sidebar: #f2e9e1;
+  --sidebar-foreground: #575279;
+  --sidebar-primary: #d7827e;
+  --sidebar-primary-foreground: #faf4ed;
+  --sidebar-accent: #fffaf3;
+  --sidebar-accent-foreground: #575279;
+  --sidebar-border: #cecacd;
+  --sidebar-ring: #d7827e;
+
+  --shell-background: #faf4ed;
+  --scrollbar-thumb: rgba(152, 147, 165, 0.35);
+  --scrollbar-thumb-hover: rgba(121, 117, 147, 0.55);
+}
+
+.theme-synthwave-84 {
+  --background: #2a2139;
+  --foreground: #f8f8f2;
+
+  --card: #34294f;
+  --card-foreground: #f8f8f2;
+
+  --popover: #34294f;
+  --popover-foreground: #f8f8f2;
+
+  --primary: #ff7edb;
+  --primary-foreground: #241b2f;
+
+  --secondary: #34294f;
+  --secondary-foreground: #f8f8f2;
+
+  --muted: #34294f;
+  --muted-foreground: #b6b1cd;
+
+  --accent: #495495;
+  --accent-foreground: #f8f8f2;
+
+  --destructive: #fe4450;
+  --destructive-foreground: #241b2f;
+
+  --success: #72f1b8;
+  --success-foreground: #241b2f;
+
+  --warning: #fede5d;
+  --warning-foreground: #241b2f;
+
+  --info: #03edf9;
+  --info-foreground: #241b2f;
+
+  --border: #495495;
+  --input: #495495;
+  --ring: #ff7edb;
+
+  --chart-1: #ff7edb;
+  --chart-2: #03edf9;
+  --chart-3: #fede5d;
+  --chart-4: #72f1b8;
+  --chart-5: #f97e72;
+
+  --sidebar: #241b2f;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #ff7edb;
+  --sidebar-primary-foreground: #241b2f;
+  --sidebar-accent: #495495;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #34294f;
+  --sidebar-ring: #ff7edb;
+
+  --shell-background: #241b2f;
+  --scrollbar-thumb: rgba(255, 126, 219, 0.22);
+  --scrollbar-thumb-hover: rgba(255, 126, 219, 0.42);
+}
+
+.theme-kanagawa-wave {
+  --background: #1f1f28;
+  --foreground: #dcd7ba;
+
+  --card: #2a2a37;
+  --card-foreground: #dcd7ba;
+
+  --popover: #2a2a37;
+  --popover-foreground: #dcd7ba;
+
+  --primary: #7e9cd8;
+  --primary-foreground: #1f1f28;
+
+  --secondary: #363646;
+  --secondary-foreground: #dcd7ba;
+
+  --muted: #363646;
+  --muted-foreground: #a6a69c;
+
+  --accent: #54546d;
+  --accent-foreground: #dcd7ba;
+
+  --destructive: #c34043;
+  --destructive-foreground: #dcd7ba;
+
+  --success: #98bb6c;
+  --success-foreground: #1f1f28;
+
+  --warning: #e6c384;
+  --warning-foreground: #1f1f28;
+
+  --info: #7fb4ca;
+  --info-foreground: #1f1f28;
+
+  --border: #54546d;
+  --input: #54546d;
+  --ring: #7e9cd8;
+
+  --chart-1: #7e9cd8;
+  --chart-2: #957fb8;
+  --chart-3: #7aa89f;
+  --chart-4: #e6c384;
+  --chart-5: #d27e99;
+
+  --sidebar: #181820;
+  --sidebar-foreground: #dcd7ba;
+  --sidebar-primary: #7e9cd8;
+  --sidebar-primary-foreground: #1f1f28;
+  --sidebar-accent: #54546d;
+  --sidebar-accent-foreground: #dcd7ba;
+  --sidebar-border: #363646;
+  --sidebar-ring: #7e9cd8;
+
+  --shell-background: #181820;
+  --scrollbar-thumb: rgba(126, 156, 216, 0.22);
+  --scrollbar-thumb-hover: rgba(126, 156, 216, 0.42);
+}
+
+.theme-ayu-mirage {
+  --background: #1f2430;
+  --foreground: #cbccc6;
+
+  --card: #232834;
+  --card-foreground: #cbccc6;
+
+  --popover: #232834;
+  --popover-foreground: #cbccc6;
+
+  --primary: #ffcc66;
+  --primary-foreground: #1f2430;
+
+  --secondary: #2c313a;
+  --secondary-foreground: #cbccc6;
+
+  --muted: #2c313a;
+  --muted-foreground: #8a9199;
+
+  --accent: #34455a;
+  --accent-foreground: #cbccc6;
+
+  --destructive: #ff3333;
+  --destructive-foreground: #1f2430;
+
+  --success: #bae67e;
+  --success-foreground: #1f2430;
+
+  --warning: #ffa759;
+  --warning-foreground: #1f2430;
+
+  --info: #5ccfe6;
+  --info-foreground: #1f2430;
+
+  --border: #34455a;
+  --input: #34455a;
+  --ring: #ffcc66;
+
+  --chart-1: #ffcc66;
+  --chart-2: #ffa759;
+  --chart-3: #5ccfe6;
+  --chart-4: #bae67e;
+  --chart-5: #d4bfff;
+
+  --sidebar: #191e2a;
+  --sidebar-foreground: #cbccc6;
+  --sidebar-primary: #ffcc66;
+  --sidebar-primary-foreground: #1f2430;
+  --sidebar-accent: #34455a;
+  --sidebar-accent-foreground: #cbccc6;
+  --sidebar-border: #2c313a;
+  --sidebar-ring: #ffcc66;
+
+  --shell-background: #191e2a;
+  --scrollbar-thumb: rgba(255, 204, 102, 0.22);
+  --scrollbar-thumb-hover: rgba(255, 204, 102, 0.42);
+}
+
+:root {
+  --motion-duration-instant: 80ms;
+  --motion-duration-fast: 140ms;
+  --motion-duration-standard: 180ms;
+  --motion-duration-panel: 160ms;
+  --motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html.platform-macos {
+    --window-corner-radius: 20px;
+  }
+
+  html.platform-windows {
+    --window-corner-radius: 8px;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: var(--background);
+  }
+
+  /* Rounded window chrome only applies to the Tauri desktop shell, which sets
+   * a `platform-*` class on <html>. Web hosts (the cloud app) must stay flat —
+   * otherwise the html clip-path leaves the browser canvas visible outside the
+   * rounded rect, which reads as a dark frame around the app. */
+  html:is(.platform-macos, .platform-windows) {
+    border-radius: var(--window-corner-radius);
+    clip-path: inset(0 round var(--window-corner-radius));
+  }
+
+  html:is(.platform-macos, .platform-windows) body,
+  html:is(.platform-macos, .platform-windows) #root,
+  .xero-window-shell {
+    border-radius: var(--window-corner-radius);
+  }
+
+  body {
+    @apply text-foreground font-sans antialiased;
+  }
+
+  :where(*):is(:focus, :focus-visible, :focus-within) {
+    --tw-ring-color: transparent !important;
+    --tw-ring-offset-width: 0px !important;
+    --tw-ring-offset-shadow: 0 0 #0000 !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  :where(
+      input,
+      textarea,
+      select,
+      [role='combobox'],
+      [data-slot='input'],
+      [data-slot='textarea'],
+      [data-slot='select-trigger'],
+      [data-slot='input-group'],
+      [class*='focus:border-'],
+      [class*='focus-visible:border-'],
+      [class*='focus-within:border-'],
+      [class*='focus-visible'][class*='border-']
+    ):is(:focus, :focus-visible, :focus-within):not([aria-invalid='true']) {
+    border-color: var(--input) !important;
+  }
+
+  :where([data-slot='tabs-trigger']):focus-visible:not([data-state='active']) {
+    border-color: transparent !important;
+  }
+}
+
+@layer utilities {
+  .motion-fast {
+    animation-duration: var(--motion-duration-fast);
+    animation-timing-function: var(--motion-ease-out);
+    transition-duration: var(--motion-duration-fast);
+    transition-timing-function: var(--motion-ease-out);
+  }
+
+  .motion-standard {
+    animation-duration: var(--motion-duration-standard);
+    animation-timing-function: var(--motion-ease-out);
+    transition-duration: var(--motion-duration-standard);
+    transition-timing-function: var(--motion-ease-out);
+  }
+
+  .motion-enter {
+    animation-duration: var(--motion-duration-standard);
+    animation-timing-function: var(--motion-ease-out);
+    will-change: transform, opacity;
+  }
+
+  .motion-panel {
+    animation-duration: var(--motion-duration-panel);
+    animation-timing-function: var(--motion-ease-out);
+    transition-duration: var(--motion-duration-panel);
+    transition-timing-function: var(--motion-ease-out);
+  }
+
+  .motion-popover {
+    animation-duration: var(--motion-duration-fast);
+    animation-timing-function: var(--motion-ease-out);
+    will-change: transform, opacity;
+  }
+
+  .motion-panel-animation {
+    animation-duration: var(--motion-duration-panel);
+    animation-timing-function: var(--motion-ease-out);
+    will-change: transform, opacity;
+  }
+
+  .motion-progress {
+    transform-origin: left center;
+    transition-duration: var(--motion-duration-standard);
+    transition-property: transform;
+    transition-timing-function: var(--motion-ease-out);
+    will-change: transform;
+  }
+
+  .motion-layout-island {
+    contain: layout style;
+  }
+
+  .sidebar-layout-island {
+    contain: layout paint style;
+    isolation: isolate;
+  }
+
+  .rail-content-reveal {
+    transition-duration: var(--motion-duration-fast);
+    transition-property: opacity, transform;
+    transition-timing-function: var(--motion-ease-out);
+    will-change: opacity, transform;
+  }
+
+  /* Sidebar islands are flex siblings of the main content; when their width
+   * animates, the browser would normally reflow + repaint everything in the
+   * row. `contain: layout paint style` isolates layout/paint to the sidebar
+   * subtree, `transform: translateZ(0)` promotes it to its own GPU layer, and
+   * `will-change: width` hints to the browser to keep that layer hot during
+   * the transition.
+   *
+   * Pair this class with the inline `transition: width …` style returned by
+   * `useSidebarWidthMotion`. CSS-driven transitions on width are noticeably
+   * smoother than JS spring loops for this layout pattern — the browser
+   * handles timing in C++ and skips the React reconciliation pass per frame. */
+  .sidebar-motion-island {
+    contain: layout paint style;
+    transform: translateZ(0);
+    will-change: width;
+    isolation: isolate;
+  }
+
+  /* Peek overlays render outside the 6px collapsed strip, so this keeps
+   * layout isolation without paint containment clipping the flyout. */
+  .sidebar-peek-island {
+    contain: layout style;
+    transform: translateZ(0);
+    will-change: width;
+    isolation: isolate;
+  }
+
+  .sessions-collapse-ghost {
+    animation-name: xero-sessions-collapse-ghost;
+    animation-timing-function: var(--motion-ease-in);
+    animation-fill-mode: both;
+    contain: layout paint style;
+    transform: translateZ(0);
+    will-change: transform, opacity;
+  }
+
+  /* Apply to elements that animate transform/opacity for slides — keeps them
+   * on their own composite layer so the browser can re-composite without
+   * repainting. */
+  .gpu-layer {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+
+  .workflow-view-pane {
+    contain: layout paint style;
+    isolation: isolate;
+  }
+
+  .workflow-empty-state {
+    contain: layout paint style;
+    isolation: isolate;
+  }
+
+  /* Containment for the main content area so a sidebar's width change
+   * doesn't propagate paint invalidation up to the root and back down through
+   * heavy children (editors, file trees, agent UIs). */
+  .shell-main-row {
+    contain: layout paint;
+  }
+
+  .xero-loading-ring {
+    animation: xero-loading-ring 2200ms cubic-bezier(0.2, 0, 0, 1) infinite;
+    will-change: transform, opacity;
+  }
+
+  .xero-loading-breathe {
+    animation: xero-loading-breathe 2200ms ease-in-out infinite;
+    will-change: opacity;
+  }
+
+  .xero-update-progress[data-indeterminate='true'] [data-slot='progress-indicator'] {
+    animation: xero-update-progress-indeterminate 1200ms ease-in-out infinite;
+    transform: translateX(-90%) scaleX(0.45) !important;
+    transform-origin: left center;
+  }
+
+  @keyframes xero-loading-ring {
+    0% {
+      transform: scale(0.6);
+      opacity: 0;
+    }
+    25% {
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1.5);
+      opacity: 0;
+    }
+  }
+
+  @keyframes xero-loading-breathe {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @keyframes xero-update-progress-indeterminate {
+    0% {
+      transform: translateX(-90%) scaleX(0.45);
+    }
+    50% {
+      transform: translateX(50%) scaleX(0.45);
+    }
+    100% {
+      transform: translateX(220%) scaleX(0.45);
+    }
+  }
+
+  /* Caret rendered at the tail of the assistant's streaming response.
+   * Uses a smooth ease-in-out fade (rather than a hard step blink) plus a
+   * faint primary halo so the caret reads as "alive" instead of just toggling
+   * on/off. Opacity-only animation keeps it on its own composite layer. */
+  .agent-stream-caret {
+    animation: agent-stream-caret-blink 1100ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    box-shadow: 0 0 5px color-mix(in oklab, var(--primary) 55%, transparent);
+    will-change: opacity;
+  }
+
+  @keyframes agent-stream-caret-blink {
+    0%,
+    100% {
+      opacity: 0.95;
+    }
+    50% {
+      opacity: 0.2;
+    }
+  }
+
+  /* Soft halo around the agent avatar while the agent is mid-stream — gives
+   * the icon a quiet "alive" feel without flashing or distracting the eye. */
+  .agent-avatar-pulse::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 9999px;
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
+    animation: agent-avatar-pulse 1800ms ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes agent-avatar-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 4px color-mix(in oklab, var(--primary) 18%, transparent);
+    }
+  }
+
+  /* Thinking dots — each dot performs one quick hop within a small slice of a
+   * 1200 ms cycle and rests for the remainder. With the dots delayed 0 / 400 /
+   * 800 ms apart (cycle/3), only one dot is airborne at a time, so the row
+   * reads as a clear left-to-right wave instead of a synchronous pulse. */
+  .agent-thinking-dot {
+    display: inline-block;
+    animation: agent-thinking-dot 1200ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    will-change: transform, opacity;
+  }
+
+  @keyframes agent-thinking-dot {
+    0%,
+    25%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.3;
+    }
+    12% {
+      transform: translateY(-6px);
+      opacity: 1;
+    }
+  }
+
+  /* Tool status icon "pop" — used when the icon transitions to a terminal
+   * state (succeeded or failed). A small overshoot makes the success/failure
+   * land with a tactile beat without being disruptive. Skipped under
+   * prefers-reduced-motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .tool-status-icon-pop {
+      animation: tool-status-icon-pop 320ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+  }
+
+  @keyframes tool-status-icon-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.55);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.15);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Conversation turn entrance — fades in with a small upward drift and a
+   * micro scale so each new message / tool call settles in rather than
+   * snapping into place. Used for assistant messages, tool rows, action
+   * groups and notice rows. The global reduced-motion handler at the bottom
+   * of this file collapses this to a 1ms tick when the user opts out. */
+  .agent-turn-soft-enter {
+    animation: agent-turn-soft-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  @keyframes agent-turn-soft-enter {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 5px, 0) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  /* Staggered entrance for siblings inside an expanded action group, detail
+   * rows, etc. Pair with `style={{ ['--stagger-index']: i }}` per child;
+   * delay caps so very long lists don't feel sluggish. */
+  .agent-stagger-child {
+    animation: agent-turn-soft-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: calc(min(var(--stagger-index, 0), 8) * 32ms);
+    will-change: transform, opacity;
+  }
+
+  /* One-shot soft halo replayed when a tool transitions to a terminal state.
+   * Renders absolutely-positioned around the status icon so the surrounding
+   * row layout is unaffected. `forwards` keeps the final faded-out frame
+   * once the animation completes. */
+  .agent-tool-flash {
+    position: absolute;
+    inset: -3px;
+    border-radius: 9999px;
+    pointer-events: none;
+    opacity: 0;
+    animation: agent-tool-flash 720ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    will-change: transform, opacity;
+  }
+
+  .agent-tool-flash[data-tone='success'] {
+    background: radial-gradient(
+      closest-side,
+      color-mix(in oklab, var(--success) 32%, transparent) 0%,
+      transparent 75%
+    );
+  }
+
+  .agent-tool-flash[data-tone='failure'] {
+    background: radial-gradient(
+      closest-side,
+      color-mix(in oklab, var(--destructive) 30%, transparent) 0%,
+      transparent 75%
+    );
+  }
+
+  @keyframes agent-tool-flash {
+    0% {
+      opacity: 0;
+      transform: scale(0.55);
+    }
+    35% {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.45);
+    }
+  }
+
+  /* Subtle breathing tint on the row of a currently-running tool. Layered
+   * over the existing `bg-primary/[0.025]` so the row keeps its soft primary
+   * wash even when motion is disabled. */
+  .agent-tool-running-row {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklab, var(--primary) 4%, transparent) 50%,
+      transparent 100%
+    );
+    background-size: 220% 100%;
+    background-repeat: no-repeat;
+    animation: agent-tool-running-shimmer 2600ms ease-in-out infinite;
+  }
+
+  @keyframes agent-tool-running-shimmer {
+    0%,
+    100% {
+      background-position: 0% 0;
+    }
+    50% {
+      background-position: 100% 0;
+    }
+  }
+
+  /* When `<html>` carries `data-layout-shifting`, the harness is in the
+   * middle of a tab switch (or another change that shifts multiple sidebars
+   * + the main content at once). Snap sidebar widths instead of animating
+   * them — the smooth pane cross-fade is enough visual feedback, and the
+   * extra simultaneous layout work was causing visible jitter on slower
+   * hosts. User-initiated toggles still animate normally. */
+  html[data-layout-shifting='true'] .sidebar-motion-island,
+  html[data-layout-shifting='true'] .sidebar-peek-island {
+    transition: none !important;
+  }
+
+  html[data-layout-shifting='true'] .sidebar-layout-island,
+  html[data-layout-shifting='true'] .rail-content-reveal,
+  html[data-layout-shifting='true'] .motion-panel {
+    transition: none !important;
+  }
+
+  @keyframes xero-sessions-collapse-ghost {
+    from {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      opacity: 0;
+      transform: translate3d(calc(-100% + 6px), 0, 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sessions-collapse-ghost {
+      animation-duration: 1ms !important;
+    }
+  }
+
+  /* Keep inactive view panes from re-laying out their heavy children every
+   * frame as the main content's width changes during a sidebar animation.
+   * `contain: layout paint` isolates internal layout/paint; combined with
+   * the panes already using transform-gpu, the inactive panes stay on their
+   * own composite layer and don't fight the active pane for main-thread
+   * time. */
+  .view-pane {
+    contain: layout paint;
+  }
+
+  .agent-pane-shell {
+    contain: layout paint style;
+    isolation: isolate;
+  }
+
+  .agent-pane-shell[data-pane-focused='false'] {
+    content-visibility: auto;
+    contain-intrinsic-size: 360px 320px;
+  }
+
+  /* Background pane that has an actively working agent — pulsing glow draws
+   * the eye without being noisy. Applied via className only on non-focused
+   * panes, so the focused pane keeps its calmer selected style. */
+  .agent-pane-shell-working {
+    animation: agent-pane-shell-working-pulse 2200ms ease-in-out infinite;
+    will-change: box-shadow;
+  }
+
+  @keyframes agent-pane-shell-working-pulse {
+    0%,
+    100% {
+      box-shadow:
+        0 0 0 1px hsl(var(--primary) / 0.22),
+        0 0 8px hsl(var(--primary) / 0.12);
+    }
+    50% {
+      box-shadow:
+        0 0 0 1px hsl(var(--primary) / 0.55),
+        0 0 18px hsl(var(--primary) / 0.32);
+    }
+  }
+
+  /* Background pane whose agent just finished — bright, static border flags
+   * "ready for you" until the user focuses the pane. Intentionally brighter
+   * than the focused style; focusing the pane clears this state. */
+  .agent-pane-shell-attention {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.55),
+      0 0 14px hsl(var(--primary) / 0.28);
+  }
+
+  /* User message bubble entrance — combines a soft fade with a small inward
+   * drift from the right and a micro scale, so the right-aligned bubble lands
+   * with a tactile beat. Stacks under the parent turn's `agent-turn-soft-enter`
+   * which handles the row-level opacity/translate. */
+  .agent-user-bubble-enter {
+    animation: agent-user-bubble-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    transform-origin: 100% 50%;
+    will-change: transform, opacity;
+  }
+
+  @keyframes agent-user-bubble-enter {
+    from {
+      opacity: 0;
+      transform: translate3d(6px, 0, 0) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  /* Copy button — pops the success check in with a small overshoot when the
+   * copy succeeds, then settles. Pair with `key={copied}` on the icon so the
+   * animation only fires on the false→true transition. */
+  .agent-copy-icon-pop {
+    animation: agent-copy-icon-pop 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  @keyframes agent-copy-icon-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.55) rotate(-12deg);
+    }
+    55% {
+      opacity: 1;
+      transform: scale(1.18) rotate(0deg);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1) rotate(0deg);
+    }
+  }
+
+  /* One-shot horizontal shake when a hard failure renders. Three quick beats
+   * within ~360ms, then settles. Subtle (±4px) — meant to register the failure
+   * without being visually loud. */
+  .agent-failure-shake {
+    animation: agent-failure-shake 380ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    will-change: transform;
+  }
+
+  @keyframes agent-failure-shake {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    15% {
+      transform: translate3d(-4px, 0, 0);
+    }
+    30% {
+      transform: translate3d(3px, 0, 0);
+    }
+    45% {
+      transform: translate3d(-2px, 0, 0);
+    }
+    60% {
+      transform: translate3d(1px, 0, 0);
+    }
+    75% {
+      transform: translate3d(-1px, 0, 0);
+    }
+  }
+
+  /* Agent empty session entrance — mirrors the workflow canvas empty state so
+   * the whole block fades in as one surface instead of staggered child rows. */
+  .agent-empty-fade-in {
+    animation: agent-empty-state-enter 340ms cubic-bezier(0.2, 0, 0, 1) both;
+    will-change: opacity, transform, filter;
+  }
+
+  @keyframes agent-empty-state-enter {
+    from {
+      transform: translate3d(0, 14px, 0) scale(0.94);
+      opacity: 0;
+      filter: blur(4px);
+    }
+
+    to {
+      transform: translate3d(0, 0, 0) scale(1);
+      opacity: 1;
+      filter: blur(0);
+    }
+  }
+
+  /* Composer dock — soft, focus-within glow that grows from the underlying
+   * border color. The transition is on box-shadow only so layout stays stable;
+   * the receive-keystrokes wash makes the prompt area feel responsive without
+   * a hard color flip. */
+  .agent-composer-glow {
+    transition:
+      border-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
+      box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .agent-composer-glow:focus-within {
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--primary) 16%, transparent),
+      0 8px 24px -12px color-mix(in oklab, var(--primary) 28%, transparent);
+  }
+
+  /* Send button — micro lift on hover when the button is interactive. The
+   * arrow nudges up 1px and brightens slightly so the affordance reads as
+   * "actionable" rather than just a flat icon. Disabled state stays flat. */
+  .agent-send-button:not(:disabled):hover [data-send-icon],
+  .agent-send-button:not(:disabled):focus-visible [data-send-icon] {
+    transform: translate3d(0, -1px, 0);
+  }
+
+  .agent-send-button:not(:disabled):active [data-send-icon] {
+    transform: translate3d(0, 0, 0) scale(0.92);
+  }
+
+  [data-send-icon] {
+    transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+
+  /* Action-prompt "Resolved" / "Sending…" tags — small badge pop that lands
+   * the status chip when the card finalizes. Subtle so it doesn't dominate
+   * the row but still feels like a confirmation. */
+  .agent-prompt-status-pop {
+    animation: agent-prompt-status-pop 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  @keyframes agent-prompt-status-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.7);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.08);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Handoff notice button hover — gentle lift + tightened shadow so the
+   * "continued in a fresh session" affordance reads as clickable. */
+  .agent-handoff-notice {
+    transition:
+      background-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+      border-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .agent-handoff-notice:hover,
+  .agent-handoff-notice:focus-visible {
+    transform: translate3d(0, -1px, 0);
+    box-shadow: 0 4px 14px -8px color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+
+  .agent-handoff-notice:active {
+    transform: translate3d(0, 0, 0);
+    box-shadow: none;
+    transition-duration: 80ms;
+  }
+
+  /* Suggestion row hover — caret slides into view on the right to signal the
+   * row is actionable, and the icon shifts an imperceptible 1px forward to
+   * pair with the foreground/40 → primary color shift. */
+  .agent-suggestion-row [data-suggestion-icon] {
+    transition:
+      color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .agent-suggestion-row:hover [data-suggestion-icon],
+  .agent-suggestion-row:focus-visible [data-suggestion-icon] {
+    transform: translate3d(1px, 0, 0);
+  }
+
+  .agent-suggestion-row [data-suggestion-caret] {
+    transition:
+      opacity 180ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity: 0;
+    transform: translate3d(-4px, 0, 0);
+  }
+
+  .agent-suggestion-row:hover [data-suggestion-caret],
+  .agent-suggestion-row:focus-visible [data-suggestion-caret] {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* Tauri custom titlebar drag regions */
+[data-tauri-drag-region],
+.titlebar-drag-region {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag,
+.titlebar-no-drag *,
+[data-titlebar-no-drag='true'],
+[data-titlebar-no-drag='true'] * {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-sidebar::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--sidebar) 85%, white 15%) !important;
+  background-image: none !important;
+}
+
+.scrollbar-sidebar::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--sidebar) 75%, white 25%) !important;
+  background-image: none !important;
+}
+
+.scrollbar-sidebar {
+  scrollbar-color: color-mix(in oklab, var(--sidebar) 85%, white 15%) transparent;
+}

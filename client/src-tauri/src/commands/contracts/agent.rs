@@ -8,7 +8,13 @@ use crate::db::project_store::{
     AgentMessageRecord, AgentRunRecord, AgentRunSnapshotRecord, AgentToolCallRecord,
 };
 
-use super::runtime::{RuntimeAgentIdDto, RuntimeRunControlInputDto, RuntimeRunDiagnosticDto};
+use super::{
+    runtime::{
+        ProviderModelThinkingEffortDto, RuntimeAgentIdDto, RuntimeRunControlInputDto,
+        RuntimeRunDiagnosticDto, StagedAgentAttachmentDto,
+    },
+    workflow_agents::AgentRefDto,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +70,7 @@ pub enum AgentRunEventKindDto {
     RunPaused,
     RunCompleted,
     RunFailed,
+    SubagentLifecycle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -149,6 +156,7 @@ pub struct AgentFileChangeDto {
     pub top_level_run_id: String,
     pub subagent_id: Option<String>,
     pub subagent_role: Option<String>,
+    pub change_group_id: Option<String>,
     pub path: String,
     pub operation: String,
     pub old_hash: Option<String>,
@@ -250,9 +258,13 @@ pub struct AgentRunSummaryDto {
 pub struct StartAgentTaskRequestDto {
     pub project_id: String,
     pub agent_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<RuntimeRunControlInputDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<StagedAgentAttachmentDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -260,6 +272,8 @@ pub struct StartAgentTaskRequestDto {
 pub struct SendAgentMessageRequestDto {
     pub run_id: String,
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<StagedAgentAttachmentDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<AgentAutoCompactPreferenceDto>,
 }
@@ -534,6 +548,7 @@ fn agent_file_change_dto(file_change: AgentFileChangeRecord) -> AgentFileChangeD
         top_level_run_id: file_change.top_level_run_id,
         subagent_id: file_change.subagent_id,
         subagent_role: file_change.subagent_role,
+        change_group_id: file_change.change_group_id,
         path: file_change.path,
         operation: file_change.operation,
         old_hash: file_change.old_hash,
@@ -589,18 +604,35 @@ pub enum AgentDefinitionScopeDto {
 #[serde(rename_all = "snake_case")]
 pub enum AgentDefinitionLifecycleStateDto {
     Draft,
+    Valid,
     Active,
     Archived,
+    Blocked,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentDefinitionBaseCapabilityProfileDto {
     ObserveOnly,
+    ComputerUse,
+    Planning,
+    RepositoryRecon,
     Engineering,
     Debugging,
     AgentBuilder,
-    HarnessTest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentDefaultModelDto {
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -617,6 +649,8 @@ pub struct AgentDefinitionSummaryDto {
     pub created_at: String,
     pub updated_at: String,
     pub is_built_in: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<AgentDefaultModelDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -654,10 +688,121 @@ pub struct ArchiveAgentDefinitionRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveAgentDefinitionRequestDto {
+    pub project_id: String,
+    pub definition: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_id: Option<String>,
+    /// When true, the runtime returns a pre-save approval review payload
+    /// (xero.agent_definition_pre_save_review.v1) instead of persisting. Used
+    /// by the canvas Save flow to show the operator what would change before
+    /// they approve the write.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateAgentDefinitionRequestDto {
+    pub project_id: String,
+    pub definition_id: String,
+    pub definition: JsonValue,
+    /// When true, the runtime returns a pre-save approval review payload
+    /// instead of persisting. See SaveAgentDefinitionRequestDto::dry_run.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreviewAgentDefinitionRequestDto {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_id: Option<String>,
+    pub definition: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetAgentDefaultModelRequestDto {
+    pub project_id: String,
+    pub r#ref: AgentRefDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<AgentDefaultModelDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetAgentDefaultModelResponseDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<AgentDefaultModelDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDefinitionValidationStatusDto {
+    Valid,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentDefinitionValidationDiagnosticDto {
+    pub code: String,
+    pub message: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied_tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied_effect_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_capability_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentDefinitionValidationReportDto {
+    pub status: AgentDefinitionValidationStatusDto,
+    pub diagnostics: Vec<AgentDefinitionValidationDiagnosticDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentDefinitionWriteResponseDto {
+    pub applied: bool,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<AgentDefinitionSummaryDto>,
+    pub validation: AgentDefinitionValidationReportDto,
+    /// True when the runtime gated the write behind operator approval and the
+    /// caller must re-issue with dry_run=false to actually persist.
+    #[serde(default)]
+    pub approval_required: bool,
+    /// Structured pre-save review (xero.agent_definition_pre_save_review.v1)
+    /// when approval_required is true; null when the call applied directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_review: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GetAgentDefinitionVersionRequestDto {
     pub project_id: String,
     pub definition_id: String,
     pub version: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetAgentDefinitionVersionDiffRequestDto {
+    pub project_id: String,
+    pub definition_id: String,
+    pub from_version: u32,
+    pub to_version: u32,
 }
 
 pub fn agent_definition_summary_dto(record: AgentDefinitionRecord) -> AgentDefinitionSummaryDto {
@@ -676,6 +821,7 @@ pub fn agent_definition_summary_dto(record: AgentDefinitionRecord) -> AgentDefin
         created_at: record.created_at,
         updated_at: record.updated_at,
         is_built_in,
+        default_model: None,
     }
 }
 
@@ -720,7 +866,9 @@ fn parse_agent_definition_scope(value: &str) -> AgentDefinitionScopeDto {
 fn parse_agent_definition_lifecycle_state(value: &str) -> AgentDefinitionLifecycleStateDto {
     match value {
         "draft" => AgentDefinitionLifecycleStateDto::Draft,
+        "valid" => AgentDefinitionLifecycleStateDto::Valid,
         "archived" => AgentDefinitionLifecycleStateDto::Archived,
+        "blocked" => AgentDefinitionLifecycleStateDto::Blocked,
         _ => AgentDefinitionLifecycleStateDto::Active,
     }
 }
@@ -729,10 +877,12 @@ fn parse_agent_definition_base_capability_profile(
     value: &str,
 ) -> AgentDefinitionBaseCapabilityProfileDto {
     match value {
+        "planning" => AgentDefinitionBaseCapabilityProfileDto::Planning,
+        "computer_use" => AgentDefinitionBaseCapabilityProfileDto::ComputerUse,
+        "repository_recon" => AgentDefinitionBaseCapabilityProfileDto::RepositoryRecon,
         "engineering" => AgentDefinitionBaseCapabilityProfileDto::Engineering,
         "debugging" => AgentDefinitionBaseCapabilityProfileDto::Debugging,
         "agent_builder" => AgentDefinitionBaseCapabilityProfileDto::AgentBuilder,
-        "harness_test" => AgentDefinitionBaseCapabilityProfileDto::HarnessTest,
         _ => AgentDefinitionBaseCapabilityProfileDto::ObserveOnly,
     }
 }

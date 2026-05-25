@@ -1,6 +1,4 @@
-//! Flat per-provider credential store. Replaces the legacy
-//! `provider_profiles` / `provider_profile_credentials` /
-//! `openai_codex_sessions` triplet with a single row per provider.
+//! Flat per-provider credential store with a single row per provider.
 
 pub mod readiness;
 pub mod sql;
@@ -14,7 +12,8 @@ pub use sql::{
 pub use view::{
     load_provider_credentials_view_or_default, ProviderApiKeyCredentialEntry,
     ProviderCredentialLink, ProviderCredentialProfile, ProviderCredentialReadinessProjection,
-    ProviderCredentialReadinessStatus, ProviderCredentialsView, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    ProviderCredentialReadinessStatus, ProviderCredentialsView, CURSOR_DEFAULT_PROFILE_ID,
+    OPENAI_CODEX_DEFAULT_PROFILE_ID, XAI_DEFAULT_PROFILE_ID,
 };
 
 use serde::{Deserialize, Serialize};

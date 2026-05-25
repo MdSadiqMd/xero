@@ -40,10 +40,12 @@ import {
 } from './notification-health'
 import {
   buildComposerModelOptions,
+  displayNameForProviderModel,
   getAgentMessagesUnavailableCredentialReason,
   getAgentRuntimeRunUnavailableCredentialReason,
   getAgentSessionUnavailableCredentialReason,
   getProviderModelCatalogForProvider,
+  isSelectableXaiComposerModelId,
   isAgentRuntimeBlocked,
   resolveSelectedModel,
   type ComposerModelOptionView,
@@ -92,6 +94,7 @@ interface AgentRunControlProjection {
   selectedModelId: string | null
   selectedThinkingEffort: ProviderModelThinkingEffortDto | null
   selectedApprovalMode: RuntimeRunApprovalModeDto
+  selectedAutoCompactEnabled: boolean
   selectedPrompt: {
     text: string | null
     queuedAt: string | null
@@ -200,6 +203,9 @@ function getAgentRunControlProjection(
     selectedApprovalMode: useRuntimeRunTruth
       ? selectedControls?.approvalMode ?? DEFAULT_RUNTIME_RUN_APPROVAL_MODE
       : DEFAULT_RUNTIME_RUN_APPROVAL_MODE,
+    selectedAutoCompactEnabled: useRuntimeRunTruth
+      ? selectedControls?.autoCompactEnabled ?? true
+      : true,
     selectedPrompt: useRuntimeRunTruth
       ? {
           text: selectedControls?.queuedPrompt ?? null,
@@ -277,6 +283,10 @@ function buildOrphanedAgentProviderModel(
   if (trimmedModelId.length === 0) {
     return null
   }
+  const displayName = displayNameForProviderModel(providerId, {
+    modelId: trimmedModelId,
+    displayName: trimmedModelId,
+  })
 
   return {
     selectionKey: `${providerId}:${trimmedModelId}`,
@@ -285,8 +295,8 @@ function buildOrphanedAgentProviderModel(
     providerId,
     providerLabel,
     modelId: trimmedModelId,
-    label: trimmedModelId,
-    displayName: trimmedModelId,
+    label: displayName,
+    displayName,
     groupId: profileId ? `${profileId}:current_selection` : providerId === 'github_models' ? 'github_models_current_selection' : 'current_selection',
     groupLabel,
     availability: 'orphaned',
@@ -462,7 +472,7 @@ function buildAgentProviderModelCatalog(options: {
     providerId: option.providerId,
     providerLabel: option.providerLabel,
     modelId: option.modelId,
-    label: option.modelId,
+    label: option.displayName,
     displayName: option.displayName,
     groupId: option.providerId,
     groupLabel: option.providerLabel,
@@ -481,7 +491,15 @@ function buildAgentProviderModelCatalog(options: {
     options.selectedModel.modelId?.trim() ||
     catalog?.configuredModelId.trim() ||
     null
-  const selectedModelId = configuredModelId && configuredModelId.length > 0 ? configuredModelId : null
+  const fallbackModelId = providerId
+    ? models.find((model) => model.providerId === providerId)?.modelId ?? null
+    : null
+  const selectedModelId =
+    configuredModelId &&
+    configuredModelId.length > 0 &&
+    !(providerId === 'xai' && !isSelectableXaiComposerModelId(configuredModelId))
+      ? configuredModelId
+      : fallbackModelId
   const selectionKey =
     providerId && selectedModelId ? `${providerId}:${selectedModelId}` : null
   const discoveredSelected = selectionKey
@@ -660,16 +678,16 @@ export function buildAgentView({
 
   // Selected model + composer options + blocked flag (credentials-driven).
   const selectedRunControls = runtimeRun?.controls.selected ?? null
-  const selectedModel: SelectedModelView = resolveSelectedModel(
-    providerCredentials,
-    selectedRunControls,
-    { runtimeRun },
-  )
-  const { selectedProvider } = getSelectedProviderProjection(selectedModel)
   const composerModelOptions: ComposerModelOptionView[] = buildComposerModelOptions(
     providerCredentials,
     providerModelCatalogs,
   )
+  const selectedModel: SelectedModelView = resolveSelectedModel(
+    providerCredentials,
+    selectedRunControls,
+    { runtimeRun, composerModelOptions },
+  )
+  const { selectedProvider } = getSelectedProviderProjection(selectedModel)
   const agentRuntimeBlocked =
     providerCredentials !== null
       ? isAgentRuntimeBlocked(providerCredentials, selectedModel)
@@ -721,6 +739,7 @@ export function buildAgentView({
       selectedModelSelectionKey: providerModelCatalogProjection.selectedModelOption?.selectionKey ?? null,
       selectedThinkingEffort,
       selectedApprovalMode,
+      selectedAutoCompactEnabled: controlProjection.selectedAutoCompactEnabled,
       selectedPrompt: controlProjection.selectedPrompt,
       runtimeRunActiveControls: controlProjection.activeControls,
       runtimeRunPendingControls: controlProjection.pendingControls,

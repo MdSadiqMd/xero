@@ -1,5 +1,7 @@
 pub mod agent;
 pub mod autonomous;
+pub mod code_history;
+pub mod developer_tool_harness;
 pub mod dictation;
 pub mod error;
 pub mod mcp;
@@ -10,3 +12,5 @@ pub mod skills;
 pub mod surface;
 pub mod usage;
 pub mod workflow;
+pub mod workflow_agents;
+pub mod workflows;

@@ -73,6 +73,8 @@ export function useXeroDesktopMutations(
     deleteProviderCredential,
     startOAuthLogin,
     completeOAuthCallback,
+    startXaiDeviceCodeLogin,
+    pollXaiDeviceCodeLogin,
   } = useProviderCredentialsMutations(args)
   const {
     createAgentSession,
@@ -134,6 +136,8 @@ export function useXeroDesktopMutations(
     deleteProviderCredential,
     startOAuthLogin,
     completeOAuthCallback,
+    startXaiDeviceCodeLogin,
+    pollXaiDeviceCodeLogin,
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,

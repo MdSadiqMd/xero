@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { isoTimestampSchema, nonEmptyOptionalTextSchema, normalizeOptionalText, normalizeText } from './shared'
-import { getRuntimeAgentLabel, runtimeAgentIdSchema, runtimeRunControlInputSchema, runtimeRunDiagnosticSchema } from './runtime'
+import { isoTimestampSchema, nonEmptyOptionalTextSchema, normalizeOptionalText, normalizeText } from '@xero/ui/model/shared'
+import { getRuntimeAgentLabel, runtimeAgentIdSchema, runtimeRunControlInputSchema, runtimeRunDiagnosticSchema } from '@xero/ui/model/runtime'
 
 export const agentRunStatusSchema = z.enum([
   'starting',
@@ -33,6 +33,7 @@ export const agentRunEventKindSchema = z.enum([
   'run_paused',
   'run_completed',
   'run_failed',
+  'subagent_lifecycle',
 ])
 export const agentToolCallStateSchema = z.enum(['pending', 'running', 'succeeded', 'failed'])
 export const agentFileChangeOperationSchema = z.enum([
@@ -65,7 +66,26 @@ export const agentActionRequestStatusSchema = z.enum([
 ])
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/)
 const traceIdSchema = z.string().regex(/^[0-9a-f]{32}$/)
+const jsonObjectSchema = z.record(z.string(), z.unknown())
 const agentRunLineageKindSchema = z.enum(['top_level', 'subagent_child'])
+const addDuplicateStringIssues = (
+  ctx: z.RefinementCtx,
+  path: (string | number)[],
+  values: string[],
+  message: string,
+) => {
+  const seen = new Set<string>()
+  values.forEach((value, index) => {
+    if (seen.has(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path, index],
+        message,
+      })
+    }
+    seen.add(value)
+  })
+}
 const subagentRoleSchema = z.enum([
   'engineer',
   'debugger',
@@ -107,6 +127,23 @@ export const agentMessageSchema = z
     attachments: z.array(agentMessageAttachmentSchema).default([]),
   })
   .strict()
+  .superRefine((message, ctx) => {
+    addDuplicateStringIssues(
+      ctx,
+      ['attachments'],
+      message.attachments.map((attachment) => String(attachment.id)),
+      'Agent message attachment ids must be unique.',
+    )
+    message.attachments.forEach((attachment, index) => {
+      if (attachment.messageId !== message.id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attachments', index, 'messageId'],
+          message: 'Agent message attachments must reference the enclosing message id.',
+        })
+      }
+    })
+  })
 
 export const agentRunEventSchema = z
   .object({
@@ -143,6 +180,7 @@ export const agentFileChangeSchema = z
     topLevelRunId: z.string().trim().min(1),
     subagentId: z.string().trim().min(1).nullable().optional(),
     subagentRole: subagentRoleSchema.nullable().optional(),
+    changeGroupId: z.string().trim().min(1).nullable().optional(),
     path: z.string().trim().min(1),
     operation: agentFileChangeOperationSchema,
     oldHash: sha256Schema.nullable().optional(),
@@ -178,7 +216,7 @@ export const agentActionRequestSchema = z
   })
   .strict()
 
-export const agentRunSchema = z
+const agentRunBaseSchema = z
   .object({
     runtimeAgentId: runtimeAgentIdSchema,
     agentDefinitionId: z.string().trim().min(1),
@@ -213,7 +251,140 @@ export const agentRunSchema = z
   })
   .strict()
 
-export const agentRunSummarySchema = agentRunSchema
+type AgentRunLineageFields = Pick<
+  z.infer<typeof agentRunBaseSchema>,
+  'lineageKind' | 'parentRunId' | 'parentTraceId' | 'parentSubagentId' | 'subagentRole'
+>
+
+const validateAgentRunLineage = (run: AgentRunLineageFields, ctx: z.RefinementCtx) => {
+  if (run.lineageKind === 'top_level') {
+    if (run.parentRunId || run.parentTraceId || run.parentSubagentId || run.subagentRole) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['lineageKind'],
+        message: 'Top-level agent runs must not include parent subagent lineage.',
+      })
+    }
+  } else {
+    if (!run.parentRunId || !run.parentTraceId || !run.parentSubagentId || !run.subagentRole) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['lineageKind'],
+        message: 'Subagent child runs must include parent run, trace, subagent id, and role.',
+      })
+    }
+  }
+}
+
+const validateAgentRunCollections = (
+  run: z.infer<typeof agentRunBaseSchema>,
+  ctx: z.RefinementCtx,
+) => {
+  addDuplicateStringIssues(
+    ctx,
+    ['messages'],
+    run.messages.map((message) => String(message.id)),
+    'Agent run message ids must be unique.',
+  )
+  addDuplicateStringIssues(
+    ctx,
+    ['events'],
+    run.events.map((event) => String(event.id)),
+    'Agent run event ids must be unique.',
+  )
+  addDuplicateStringIssues(
+    ctx,
+    ['toolCalls'],
+    run.toolCalls.map((toolCall) => toolCall.toolCallId),
+    'Agent run tool call ids must be unique.',
+  )
+  addDuplicateStringIssues(
+    ctx,
+    ['fileChanges'],
+    run.fileChanges.map((fileChange) => String(fileChange.id)),
+    'Agent run file change ids must be unique.',
+  )
+  addDuplicateStringIssues(
+    ctx,
+    ['checkpoints'],
+    run.checkpoints.map((checkpoint) => String(checkpoint.id)),
+    'Agent run checkpoint ids must be unique.',
+  )
+  addDuplicateStringIssues(
+    ctx,
+    ['actionRequests'],
+    run.actionRequests.map((actionRequest) => actionRequest.actionId),
+    'Agent run action request ids must be unique.',
+  )
+  run.messages.forEach((message, index) => {
+    if (message.projectId !== run.projectId || message.runId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['messages', index],
+        message: 'Agent run messages must match the enclosing project and run id.',
+      })
+    }
+  })
+  run.events.forEach((event, index) => {
+    if (event.projectId !== run.projectId || event.runId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['events', index],
+        message: 'Agent run events must match the enclosing project and run id.',
+      })
+    }
+  })
+  run.toolCalls.forEach((toolCall, index) => {
+    if (toolCall.projectId !== run.projectId || toolCall.runId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['toolCalls', index],
+        message: 'Agent run tool calls must match the enclosing project and run id.',
+      })
+    }
+  })
+  run.fileChanges.forEach((fileChange, index) => {
+    if (fileChange.projectId !== run.projectId || fileChange.runId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fileChanges', index],
+        message: 'Agent run file changes must match the enclosing project and run id.',
+      })
+    }
+    if (run.lineageKind === 'top_level' && fileChange.topLevelRunId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fileChanges', index, 'topLevelRunId'],
+        message: 'Top-level run file changes must identify the enclosing run as topLevelRunId.',
+      })
+    }
+  })
+  run.checkpoints.forEach((checkpoint, index) => {
+    if (checkpoint.projectId !== run.projectId || checkpoint.runId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['checkpoints', index],
+        message: 'Agent run checkpoints must match the enclosing project and run id.',
+      })
+    }
+  })
+  run.actionRequests.forEach((actionRequest, index) => {
+    if (actionRequest.projectId !== run.projectId || actionRequest.runId !== run.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['actionRequests', index],
+        message: 'Agent run action requests must match the enclosing project and run id.',
+      })
+    }
+  })
+}
+
+export const agentRunSchema = agentRunBaseSchema.superRefine((run, ctx) => {
+  validateAgentRunLineage(run, ctx)
+  validateAgentRunCollections(run, ctx)
+})
+
+export const agentRunSummarySchema = agentRunBaseSchema
   .omit({
     systemPrompt: true,
     lastHeartbeatAt: true,
@@ -225,6 +396,9 @@ export const agentRunSummarySchema = agentRunSchema
     actionRequests: true,
   })
   .strict()
+  .superRefine((run, ctx) => {
+    validateAgentRunLineage(run, ctx)
+  })
 
 export const startAgentTaskRequestSchema = z
   .object({
@@ -280,14 +454,14 @@ export const exportAgentTraceRequestSchema = z
 
 export const agentTraceExportSchema = z
   .object({
-    trace: z.unknown(),
-    timeline: z.unknown(),
-    diagnostics: z.unknown(),
-    qualityGates: z.unknown(),
-    productionReadiness: z.unknown(),
-    markdownSummary: z.string(),
-    supportBundle: z.unknown().nullable().optional(),
-    canonicalTrace: z.unknown(),
+    trace: jsonObjectSchema,
+    timeline: jsonObjectSchema,
+    diagnostics: jsonObjectSchema,
+    qualityGates: jsonObjectSchema,
+    productionReadiness: jsonObjectSchema,
+    markdownSummary: z.string().trim().min(1),
+    supportBundle: jsonObjectSchema.nullable().optional(),
+    canonicalTrace: jsonObjectSchema,
   })
   .strict()
 
@@ -303,6 +477,14 @@ export const listAgentRunsResponseSchema = z
     runs: z.array(agentRunSummarySchema),
   })
   .strict()
+  .superRefine((response, ctx) => {
+    addDuplicateStringIssues(
+      ctx,
+      ['runs'],
+      response.runs.map((run) => run.runId),
+      'Agent run list response run ids must be unique.',
+    )
+  })
 
 export const subscribeAgentStreamRequestSchema = z
   .object({

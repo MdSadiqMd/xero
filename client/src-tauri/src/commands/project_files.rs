@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, HashSet},
     fmt::Write as _,
     fs,
     io::{ErrorKind, Read},
@@ -6,6 +7,7 @@ use std::{
 };
 
 use ignore::{DirEntry, WalkBuilder};
+use pulldown_cmark::{Event, Options as MarkdownOptions, Parser, Tag};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Runtime, State};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -15,15 +17,19 @@ use crate::{
         backend_jobs::BackendCancellationToken,
         payload_budget::{
             estimate_serialized_payload_bytes, payload_budget_diagnostic,
-            PROJECT_TREE_BUDGET_BYTES, PROJECT_TREE_NODE_BUDGET,
+            PROJECT_FILE_INDEX_BUDGET_BYTES, PROJECT_TREE_BUDGET_BYTES, PROJECT_TREE_NODE_BUDGET,
         },
         project_assets::{ProjectAssetGrant, ProjectAssetState},
         validate_non_empty, CommandError, CommandResult, CreateProjectEntryRequestDto,
-        CreateProjectEntryResponseDto, DeleteProjectEntryResponseDto, ListProjectFilesRequestDto,
-        ListProjectFilesResponseDto, MoveProjectEntryRequestDto, MoveProjectEntryResponseDto,
-        ProjectEntryKindDto, ProjectFileNodeDto, ProjectFileRendererKindDto, ProjectFileRequestDto,
-        ReadProjectFileResponseDto, RenameProjectEntryRequestDto, RenameProjectEntryResponseDto,
-        WriteProjectFileRequestDto, WriteProjectFileResponseDto,
+        CreateProjectEntryResponseDto, DeleteProjectEntryResponseDto,
+        ListProjectFileIndexRequestDto, ListProjectFileIndexResponseDto,
+        ListProjectFilesRequestDto, ListProjectFilesResponseDto, MoveProjectEntryRequestDto,
+        MoveProjectEntryResponseDto, ProjectEntryKindDto, ProjectFileIndexEntryDto,
+        ProjectFileNodeDto, ProjectFilePreviewDto, ProjectFileRendererKindDto,
+        ProjectFileRequestDto, ProjectFileStatDto, ProjectFileTreeNodeDto, ProjectFileTreeStatsDto,
+        ProjectFileTreeViewDto, ProjectMarkdownAssetRefDto, ReadProjectFileResponseDto,
+        RenameProjectEntryRequestDto, RenameProjectEntryResponseDto, StatProjectFilesRequestDto,
+        StatProjectFilesResponseDto, WriteProjectFileRequestDto, WriteProjectFileResponseDto,
     },
     registry,
     state::DesktopState,
@@ -32,6 +38,11 @@ use crate::{
 pub(crate) const PROJECT_FILE_TEXT_SIZE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 pub(crate) const PROJECT_FILE_PREVIEW_SIZE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const EMPTY_CONTENT_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const CSV_PREVIEW_ROW_LIMIT: usize = 1_000;
+const CSV_PREVIEW_COLUMN_LIMIT: usize = 80;
+const MARKDOWN_ASSET_REF_LIMIT: usize = 128;
+const DEFAULT_PROJECT_FILE_INDEX_LIMIT: usize = 20_000;
+const HARD_PROJECT_FILE_INDEX_LIMIT: usize = 50_000;
 
 const SKIPPED_DIRECTORY_NAMES: &[&str] = &[
     ".git",
@@ -83,6 +94,7 @@ pub async fn list_project_files<R: Runtime>(
                 project_id,
                 path: normalized_path,
                 root: built_tree.root,
+                view: built_tree.view,
                 truncated: built_tree.truncated,
                 omitted_entry_count: built_tree.omitted_entry_count,
                 payload_budget: None,
@@ -98,6 +110,40 @@ pub async fn list_project_files<R: Runtime>(
             );
 
             Ok(response)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn list_project_file_index<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: ListProjectFileIndexRequestDto,
+) -> CommandResult<ListProjectFileIndexResponseDto> {
+    validate_non_empty(&request.project_id, "projectId")?;
+
+    let project_root = resolve_project_root(&app, &state, &request.project_id)?;
+    let limit = request
+        .limit
+        .map(|value| value.min(HARD_PROJECT_FILE_INDEX_LIMIT as u32) as usize)
+        .unwrap_or(DEFAULT_PROJECT_FILE_INDEX_LIMIT);
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    let include_hidden = request.include_hidden;
+    drop(app);
+
+    jobs.run_blocking_latest(
+        format!("project-file-index:{project_id}:{include_hidden}:{limit}"),
+        "project file index",
+        move |cancellation| {
+            build_project_file_index(
+                &project_root,
+                project_id,
+                include_hidden,
+                limit,
+                &cancellation,
+            )
         },
     )
     .await
@@ -126,7 +172,13 @@ pub async fn read_project_file<R: Runtime>(
         "project file read",
         move |cancellation| {
             cancellation.check_cancelled("project file read")?;
-            read_project_file_at_path(project_id, resolved_path, normalized_path, asset_state)
+            read_project_file_at_path(
+                project_id,
+                project_root,
+                resolved_path,
+                normalized_path,
+                asset_state,
+            )
         },
     )
     .await
@@ -134,6 +186,7 @@ pub async fn read_project_file<R: Runtime>(
 
 fn read_project_file_at_path(
     project_id: String,
+    project_root: PathBuf,
     resolved_path: PathBuf,
     normalized_path: String,
     asset_state: ProjectAssetState,
@@ -141,6 +194,7 @@ fn read_project_file_at_path(
     let metadata = read_metadata(&resolved_path)?;
     read_project_file_at_path_with_limits(
         project_id,
+        project_root,
         resolved_path,
         normalized_path,
         metadata,
@@ -151,6 +205,7 @@ fn read_project_file_at_path(
 
 fn read_project_file_at_path_with_limits(
     project_id: String,
+    project_root: PathBuf,
     resolved_path: PathBuf,
     normalized_path: String,
     metadata: fs::Metadata,
@@ -275,6 +330,17 @@ fn read_project_file_at_path_with_limits(
                 }
             };
 
+            let preview = project_file_preview(ProjectFilePreviewContext {
+                renderer_kind: &detected.renderer_kind,
+                text: &text,
+                resolved_path: &resolved_path,
+                project_id: &project_id,
+                project_root: &project_root,
+                normalized_path: &normalized_path,
+                asset_state: &asset_state,
+                preview_bytes: limits.preview_bytes,
+            });
+
             Ok(ReadProjectFileResponseDto::Text {
                 project_id,
                 path: normalized_path,
@@ -282,6 +348,7 @@ fn read_project_file_at_path_with_limits(
                 modified_at,
                 content_hash,
                 mime_type: detected.mime_type,
+                preview,
                 renderer_kind: detected.renderer_kind,
                 text,
             })
@@ -433,6 +500,274 @@ fn detect_project_file_type(path: &Path, sniff_bytes: &[u8]) -> DetectedProjectF
         },
         renderer_kind: ProjectFileRendererKindDto::Code,
         is_text,
+    }
+}
+
+struct ProjectFilePreviewContext<'a> {
+    renderer_kind: &'a ProjectFileRendererKindDto,
+    text: &'a str,
+    resolved_path: &'a Path,
+    project_id: &'a str,
+    project_root: &'a Path,
+    normalized_path: &'a str,
+    asset_state: &'a ProjectAssetState,
+    preview_bytes: u64,
+}
+
+fn project_file_preview(context: ProjectFilePreviewContext<'_>) -> Option<ProjectFilePreviewDto> {
+    match context.renderer_kind {
+        ProjectFileRendererKindDto::Csv => Some(csv_project_file_preview(
+            context.text,
+            csv_delimiter(context.resolved_path),
+        )),
+        ProjectFileRendererKindDto::Markdown => Some(markdown_project_file_preview(&context)),
+        _ => None,
+    }
+}
+
+fn csv_delimiter(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("tsv") => b'\t',
+        _ => b',',
+    }
+}
+
+fn csv_project_file_preview(text: &str, delimiter: u8) -> ProjectFilePreviewDto {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(delimiter)
+        .from_reader(text.as_bytes());
+    let mut headers = Vec::new();
+    let mut rows = Vec::new();
+    let mut total_rows = 0_u32;
+    let mut total_columns = 0_u32;
+    let mut truncated_rows = false;
+    let mut truncated_columns = false;
+
+    for record in reader.records() {
+        let Ok(record) = record else {
+            break;
+        };
+        total_rows = total_rows.saturating_add(1);
+        total_columns = total_columns.max(record.len().min(u32::MAX as usize) as u32);
+        if record.len() > CSV_PREVIEW_COLUMN_LIMIT {
+            truncated_columns = true;
+        }
+
+        let preview_row = record
+            .iter()
+            .take(CSV_PREVIEW_COLUMN_LIMIT)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if total_rows == 1 {
+            headers = preview_row;
+        } else if rows.len() < CSV_PREVIEW_ROW_LIMIT.saturating_sub(1) {
+            rows.push(preview_row);
+        } else {
+            truncated_rows = true;
+        }
+    }
+
+    ProjectFilePreviewDto::Csv {
+        headers,
+        rows,
+        total_rows,
+        total_columns,
+        truncated_rows,
+        truncated_columns,
+    }
+}
+
+fn markdown_project_file_preview(context: &ProjectFilePreviewContext<'_>) -> ProjectFilePreviewDto {
+    let mut seen_sources = HashSet::new();
+    let mut asset_refs = Vec::new();
+
+    for source in markdown_image_sources(context.text) {
+        if asset_refs.len() >= MARKDOWN_ASSET_REF_LIMIT {
+            break;
+        }
+        if !seen_sources.insert(source.clone()) {
+            continue;
+        }
+
+        let Some(path) = markdown_reference_project_path(context.normalized_path, &source) else {
+            continue;
+        };
+        let preview_url = markdown_asset_preview_url(
+            context.project_id,
+            context.project_root,
+            &path,
+            context.asset_state,
+            context.preview_bytes,
+        );
+        asset_refs.push(ProjectMarkdownAssetRefDto {
+            source,
+            path,
+            preview_url,
+        });
+    }
+
+    ProjectFilePreviewDto::Markdown { asset_refs }
+}
+
+fn markdown_image_sources(text: &str) -> Vec<String> {
+    let mut options = MarkdownOptions::empty();
+    options.insert(MarkdownOptions::ENABLE_TABLES);
+    options.insert(MarkdownOptions::ENABLE_STRIKETHROUGH);
+    options.insert(MarkdownOptions::ENABLE_TASKLISTS);
+
+    Parser::new_ext(text, options)
+        .filter_map(|event| match event {
+            Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn markdown_asset_preview_url(
+    project_id: &str,
+    project_root: &Path,
+    asset_path: &str,
+    asset_state: &ProjectAssetState,
+    preview_bytes: u64,
+) -> Option<String> {
+    let (resolved_path, normalized_path) =
+        resolve_virtual_path(project_root, asset_path, "markdownAssetPath", false).ok()?;
+    if normalized_path != asset_path {
+        return None;
+    }
+
+    let metadata = read_metadata(&resolved_path).ok()?;
+    if !metadata.is_file() || metadata.len() > preview_bytes {
+        return None;
+    }
+
+    let sniff_bytes = read_file_prefix(&resolved_path, SNIFF_BYTE_LIMIT).ok()?;
+    let detected = detect_project_file_type(&resolved_path, &sniff_bytes);
+    if detected.renderer_kind != ProjectFileRendererKindDto::Image {
+        return None;
+    }
+
+    let content_hash = sha256_file(&resolved_path).ok()?;
+    Some(asset_state.issue_preview_url(ProjectAssetGrant {
+        project_id: project_id.to_owned(),
+        path: normalized_path,
+        byte_length: metadata.len(),
+        modified_at: metadata_modified_at(&metadata),
+        content_hash,
+        mime_type: detected.mime_type,
+        renderer_kind: detected.renderer_kind,
+    }))
+}
+
+fn markdown_reference_project_path(file_path: &str, reference: &str) -> Option<String> {
+    let trimmed = reference.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("//")
+        || has_uri_scheme(trimmed)
+    {
+        return None;
+    }
+
+    let path_part = trimmed
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .replace('\\', "/");
+    if path_part.is_empty() {
+        return None;
+    }
+
+    let decoded = percent_decode_utf8(&path_part)?;
+    let base_path = if decoded.starts_with('/') {
+        decoded
+    } else {
+        let parent = parent_virtual_path(file_path);
+        if parent == "/" {
+            format!("/{decoded}")
+        } else {
+            format!("{parent}/{decoded}")
+        }
+    };
+
+    let mut segments = Vec::new();
+    for raw_segment in base_path.split('/') {
+        let segment = raw_segment.trim();
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            segments.pop()?;
+            continue;
+        }
+        segments.push(validate_entry_name(segment, "markdownAssetPath").ok()?);
+    }
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    Some(format!("/{}", segments.join("/")))
+}
+
+fn has_uri_scheme(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+
+    for character in chars {
+        if character == ':' {
+            return true;
+        }
+        if character == '/' || character == '?' || character == '#' {
+            return false;
+        }
+        if !(character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')) {
+            return false;
+        }
+    }
+
+    false
+}
+
+fn percent_decode_utf8(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return None;
+            }
+            let high = hex_value(bytes[index + 1])?;
+            let low = hex_value(bytes[index + 2])?;
+            output.push(high << 4 | low);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(output).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -680,6 +1015,7 @@ pub(crate) fn metadata_modified_at(metadata: &fs::Metadata) -> String {
 pub async fn write_project_file<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
+    asset_state: State<'_, ProjectAssetState>,
     request: WriteProjectFileRequestDto,
 ) -> CommandResult<WriteProjectFileResponseDto> {
     validate_non_empty(&request.project_id, "projectId")?;
@@ -689,25 +1025,62 @@ pub async fn write_project_file<R: Runtime>(
     let (resolved_path, normalized_path) =
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
     let jobs = state.backend_jobs().clone();
+    let asset_state = asset_state.inner().clone();
     let project_id = request.project_id;
     let content = request.content;
+    let expected_content_hash = request.expected_content_hash;
+    let expected_modified_at = request.expected_modified_at;
+    let overwrite = request.overwrite;
     drop(app);
 
     jobs.run_blocking_project_lane(
         project_id.clone(),
         "file",
         "project file write",
-        move || write_project_file_at_path(project_id, resolved_path, normalized_path, content),
+        move || {
+            write_project_file_at_path(ProjectFileWriteRequest {
+                project_id,
+                project_root,
+                resolved_path,
+                normalized_path,
+                content,
+                expected_content_hash,
+                expected_modified_at,
+                overwrite,
+                asset_state,
+            })
+        },
     )
     .await
 }
 
-fn write_project_file_at_path(
+struct ProjectFileWriteRequest {
     project_id: String,
+    project_root: PathBuf,
     resolved_path: PathBuf,
     normalized_path: String,
     content: String,
+    expected_content_hash: Option<String>,
+    expected_modified_at: Option<String>,
+    overwrite: bool,
+    asset_state: ProjectAssetState,
+}
+
+fn write_project_file_at_path(
+    request: ProjectFileWriteRequest,
 ) -> CommandResult<WriteProjectFileResponseDto> {
+    let ProjectFileWriteRequest {
+        project_id,
+        project_root,
+        resolved_path,
+        normalized_path,
+        content,
+        expected_content_hash,
+        expected_modified_at,
+        overwrite,
+        asset_state,
+    } = request;
+
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -717,6 +1090,49 @@ fn write_project_file_at_path(
                 "Xero cannot save `{normalized_path}` because it is a directory, not a text file."
             ),
         ));
+    }
+
+    if !overwrite {
+        if expected_content_hash.is_none() && expected_modified_at.is_none() {
+            return Err(CommandError::user_fixable(
+                "project_file_save_precondition_required",
+                format!(
+                    "Xero needs the last saved metadata for `{normalized_path}` before it can save safely."
+                ),
+            ));
+        }
+
+        let current_modified_at = metadata_modified_at(&metadata);
+        let current_content_hash = if expected_content_hash.is_some() {
+            Some(sha256_file(&resolved_path)?)
+        } else {
+            None
+        };
+
+        let hash_changed = expected_content_hash
+            .as_deref()
+            .zip(current_content_hash.as_deref())
+            .map(|(expected, current)| expected != current)
+            .unwrap_or(false);
+        let modified_changed = expected_modified_at
+            .as_deref()
+            .map(|expected| expected != current_modified_at)
+            .unwrap_or(false);
+
+        let changed = if expected_content_hash.is_some() {
+            hash_changed
+        } else {
+            modified_changed
+        };
+
+        if changed {
+            return Err(CommandError::user_fixable(
+                "project_file_changed_since_read",
+                format!(
+                    "`{normalized_path}` changed on disk after this editor tab loaded. Compare, reload, or overwrite before saving."
+                ),
+            ));
+        }
     }
 
     fs::write(&resolved_path, content).map_err(|error| match error.kind() {
@@ -731,9 +1147,168 @@ fn write_project_file_at_path(
         ),
     })?;
 
-    Ok(WriteProjectFileResponseDto {
+    write_project_file_response(
         project_id,
+        project_root,
+        resolved_path,
+        normalized_path,
+        asset_state,
+    )
+}
+
+fn write_project_file_response(
+    project_id: String,
+    project_root: PathBuf,
+    resolved_path: PathBuf,
+    normalized_path: String,
+    asset_state: ProjectAssetState,
+) -> CommandResult<WriteProjectFileResponseDto> {
+    let metadata = read_metadata(&resolved_path)?;
+    let response = read_project_file_at_path_with_limits(
+        project_id.clone(),
+        project_root,
+        resolved_path,
+        normalized_path.clone(),
+        metadata,
+        asset_state,
+        FileContentLimits::default(),
+    )?;
+
+    match response {
+        ReadProjectFileResponseDto::Text {
+            project_id,
+            path,
+            byte_length,
+            modified_at,
+            content_hash,
+            mime_type,
+            renderer_kind,
+            preview,
+            ..
+        } => Ok(WriteProjectFileResponseDto {
+            project_id,
+            path,
+            byte_length,
+            modified_at,
+            content_hash,
+            mime_type,
+            renderer_kind,
+            preview,
+        }),
+        ReadProjectFileResponseDto::Renderable {
+            project_id,
+            path,
+            byte_length,
+            modified_at,
+            content_hash,
+            mime_type,
+            renderer_kind,
+            ..
+        } => Ok(WriteProjectFileResponseDto {
+            project_id,
+            path,
+            byte_length,
+            modified_at,
+            content_hash,
+            mime_type,
+            renderer_kind,
+            preview: None,
+        }),
+        ReadProjectFileResponseDto::Unsupported {
+            project_id,
+            path,
+            byte_length,
+            modified_at,
+            content_hash,
+            mime_type: Some(mime_type),
+            renderer_kind: Some(renderer_kind),
+            ..
+        } => Ok(WriteProjectFileResponseDto {
+            project_id,
+            path,
+            byte_length,
+            modified_at,
+            content_hash,
+            mime_type,
+            renderer_kind,
+            preview: None,
+        }),
+        ReadProjectFileResponseDto::Unsupported { reason, .. } => Err(CommandError::user_fixable(
+            "project_file_save_metadata_unavailable",
+            format!(
+                "Xero saved `{normalized_path}` but could not classify the updated file metadata ({reason}). Reload the file before editing further."
+            ),
+        )),
+    }
+}
+
+#[tauri::command]
+pub async fn stat_project_files<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: StatProjectFilesRequestDto,
+) -> CommandResult<StatProjectFilesResponseDto> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    if request.paths.is_empty() {
+        return Ok(StatProjectFilesResponseDto {
+            project_id: request.project_id,
+            files: Vec::new(),
+        });
+    }
+
+    let project_root = resolve_project_root(&app, &state, &request.project_id)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    let paths = request.paths;
+    drop(app);
+
+    jobs.run_blocking_latest(
+        format!("project-file-stat:{project_id}"),
+        "project file metadata",
+        move |cancellation| {
+            let mut files = Vec::with_capacity(paths.len());
+            for path in paths {
+                cancellation.check_cancelled("project file metadata")?;
+                files.push(stat_project_file(&project_root, &path)?);
+            }
+            Ok(StatProjectFilesResponseDto { project_id, files })
+        },
+    )
+    .await
+}
+
+fn stat_project_file(project_root: &Path, path: &str) -> CommandResult<ProjectFileStatDto> {
+    validate_non_empty(path, "path")?;
+    let (resolved_path, normalized_path) = resolve_virtual_path(project_root, path, "path", false)?;
+    let metadata = match read_metadata(&resolved_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.code == "project_path_not_found" => {
+            return Ok(ProjectFileStatDto::Missing {
+                path: normalized_path,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    let modified_at = metadata_modified_at(&metadata);
+
+    if metadata.is_dir() {
+        return Ok(ProjectFileStatDto::Directory {
+            path: normalized_path,
+            modified_at,
+        });
+    }
+
+    let sniff_bytes = read_file_prefix(&resolved_path, SNIFF_BYTE_LIMIT)?;
+    let detected = detect_project_file_type(&resolved_path, &sniff_bytes);
+    let content_hash = sha256_file(&resolved_path)?;
+
+    Ok(ProjectFileStatDto::File {
         path: normalized_path,
+        byte_length: metadata.len(),
+        modified_at,
+        content_hash,
+        mime_type: detected.mime_type,
+        renderer_kind: detected.renderer_kind,
     })
 }
 
@@ -1069,35 +1644,81 @@ pub(crate) fn resolve_project_root<R: Runtime>(
     project_id: &str,
 ) -> CommandResult<PathBuf> {
     let registry_path = state.global_db_path(app)?;
-    let registry = registry::read_registry(&registry_path)?;
-    let mut live_root_records = Vec::new();
-    let mut pruned_stale_roots = false;
-    let mut resolved_root = None;
-
-    for record in registry.projects {
-        if !Path::new(&record.root_path).is_dir() {
-            pruned_stale_roots = true;
-            continue;
-        }
-
-        if record.project_id == project_id && resolved_root.is_none() {
-            resolved_root = Some(PathBuf::from(&record.root_path));
-        }
-
-        live_root_records.push(record);
-    }
-
-    if pruned_stale_roots {
-        let _ = registry::replace_projects(&registry_path, live_root_records);
-    }
-
-    resolved_root.ok_or_else(CommandError::project_not_found)
+    registry::read_project_records(&registry_path, project_id)?
+        .into_iter()
+        .find_map(|record| {
+            let root = PathBuf::from(&record.root_path);
+            root.is_dir().then_some(root)
+        })
+        .ok_or_else(CommandError::project_not_found)
 }
 
 struct BuiltProjectTree {
     root: ProjectFileNodeDto,
+    view: ProjectFileTreeViewDto,
     truncated: bool,
     omitted_entry_count: u32,
+}
+
+fn build_project_file_index(
+    project_root: &Path,
+    project_id: String,
+    include_hidden: bool,
+    limit: usize,
+    cancellation: &BackendCancellationToken,
+) -> CommandResult<ListProjectFileIndexResponseDto> {
+    cancellation.check_cancelled("project file index")?;
+    let mut files = Vec::new();
+    let mut truncated = false;
+    let walker = project_file_walk_builder(project_root, include_hidden).build();
+
+    for entry in walker {
+        cancellation.check_cancelled("project file index")?;
+        let Ok(entry) = entry else { continue };
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() || file_type.is_symlink() {
+            continue;
+        }
+
+        let Some(path) = virtual_path_from_project_root(project_root, entry.path()) else {
+            continue;
+        };
+        if files.len() >= limit {
+            truncated = true;
+            break;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let parent_path = parent_virtual_path(&path);
+        files.push(ProjectFileIndexEntryDto {
+            hidden: virtual_path_has_hidden_segment(&path),
+            name,
+            parent_path,
+            path,
+        });
+    }
+
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let mut response = ListProjectFileIndexResponseDto {
+        project_id,
+        total_files: files.len().min(u32::MAX as usize) as u32,
+        truncated,
+        payload_budget: None,
+        files,
+    };
+    let observed_bytes = estimate_serialized_payload_bytes(&response);
+    response.payload_budget = payload_budget_diagnostic(
+        "project_file_index",
+        "project file index",
+        PROJECT_FILE_INDEX_BUDGET_BYTES,
+        observed_bytes,
+        response.truncated,
+        false,
+    );
+
+    Ok(response)
 }
 
 fn build_folder_listing(
@@ -1130,11 +1751,112 @@ fn build_folder_listing(
         omitted_entry_count,
     };
 
+    let view = project_file_tree_view(&root);
+
     Ok(BuiltProjectTree {
         root,
+        view,
         truncated,
         omitted_entry_count,
     })
+}
+
+fn project_file_tree_view(root: &ProjectFileNodeDto) -> ProjectFileTreeViewDto {
+    let mut nodes_by_path = BTreeMap::new();
+    let mut child_paths_by_path = BTreeMap::new();
+    ingest_project_file_tree_node(root, &mut nodes_by_path, &mut child_paths_by_path);
+    let loaded_paths = nodes_by_path
+        .values()
+        .filter(|node| node.r#type == ProjectEntryKindDto::Folder && node.children_loaded)
+        .map(|node| node.path.clone())
+        .collect::<Vec<_>>();
+    let stats = project_file_tree_stats(&nodes_by_path, &child_paths_by_path);
+
+    ProjectFileTreeViewDto {
+        root_path: root.path.clone(),
+        nodes_by_path,
+        child_paths_by_path,
+        loaded_paths,
+        stats,
+        truncated: root.truncated,
+        omitted_entry_count: root.omitted_entry_count,
+    }
+}
+
+fn ingest_project_file_tree_node(
+    node: &ProjectFileNodeDto,
+    nodes_by_path: &mut BTreeMap<String, ProjectFileTreeNodeDto>,
+    child_paths_by_path: &mut BTreeMap<String, Vec<String>>,
+) {
+    nodes_by_path.insert(
+        node.path.clone(),
+        ProjectFileTreeNodeDto {
+            id: node.path.clone(),
+            name: node.name.clone(),
+            path: node.path.clone(),
+            r#type: node.r#type.clone(),
+            children_loaded: node.children_loaded,
+            truncated: node.truncated,
+            omitted_entry_count: node.omitted_entry_count,
+        },
+    );
+
+    if node.r#type != ProjectEntryKindDto::Folder {
+        return;
+    }
+
+    child_paths_by_path.insert(
+        node.path.clone(),
+        node.children
+            .iter()
+            .map(|child| child.path.clone())
+            .collect::<Vec<_>>(),
+    );
+    for child in &node.children {
+        ingest_project_file_tree_node(child, nodes_by_path, child_paths_by_path);
+    }
+}
+
+fn project_file_tree_stats(
+    nodes_by_path: &BTreeMap<String, ProjectFileTreeNodeDto>,
+    child_paths_by_path: &BTreeMap<String, Vec<String>>,
+) -> ProjectFileTreeStatsDto {
+    let mut byte_size = 0_usize;
+    let mut unloaded_folder_count = 0_u32;
+
+    for node in nodes_by_path.values() {
+        byte_size = byte_size.saturating_add(48);
+        byte_size = byte_size.saturating_add(estimate_utf16_bytes(&node.id));
+        byte_size = byte_size.saturating_add(estimate_utf16_bytes(&node.name));
+        byte_size = byte_size.saturating_add(estimate_utf16_bytes(&node.path));
+        byte_size = byte_size.saturating_add(estimate_utf16_bytes(match &node.r#type {
+            ProjectEntryKindDto::File => "file",
+            ProjectEntryKindDto::Folder => "folder",
+        }));
+        if node.r#type == ProjectEntryKindDto::Folder && !node.children_loaded {
+            unloaded_folder_count = unloaded_folder_count.saturating_add(1);
+        }
+    }
+
+    for child_paths in child_paths_by_path.values() {
+        byte_size = byte_size.saturating_add(24);
+        for child_path in child_paths {
+            byte_size = byte_size
+                .saturating_add(estimate_utf16_bytes(child_path))
+                .saturating_add(8);
+        }
+    }
+
+    ProjectFileTreeStatsDto {
+        byte_size: byte_size.min(u32::MAX as usize) as u32,
+        child_list_count: child_paths_by_path.len().min(u32::MAX as usize) as u32,
+        node_count: nodes_by_path.len().min(u32::MAX as usize) as u32,
+        unloaded_folder_count,
+    }
+}
+
+fn estimate_utf16_bytes(value: &str) -> usize {
+    value.encode_utf16().count().saturating_mul(2)
 }
 
 struct ListingChildren {
@@ -1219,6 +1941,36 @@ fn read_child_nodes(
         truncated: omitted_entry_count > 0,
         omitted_entry_count,
     })
+}
+
+fn project_file_walk_builder(project_root: &Path, include_hidden: bool) -> WalkBuilder {
+    let mut walk_builder = WalkBuilder::new(project_root);
+    walk_builder
+        .hidden(!include_hidden)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .parents(true)
+        .follow_links(false)
+        .filter_entry(|entry| !is_skipped_project_directory_entry(entry))
+        .sort_by_file_path(|left, right| left.cmp(right));
+    walk_builder
+}
+
+fn virtual_path_from_project_root(project_root: &Path, abs_path: &Path) -> Option<String> {
+    let rel = abs_path.strip_prefix(project_root).ok()?;
+    let raw = rel.to_string_lossy();
+    if raw.is_empty() {
+        return Some("/".into());
+    }
+
+    Some(format!("/{}", raw.replace('\\', "/")))
+}
+
+fn virtual_path_has_hidden_segment(path: &str) -> bool {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .any(|segment| segment.starts_with('.'))
 }
 
 pub(crate) fn is_skipped_project_directory_entry(entry: &DirEntry) -> bool {
@@ -1383,7 +2135,7 @@ mod tests {
     use std::fs;
 
     use crate::commands::{
-        backend_jobs::BackendCancellationToken, ProjectFileRendererKindDto,
+        backend_jobs::BackendCancellationToken, ProjectFilePreviewDto, ProjectFileRendererKindDto,
         ReadProjectFileResponseDto,
     };
 
@@ -1430,6 +2182,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["/src/main.rs"]
         );
+    }
+
+    #[test]
+    fn project_tree_returns_flat_view_projection() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir(temp_dir.path().join("src")).expect("src dir");
+        fs::write(temp_dir.path().join("README.md"), "# Xero").expect("readme");
+
+        let listing = build_folder_listing(
+            temp_dir.path(),
+            "/",
+            100,
+            &BackendCancellationToken::default(),
+        )
+        .expect("listing");
+
+        assert_eq!(listing.view.root_path, "/");
+        assert_eq!(
+            listing.view.child_paths_by_path.get("/"),
+            Some(&vec!["/src".to_string(), "/README.md".to_string()])
+        );
+        assert_eq!(
+            listing
+                .view
+                .nodes_by_path
+                .get("/src")
+                .map(|node| (node.name.as_str(), node.children_loaded)),
+            Some(("src", false))
+        );
+        assert_eq!(listing.view.loaded_paths, vec!["/"]);
+        assert_eq!(listing.view.stats.node_count, 3);
+        assert_eq!(listing.view.stats.child_list_count, 2);
+        assert_eq!(listing.view.stats.unloaded_folder_count, 1);
+        assert!(listing.view.stats.byte_size > 0);
     }
 
     #[test]
@@ -1482,6 +2268,8 @@ mod tests {
         assert_eq!(tree.root.children.len(), 2);
         assert_eq!(tree.omitted_entry_count, 1);
         assert_eq!(tree.root.omitted_entry_count, 1);
+        assert!(tree.view.truncated);
+        assert_eq!(tree.view.omitted_entry_count, 1);
     }
 
     #[test]
@@ -1501,6 +2289,7 @@ mod tests {
 
         let response = read_project_file_at_path_with_limits(
             "project-1".into(),
+            temp_dir.path().to_path_buf(),
             path.clone(),
             "/notes.md".into(),
             read_metadata(&path).expect("metadata"),
@@ -1530,6 +2319,174 @@ mod tests {
     }
 
     #[test]
+    fn project_file_classification_returns_bounded_csv_preview() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path = temp_dir.path().join("data.csv");
+        fs::write(
+            &path,
+            format!(
+                "name,count,extra\nAlpha,1,visible\n{}",
+                (0..1_010)
+                    .map(|index| format!("Row {index},{index},hidden"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )
+        .expect("write csv");
+
+        let response = read_project_file_at_path_with_limits(
+            "project-1".into(),
+            temp_dir.path().to_path_buf(),
+            path.clone(),
+            "/data.csv".into(),
+            read_metadata(&path).expect("metadata"),
+            crate::commands::project_assets::ProjectAssetState::default(),
+            FileContentLimits {
+                text_bytes: 128 * 1024,
+                preview_bytes: 1024,
+            },
+        )
+        .expect("classified response");
+
+        match response {
+            ReadProjectFileResponseDto::Text {
+                preview,
+                renderer_kind,
+                ..
+            } => {
+                assert_eq!(renderer_kind, ProjectFileRendererKindDto::Csv);
+                match preview.expect("csv preview") {
+                    ProjectFilePreviewDto::Csv {
+                        headers,
+                        rows,
+                        total_rows,
+                        total_columns,
+                        truncated_rows,
+                        truncated_columns,
+                    } => {
+                        assert_eq!(headers, vec!["name", "count", "extra"]);
+                        assert_eq!(
+                            rows.first(),
+                            Some(&vec![
+                                "Alpha".to_string(),
+                                "1".to_string(),
+                                "visible".to_string(),
+                            ])
+                        );
+                        assert_eq!(rows.len(), 999);
+                        assert_eq!(total_rows, 1_012);
+                        assert_eq!(total_columns, 3);
+                        assert!(truncated_rows);
+                        assert!(!truncated_columns);
+                    }
+                    other => panic!("expected CSV preview, got {other:?}"),
+                }
+            }
+            other => panic!("expected CSV text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn project_file_classification_uses_tab_delimiter_for_tsv_preview() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path = temp_dir.path().join("data.tsv");
+        fs::write(&path, "name\tcount\nAlpha\t1\n").expect("write tsv");
+
+        let response = read_project_file_at_path_with_limits(
+            "project-1".into(),
+            temp_dir.path().to_path_buf(),
+            path.clone(),
+            "/data.tsv".into(),
+            read_metadata(&path).expect("metadata"),
+            crate::commands::project_assets::ProjectAssetState::default(),
+            FileContentLimits {
+                text_bytes: 1024,
+                preview_bytes: 1024,
+            },
+        )
+        .expect("classified response");
+
+        match response {
+            ReadProjectFileResponseDto::Text { preview, .. } => match preview.expect("tsv preview")
+            {
+                ProjectFilePreviewDto::Csv {
+                    headers,
+                    rows,
+                    total_rows,
+                    total_columns,
+                    ..
+                } => {
+                    assert_eq!(headers, vec!["name", "count"]);
+                    assert_eq!(rows, vec![vec!["Alpha".to_string(), "1".to_string()]]);
+                    assert_eq!(total_rows, 2);
+                    assert_eq!(total_columns, 2);
+                }
+                other => panic!("expected TSV CSV preview, got {other:?}"),
+            },
+            other => panic!("expected TSV text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn project_file_classification_returns_markdown_asset_preview_refs() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let docs_dir = temp_dir.path().join("docs");
+        let images_dir = docs_dir.join("images");
+        fs::create_dir_all(&images_dir).expect("create images");
+        let markdown_path = docs_dir.join("readme.md");
+        let image_path = images_dir.join("logo one.png");
+        fs::write(
+            &markdown_path,
+            [
+                "# Assets",
+                "",
+                "![Logo](./images/logo%20one.png)",
+                "![Escape](../../secret.png)",
+                "![External](https://example.com/logo.png)",
+            ]
+            .join("\n"),
+        )
+        .expect("write markdown");
+        fs::write(
+            &image_path,
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
+        )
+        .expect("write image");
+
+        let response = read_project_file_at_path_with_limits(
+            "project-1".into(),
+            temp_dir.path().to_path_buf(),
+            markdown_path.clone(),
+            "/docs/readme.md".into(),
+            read_metadata(&markdown_path).expect("metadata"),
+            crate::commands::project_assets::ProjectAssetState::default(),
+            FileContentLimits {
+                text_bytes: 1024,
+                preview_bytes: 1024,
+            },
+        )
+        .expect("classified response");
+
+        match response {
+            ReadProjectFileResponseDto::Text { preview, .. } => {
+                match preview.expect("markdown preview") {
+                    ProjectFilePreviewDto::Markdown { asset_refs } => {
+                        assert_eq!(asset_refs.len(), 1);
+                        assert_eq!(asset_refs[0].source, "./images/logo%20one.png");
+                        assert_eq!(asset_refs[0].path, "/docs/images/logo one.png");
+                        assert!(asset_refs[0]
+                            .preview_url
+                            .as_deref()
+                            .is_some_and(|url| url.starts_with("project-asset://")));
+                    }
+                    other => panic!("expected markdown preview, got {other:?}"),
+                }
+            }
+            other => panic!("expected Markdown text response, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn project_file_classification_returns_unsupported_for_unknown_binary() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let path = temp_dir.path().join("payload.bin");
@@ -1537,6 +2494,7 @@ mod tests {
 
         let response = read_project_file_at_path_with_limits(
             "project-1".into(),
+            temp_dir.path().to_path_buf(),
             path.clone(),
             "/payload.bin".into(),
             read_metadata(&path).expect("metadata"),
@@ -1616,6 +2574,7 @@ mod tests {
 
         let response = read_project_file_at_path_with_limits(
             "project-1".into(),
+            temp_dir.path().to_path_buf(),
             path.clone(),
             "/unsafe.svg".into(),
             read_metadata(&path).expect("metadata"),
@@ -1650,6 +2609,7 @@ mod tests {
 
         let response = read_project_file_at_path_with_limits(
             "project-1".into(),
+            temp_dir.path().to_path_buf(),
             path.clone(),
             "/large.txt".into(),
             read_metadata(&path).expect("metadata"),
@@ -1677,6 +2637,7 @@ mod tests {
 
         let response = read_project_file_at_path_with_limits(
             "project-1".into(),
+            temp_dir.path().to_path_buf(),
             path.clone(),
             "/large.png".into(),
             read_metadata(&path).expect("metadata"),

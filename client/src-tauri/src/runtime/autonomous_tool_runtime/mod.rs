@@ -15,6 +15,7 @@ mod repo_scope;
 mod skills;
 pub mod solana;
 mod system_diagnostics;
+mod workflow_definition;
 mod workspace_index;
 
 use std::{
@@ -26,6 +27,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, Runtime};
 use xero_agent_core::{
     domain_tool_pack_health_report, domain_tool_pack_ids_for_tool, domain_tool_pack_manifests,
@@ -48,10 +50,13 @@ use super::autonomous_skill_runtime::{
 use crate::{
     commands::{
         browser::load_browser_control_settings, default_soul_settings, load_soul_settings,
-        BranchSummaryDto, BrowserControlPreferenceDto, CommandError, CommandResult,
-        RepositoryDiffScope, RepositoryStatusEntryDto, RuntimeAgentIdDto,
-        RuntimeRunApprovalModeDto, RuntimeRunControlStateDto, SoulSettingsDto,
+        BranchSummaryDto, BrowserControlPreferenceDto, CommandError, CommandErrorClass,
+        CommandResult, RepositoryDiffScope, RepositoryStatusEntryDto,
+        ResolvedAgentToolApplicationStyleDto, RuntimeAgentIdDto, RuntimeRunApprovalModeDto,
+        RuntimeRunControlStateDto, SoulSettingsDto,
     },
+    db::project_store,
+    runtime::redaction::find_prohibited_persistence_content,
     runtime::AgentRunCancellationToken,
     state::DesktopState,
 };
@@ -61,10 +66,12 @@ pub use agent_coordination::{
     AutonomousAgentCoordinationRequest,
 };
 pub use agent_definition::{
-    AutonomousAgentDefinitionAction, AutonomousAgentDefinitionOutput,
-    AutonomousAgentDefinitionRequest, AutonomousAgentDefinitionSummary,
-    AutonomousAgentDefinitionValidationDiagnostic, AutonomousAgentDefinitionValidationReport,
-    AutonomousAgentDefinitionValidationStatus, AUTONOMOUS_TOOL_AGENT_DEFINITION,
+    AutonomousAgentAttachableSkillCatalog, AutonomousAgentAttachableSkillDiagnostic,
+    AutonomousAgentAttachableSkillEntry, AutonomousAgentDefinitionAction,
+    AutonomousAgentDefinitionOutput, AutonomousAgentDefinitionRequest,
+    AutonomousAgentDefinitionSummary, AutonomousAgentDefinitionValidationDiagnostic,
+    AutonomousAgentDefinitionValidationReport, AutonomousAgentDefinitionValidationStatus,
+    AUTONOMOUS_TOOL_AGENT_DEFINITION,
 };
 pub use browser::{
     AutonomousBrowserAction, AutonomousBrowserOutput, AutonomousBrowserRequest, BrowserExecutor,
@@ -112,23 +119,39 @@ pub use solana::{
     AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
 };
 pub(crate) use system_diagnostics::system_diagnostics_action_approval_id;
+pub use workflow_definition::{
+    AutonomousWorkflowDefinitionAction, AutonomousWorkflowDefinitionOutput,
+    AutonomousWorkflowDefinitionRequest, AutonomousWorkflowDefinitionSummary,
+    AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+};
 pub use workspace_index::{
     AutonomousWorkspaceIndexAction, AutonomousWorkspaceIndexOutput, AutonomousWorkspaceIndexRequest,
 };
 
 pub const AUTONOMOUS_TOOL_READ: &str = "read";
+pub const AUTONOMOUS_TOOL_READ_MANY: &str = "read_many";
+pub const AUTONOMOUS_TOOL_RESULT_PAGE: &str = "result_page";
+pub const AUTONOMOUS_TOOL_STAT: &str = "stat";
 pub const AUTONOMOUS_TOOL_SEARCH: &str = "search";
 pub const AUTONOMOUS_TOOL_FIND: &str = "find";
 pub const AUTONOMOUS_TOOL_GIT_STATUS: &str = "git_status";
 pub const AUTONOMOUS_TOOL_GIT_DIFF: &str = "git_diff";
 pub const AUTONOMOUS_TOOL_TOOL_ACCESS: &str = "tool_access";
+pub const AUTONOMOUS_TOOL_HARNESS_RUNNER: &str = "harness_runner";
 pub const AUTONOMOUS_TOOL_EDIT: &str = "edit";
 pub const AUTONOMOUS_TOOL_WRITE: &str = "write";
 pub const AUTONOMOUS_TOOL_PATCH: &str = "patch";
+pub const AUTONOMOUS_TOOL_COPY: &str = "copy";
+pub const AUTONOMOUS_TOOL_FS_TRANSACTION: &str = "fs_transaction";
+pub const AUTONOMOUS_TOOL_JSON_EDIT: &str = "json_edit";
+pub const AUTONOMOUS_TOOL_TOML_EDIT: &str = "toml_edit";
+pub const AUTONOMOUS_TOOL_YAML_EDIT: &str = "yaml_edit";
 pub const AUTONOMOUS_TOOL_DELETE: &str = "delete";
 pub const AUTONOMOUS_TOOL_RENAME: &str = "rename";
 pub const AUTONOMOUS_TOOL_MKDIR: &str = "mkdir";
 pub const AUTONOMOUS_TOOL_LIST: &str = "list";
+pub const AUTONOMOUS_TOOL_LIST_TREE: &str = "list_tree";
+pub const AUTONOMOUS_TOOL_DIRECTORY_DIGEST: &str = "directory_digest";
 pub const AUTONOMOUS_TOOL_HASH: &str = "file_hash";
 pub const AUTONOMOUS_TOOL_COMMAND: &str = "command";
 pub const AUTONOMOUS_TOOL_COMMAND_SESSION_START: &str = "command_session_start";
@@ -188,6 +211,9 @@ const DEFAULT_SUBAGENT_MAX_DELEGATED_COST_MICROS: u64 = 250_000;
 
 const TOOL_ACCESS_CORE_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_READ,
+    AUTONOMOUS_TOOL_READ_MANY,
+    AUTONOMOUS_TOOL_RESULT_PAGE,
+    AUTONOMOUS_TOOL_STAT,
     AUTONOMOUS_TOOL_SEARCH,
     AUTONOMOUS_TOOL_FIND,
     AUTONOMOUS_TOOL_GIT_STATUS,
@@ -200,12 +226,19 @@ const TOOL_ACCESS_CORE_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_AGENT_COORDINATION,
     AUTONOMOUS_TOOL_TODO,
     AUTONOMOUS_TOOL_LIST,
+    AUTONOMOUS_TOOL_LIST_TREE,
+    AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
     AUTONOMOUS_TOOL_HASH,
 ];
 const TOOL_ACCESS_MUTATION_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_EDIT,
     AUTONOMOUS_TOOL_WRITE,
     AUTONOMOUS_TOOL_PATCH,
+    AUTONOMOUS_TOOL_COPY,
+    AUTONOMOUS_TOOL_FS_TRANSACTION,
+    AUTONOMOUS_TOOL_JSON_EDIT,
+    AUTONOMOUS_TOOL_TOML_EDIT,
+    AUTONOMOUS_TOOL_YAML_EDIT,
     AUTONOMOUS_TOOL_DELETE,
     AUTONOMOUS_TOOL_RENAME,
     AUTONOMOUS_TOOL_MKDIR,
@@ -241,6 +274,9 @@ const TOOL_ACCESS_COMMAND_MUTATING_TOOLS: &[&str] =
 const TOOL_ACCESS_COMMAND_SESSION_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_COMMAND_SESSION];
 const TOOL_ACCESS_REPOSITORY_RECON_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_READ,
+    AUTONOMOUS_TOOL_READ_MANY,
+    AUTONOMOUS_TOOL_RESULT_PAGE,
+    AUTONOMOUS_TOOL_STAT,
     AUTONOMOUS_TOOL_SEARCH,
     AUTONOMOUS_TOOL_FIND,
     AUTONOMOUS_TOOL_GIT_STATUS,
@@ -251,6 +287,8 @@ const TOOL_ACCESS_REPOSITORY_RECON_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET,
     AUTONOMOUS_TOOL_WORKSPACE_INDEX,
     AUTONOMOUS_TOOL_LIST,
+    AUTONOMOUS_TOOL_LIST_TREE,
+    AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
     AUTONOMOUS_TOOL_HASH,
     AUTONOMOUS_TOOL_COMMAND_PROBE,
     AUTONOMOUS_TOOL_CODE_INTEL,
@@ -258,7 +296,41 @@ const TOOL_ACCESS_REPOSITORY_RECON_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
     AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE,
 ];
+const TOOL_ACCESS_PLANNING_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_READ,
+    AUTONOMOUS_TOOL_READ_MANY,
+    AUTONOMOUS_TOOL_RESULT_PAGE,
+    AUTONOMOUS_TOOL_STAT,
+    AUTONOMOUS_TOOL_SEARCH,
+    AUTONOMOUS_TOOL_FIND,
+    AUTONOMOUS_TOOL_GIT_STATUS,
+    AUTONOMOUS_TOOL_GIT_DIFF,
+    AUTONOMOUS_TOOL_TOOL_ACCESS,
+    AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
+    AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET,
+    AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD,
+    AUTONOMOUS_TOOL_WORKSPACE_INDEX,
+    AUTONOMOUS_TOOL_LIST,
+    AUTONOMOUS_TOOL_LIST_TREE,
+    AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
+    AUTONOMOUS_TOOL_HASH,
+    AUTONOMOUS_TOOL_TODO,
+];
 const TOOL_ACCESS_EMULATOR_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_EMULATOR];
+const TOOL_ACCESS_COMPUTER_USE_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_TOOL_ACCESS,
+    AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AUTONOMOUS_TOOL_TODO,
+    AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
+    AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET,
+    AUTONOMOUS_TOOL_BROWSER_OBSERVE,
+    AUTONOMOUS_TOOL_BROWSER_CONTROL,
+    AUTONOMOUS_TOOL_BROWSER,
+    AUTONOMOUS_TOOL_EMULATOR,
+    AUTONOMOUS_TOOL_MACOS_AUTOMATION,
+    AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE,
+];
 const TOOL_ACCESS_SOLANA_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_SOLANA_CLUSTER,
     AUTONOMOUS_TOOL_SOLANA_LOGS,
@@ -308,7 +380,10 @@ const TOOL_ACCESS_PROJECT_CONTEXT_WRITE_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH,
 ];
 const TOOL_ACCESS_SKILL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_SKILL];
-const TOOL_ACCESS_AGENT_DEFINITION_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_AGENT_DEFINITION];
+const TOOL_ACCESS_AGENT_DEFINITION_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_AGENT_DEFINITION,
+    AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ToolAccessGroupDefinition {
@@ -327,6 +402,17 @@ pub struct AutonomousToolCatalogEntry {
     pub schema_fields: &'static [&'static str],
     pub examples: &'static [&'static str],
     pub risk_class: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeHostMetadata {
+    pub timestamp_utc: String,
+    pub date_utc: String,
+    pub operating_system: String,
+    pub operating_system_label: String,
+    pub architecture: String,
+    pub family: String,
 }
 
 const TOOL_ACCESS_GROUP_DEFINITIONS: &[ToolAccessGroupDefinition] = &[
@@ -500,9 +586,9 @@ const TOOL_ACCESS_GROUP_DEFINITIONS: &[ToolAccessGroupDefinition] = &[
     },
     ToolAccessGroupDefinition {
         name: "agent_builder",
-        description: "Draft, validate, list, save, update, archive, and clone registry-backed agent definitions.",
+        description: "Draft, validate, list, save, update, archive, and clone registry-backed agent definitions and Workflow definitions.",
         tools: TOOL_ACCESS_AGENT_DEFINITION_TOOLS,
-        risk_class: "agent_definition_state",
+        risk_class: "definition_state",
     },
 ];
 
@@ -529,6 +615,7 @@ pub fn tool_access_group_descriptors() -> Vec<AutonomousToolAccessGroup> {
                 .map(|tool| (*tool).to_owned())
                 .collect(),
             risk_class: definition.risk_class.into(),
+            tool_summaries: Vec::new(),
         })
         .collect()
 }
@@ -581,7 +668,7 @@ pub fn tool_catalog_metadata_for_tool(
                 "riskClass": entry.risk_class,
                 "effectClass": tool_effect_class(entry.tool_name).as_str(),
                 "allowedRuntimeAgents": allowed_runtime_agent_labels(entry.tool_name),
-                "runtimeAvailable": true,
+                "runtimeAvailable": tool_available_on_current_host(entry.tool_name),
             })
         })
 }
@@ -632,10 +719,16 @@ pub struct AutonomousAgentToolPolicy {
     denied_tools: BTreeSet<String>,
     allowed_tool_packs: BTreeSet<String>,
     denied_tool_packs: BTreeSet<String>,
+    allowed_mcp_servers: BTreeSet<String>,
+    denied_mcp_servers: BTreeSet<String>,
+    allowed_dynamic_tools: BTreeSet<String>,
+    denied_dynamic_tools: BTreeSet<String>,
     external_service_allowed: bool,
     browser_control_allowed: bool,
     skill_runtime_allowed: bool,
     subagent_allowed: bool,
+    allowed_subagent_roles: BTreeSet<String>,
+    denied_subagent_roles: BTreeSet<String>,
     command_allowed: bool,
     destructive_write_allowed: bool,
 }
@@ -710,10 +803,16 @@ impl AutonomousAgentToolPolicy {
             denied_tools,
             allowed_tool_packs,
             denied_tool_packs,
+            allowed_mcp_servers: string_set_from_json(object.get("allowedMcpServers")),
+            denied_mcp_servers: string_set_from_json(object.get("deniedMcpServers")),
+            allowed_dynamic_tools: string_set_from_json(object.get("allowedDynamicTools")),
+            denied_dynamic_tools: string_set_from_json(object.get("deniedDynamicTools")),
             external_service_allowed: json_bool(object.get("externalServiceAllowed")),
             browser_control_allowed: json_bool(object.get("browserControlAllowed")),
             skill_runtime_allowed: json_bool(object.get("skillRuntimeAllowed")),
             subagent_allowed: json_bool(object.get("subagentAllowed")),
+            allowed_subagent_roles: string_set_from_json(object.get("allowedSubagentRoles")),
+            denied_subagent_roles: string_set_from_json(object.get("deniedSubagentRoles")),
             command_allowed: json_bool(object.get("commandAllowed")),
             destructive_write_allowed: json_bool(object.get("destructiveWriteAllowed")),
         })
@@ -729,6 +828,11 @@ impl AutonomousAgentToolPolicy {
                     "destructive_write",
                     "command",
                     "process_control",
+                    "browser_control",
+                    "device_control",
+                    "external_service",
+                    "skill_runtime",
+                    "agent_delegation",
                 ]
                 .into_iter()
                 .map(ToOwned::to_owned)
@@ -737,10 +841,30 @@ impl AutonomousAgentToolPolicy {
                 denied_tools: BTreeSet::new(),
                 allowed_tool_packs: BTreeSet::new(),
                 denied_tool_packs: BTreeSet::new(),
-                external_service_allowed: false,
-                browser_control_allowed: false,
-                skill_runtime_allowed: false,
-                subagent_allowed: false,
+                allowed_mcp_servers: BTreeSet::new(),
+                denied_mcp_servers: BTreeSet::new(),
+                allowed_dynamic_tools: BTreeSet::new(),
+                denied_dynamic_tools: BTreeSet::new(),
+                external_service_allowed: true,
+                browser_control_allowed: true,
+                skill_runtime_allowed: true,
+                subagent_allowed: true,
+                allowed_subagent_roles: [
+                    "engineer",
+                    "debugger",
+                    "planner",
+                    "researcher",
+                    "reviewer",
+                    "agent_builder",
+                    "browser",
+                    "emulator",
+                    "solana",
+                    "database",
+                ]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+                denied_subagent_roles: BTreeSet::new(),
                 command_allowed: true,
                 destructive_write_allowed: true,
             },
@@ -749,14 +873,24 @@ impl AutonomousAgentToolPolicy {
                     .into_iter()
                     .map(ToOwned::to_owned)
                     .collect(),
-                allowed_tools: [AUTONOMOUS_TOOL_AGENT_DEFINITION.to_string()].into(),
+                allowed_tools: [
+                    AUTONOMOUS_TOOL_AGENT_DEFINITION.to_string(),
+                    AUTONOMOUS_TOOL_WORKFLOW_DEFINITION.to_string(),
+                ]
+                .into(),
                 denied_tools: BTreeSet::new(),
                 allowed_tool_packs: BTreeSet::new(),
                 denied_tool_packs: BTreeSet::new(),
+                allowed_mcp_servers: BTreeSet::new(),
+                denied_mcp_servers: BTreeSet::new(),
+                allowed_dynamic_tools: BTreeSet::new(),
+                denied_dynamic_tools: BTreeSet::new(),
                 external_service_allowed: false,
                 browser_control_allowed: false,
                 skill_runtime_allowed: false,
                 subagent_allowed: false,
+                allowed_subagent_roles: BTreeSet::new(),
+                denied_subagent_roles: BTreeSet::new(),
                 command_allowed: false,
                 destructive_write_allowed: false,
             },
@@ -769,10 +903,89 @@ impl AutonomousAgentToolPolicy {
                 denied_tools: BTreeSet::new(),
                 allowed_tool_packs: BTreeSet::new(),
                 denied_tool_packs: BTreeSet::new(),
+                allowed_mcp_servers: BTreeSet::new(),
+                denied_mcp_servers: BTreeSet::new(),
+                allowed_dynamic_tools: BTreeSet::new(),
+                denied_dynamic_tools: BTreeSet::new(),
                 external_service_allowed: false,
                 browser_control_allowed: false,
                 skill_runtime_allowed: false,
                 subagent_allowed: false,
+                allowed_subagent_roles: BTreeSet::new(),
+                denied_subagent_roles: BTreeSet::new(),
+                command_allowed: true,
+                destructive_write_allowed: false,
+            },
+            "planning" => Self {
+                allowed_effect_classes: BTreeSet::new(),
+                allowed_tools: TOOL_ACCESS_PLANNING_TOOLS
+                    .iter()
+                    .map(|tool| (*tool).to_owned())
+                    .collect(),
+                denied_tools: BTreeSet::new(),
+                allowed_tool_packs: BTreeSet::new(),
+                denied_tool_packs: BTreeSet::new(),
+                allowed_mcp_servers: BTreeSet::new(),
+                denied_mcp_servers: BTreeSet::new(),
+                allowed_dynamic_tools: BTreeSet::new(),
+                denied_dynamic_tools: BTreeSet::new(),
+                external_service_allowed: false,
+                browser_control_allowed: false,
+                skill_runtime_allowed: false,
+                subagent_allowed: false,
+                allowed_subagent_roles: BTreeSet::new(),
+                denied_subagent_roles: BTreeSet::new(),
+                command_allowed: false,
+                destructive_write_allowed: false,
+            },
+            "computer_use" => Self {
+                allowed_effect_classes: BTreeSet::new(),
+                allowed_tools: TOOL_ACCESS_COMPUTER_USE_TOOLS
+                    .iter()
+                    .map(|tool| (*tool).to_owned())
+                    .collect(),
+                denied_tools: [
+                    AUTONOMOUS_TOOL_WRITE,
+                    AUTONOMOUS_TOOL_EDIT,
+                    AUTONOMOUS_TOOL_PATCH,
+                    AUTONOMOUS_TOOL_COPY,
+                    AUTONOMOUS_TOOL_FS_TRANSACTION,
+                    AUTONOMOUS_TOOL_JSON_EDIT,
+                    AUTONOMOUS_TOOL_TOML_EDIT,
+                    AUTONOMOUS_TOOL_YAML_EDIT,
+                    AUTONOMOUS_TOOL_DELETE,
+                    AUTONOMOUS_TOOL_RENAME,
+                    AUTONOMOUS_TOOL_MKDIR,
+                    AUTONOMOUS_TOOL_COMMAND,
+                    AUTONOMOUS_TOOL_COMMAND_RUN,
+                    AUTONOMOUS_TOOL_COMMAND_SESSION,
+                    AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+                    AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+                    AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+                    AUTONOMOUS_TOOL_POWERSHELL,
+                    AUTONOMOUS_TOOL_PROCESS_MANAGER,
+                    AUTONOMOUS_TOOL_GIT_STATUS,
+                    AUTONOMOUS_TOOL_GIT_DIFF,
+                    AUTONOMOUS_TOOL_MCP,
+                    AUTONOMOUS_TOOL_MCP_CALL_TOOL,
+                    AUTONOMOUS_TOOL_SKILL,
+                    AUTONOMOUS_TOOL_SUBAGENT,
+                ]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+                allowed_tool_packs: BTreeSet::new(),
+                denied_tool_packs: BTreeSet::new(),
+                allowed_mcp_servers: BTreeSet::new(),
+                denied_mcp_servers: BTreeSet::new(),
+                allowed_dynamic_tools: BTreeSet::new(),
+                denied_dynamic_tools: BTreeSet::new(),
+                external_service_allowed: false,
+                browser_control_allowed: true,
+                skill_runtime_allowed: false,
+                subagent_allowed: false,
+                allowed_subagent_roles: BTreeSet::new(),
+                denied_subagent_roles: BTreeSet::new(),
                 command_allowed: true,
                 destructive_write_allowed: false,
             },
@@ -782,10 +995,16 @@ impl AutonomousAgentToolPolicy {
                 denied_tools: BTreeSet::new(),
                 allowed_tool_packs: BTreeSet::new(),
                 denied_tool_packs: BTreeSet::new(),
+                allowed_mcp_servers: BTreeSet::new(),
+                denied_mcp_servers: BTreeSet::new(),
+                allowed_dynamic_tools: BTreeSet::new(),
+                denied_dynamic_tools: BTreeSet::new(),
                 external_service_allowed: false,
                 browser_control_allowed: false,
                 skill_runtime_allowed: false,
                 subagent_allowed: false,
+                allowed_subagent_roles: BTreeSet::new(),
+                denied_subagent_roles: BTreeSet::new(),
                 command_allowed: false,
                 destructive_write_allowed: false,
             },
@@ -911,10 +1130,16 @@ impl AutonomousAgentToolPolicy {
             denied_tools: BTreeSet::new(),
             allowed_tool_packs: BTreeSet::new(),
             denied_tool_packs: BTreeSet::new(),
+            allowed_mcp_servers: BTreeSet::new(),
+            denied_mcp_servers: BTreeSet::new(),
+            allowed_dynamic_tools: BTreeSet::new(),
+            denied_dynamic_tools: BTreeSet::new(),
             external_service_allowed: opt_ins.external_service_allowed,
             browser_control_allowed: opt_ins.browser_control_allowed,
             skill_runtime_allowed: opt_ins.skill_runtime_allowed,
             subagent_allowed: opt_ins.subagent_allowed,
+            allowed_subagent_roles: BTreeSet::new(),
+            denied_subagent_roles: BTreeSet::new(),
             command_allowed: opt_ins.command_allowed,
             destructive_write_allowed: opt_ins.destructive_write_allowed,
         }
@@ -927,10 +1152,16 @@ impl AutonomousAgentToolPolicy {
             denied_tools: BTreeSet::new(),
             allowed_tool_packs: BTreeSet::new(),
             denied_tool_packs: BTreeSet::new(),
+            allowed_mcp_servers: BTreeSet::new(),
+            denied_mcp_servers: BTreeSet::new(),
+            allowed_dynamic_tools: BTreeSet::new(),
+            denied_dynamic_tools: BTreeSet::new(),
             external_service_allowed: false,
             browser_control_allowed: false,
             skill_runtime_allowed: false,
             subagent_allowed: false,
+            allowed_subagent_roles: BTreeSet::new(),
+            denied_subagent_roles: BTreeSet::new(),
             command_allowed: false,
             destructive_write_allowed: false,
         };
@@ -964,6 +1195,11 @@ impl AutonomousAgentToolPolicy {
         if self.denied_tools.contains(tool_name) {
             return false;
         }
+        if tool_name.starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX)
+            && !self.allows_dynamic_tool_name(tool_name)
+        {
+            return false;
+        }
         if self.allowed_tools.contains(tool_name) {
             return self.risky_effect_opted_in(tool_effect_class(tool_name));
         }
@@ -985,6 +1221,326 @@ impl AutonomousAgentToolPolicy {
             _ => true,
         }
     }
+
+    pub fn allows_mcp_server(&self, server_id: &str) -> bool {
+        let server_id = server_id.trim();
+        if server_id.is_empty() {
+            return true;
+        }
+        if self.denied_mcp_servers.contains(server_id) {
+            return false;
+        }
+        self.allowed_mcp_servers.is_empty() || self.allowed_mcp_servers.contains(server_id)
+    }
+
+    pub fn allows_mcp_request(&self, request: &AutonomousMcpRequest) -> bool {
+        request
+            .server_id
+            .as_deref()
+            .map(|server_id| self.allows_mcp_server(server_id))
+            .unwrap_or(true)
+    }
+
+    pub fn allows_dynamic_tool_descriptor(
+        &self,
+        descriptor: &AutonomousDynamicToolDescriptor,
+    ) -> bool {
+        self.allows_dynamic_tool_name(&descriptor.name)
+            && self.allows_mcp_server(&descriptor.server_id)
+    }
+
+    pub fn allows_dynamic_tool_route(
+        &self,
+        tool_name: &str,
+        route: &AutonomousDynamicToolRoute,
+    ) -> bool {
+        if !self.allows_dynamic_tool_name(tool_name) {
+            return false;
+        }
+        match route {
+            AutonomousDynamicToolRoute::McpTool { server_id, .. } => {
+                self.allows_mcp_server(server_id)
+            }
+        }
+    }
+
+    fn allows_dynamic_tool_name(&self, tool_name: &str) -> bool {
+        if self.denied_dynamic_tools.contains(tool_name) {
+            return false;
+        }
+        self.allowed_dynamic_tools.is_empty() || self.allowed_dynamic_tools.contains(tool_name)
+    }
+
+    pub fn allows_subagent_role(&self, role: AutonomousSubagentRole) -> bool {
+        if !self.allows_tool(AUTONOMOUS_TOOL_SUBAGENT) {
+            return false;
+        }
+        let role_id = role.as_str();
+        if self.denied_subagent_roles.contains(role_id) {
+            return false;
+        }
+        !self.allowed_subagent_roles.is_empty() && self.allowed_subagent_roles.contains(role_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousAgentWorkflowPolicy {
+    start_phase_id: String,
+    phases: Vec<AutonomousAgentWorkflowPhase>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutonomousAgentWorkflowPhase {
+    id: String,
+    title: String,
+    allowed_tools: BTreeSet<String>,
+    required_checks: Vec<AutonomousAgentWorkflowCondition>,
+    retry_limit: Option<usize>,
+    branches: Vec<AutonomousAgentWorkflowBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutonomousAgentWorkflowBranch {
+    target_phase_id: String,
+    condition: AutonomousAgentWorkflowCondition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AutonomousAgentWorkflowCondition {
+    Always,
+    TodoCompleted { todo_id: String },
+    ToolSucceeded { tool_name: String, min_count: usize },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct AutonomousAgentWorkflowRuntimeState {
+    current_phase_id: String,
+    tool_successes: BTreeMap<String, usize>,
+    phase_failures: BTreeMap<String, usize>,
+}
+
+impl AutonomousAgentWorkflowPolicy {
+    pub fn from_definition_snapshot(snapshot: &JsonValue) -> Option<Self> {
+        let object = snapshot.get("workflowStructure")?.as_object()?;
+        let phases_json = object.get("phases")?.as_array()?;
+        let phases = phases_json
+            .iter()
+            .filter_map(AutonomousAgentWorkflowPhase::from_json)
+            .collect::<Vec<_>>();
+        if phases.is_empty() {
+            return None;
+        }
+        let start_phase_id = object
+            .get("startPhaseId")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| phases[0].id.clone());
+        phases
+            .iter()
+            .any(|phase| phase.id == start_phase_id)
+            .then_some(Self {
+                start_phase_id,
+                phases,
+            })
+    }
+
+    fn initial_state(&self) -> AutonomousAgentWorkflowRuntimeState {
+        AutonomousAgentWorkflowRuntimeState {
+            current_phase_id: self.start_phase_id.clone(),
+            tool_successes: BTreeMap::new(),
+            phase_failures: BTreeMap::new(),
+        }
+    }
+
+    fn phase(&self, phase_id: &str) -> Option<&AutonomousAgentWorkflowPhase> {
+        self.phases.iter().find(|phase| phase.id == phase_id)
+    }
+
+    fn next_sequential_phase(&self, phase_id: &str) -> Option<&AutonomousAgentWorkflowPhase> {
+        let index = self.phases.iter().position(|phase| phase.id == phase_id)?;
+        self.phases.get(index.saturating_add(1))
+    }
+
+    fn advance_state(
+        &self,
+        state: &mut AutonomousAgentWorkflowRuntimeState,
+        todos: &BTreeMap<String, AutonomousTodoItem>,
+    ) {
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(state.current_phase_id.clone()) {
+                break;
+            }
+            let Some(phase) = self.phase(&state.current_phase_id) else {
+                state.current_phase_id = self.start_phase_id.clone();
+                break;
+            };
+            if !phase.required_checks_satisfied(state, todos) {
+                break;
+            }
+            if let Some(branch) = phase
+                .branches
+                .iter()
+                .find(|branch| branch.condition.satisfied(state, todos))
+            {
+                if branch.target_phase_id == phase.id {
+                    break;
+                }
+                state.current_phase_id = branch.target_phase_id.clone();
+                continue;
+            }
+            let Some(next_phase) = self.next_sequential_phase(&phase.id) else {
+                break;
+            };
+            state.current_phase_id = next_phase.id.clone();
+        }
+    }
+}
+
+impl AutonomousAgentWorkflowPhase {
+    fn from_json(value: &JsonValue) -> Option<Self> {
+        let object = value.as_object()?;
+        let id = json_non_empty_string(object.get("id"))?;
+        let title = json_non_empty_string(object.get("title")).unwrap_or_else(|| id.clone());
+        let allowed_tools = object
+            .get("allowedTools")
+            .and_then(JsonValue::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| json_non_empty_string(Some(item)))
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let required_checks = object
+            .get("requiredChecks")
+            .and_then(JsonValue::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(AutonomousAgentWorkflowCondition::from_json)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let retry_limit = object
+            .get("retryLimit")
+            .and_then(JsonValue::as_u64)
+            .map(|value| value as usize);
+        let branches = object
+            .get("branches")
+            .and_then(JsonValue::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(AutonomousAgentWorkflowBranch::from_json)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            id,
+            title,
+            allowed_tools,
+            required_checks,
+            retry_limit,
+            branches,
+        })
+    }
+
+    fn required_checks_satisfied(
+        &self,
+        state: &AutonomousAgentWorkflowRuntimeState,
+        todos: &BTreeMap<String, AutonomousTodoItem>,
+    ) -> bool {
+        self.required_checks
+            .iter()
+            .all(|condition| condition.satisfied(state, todos))
+    }
+
+    fn allows_tool(&self, tool_name: &str) -> bool {
+        self.allowed_tools.is_empty()
+            || self.allowed_tools.contains(tool_name)
+            || matches!(
+                tool_name,
+                AUTONOMOUS_TOOL_TODO | AUTONOMOUS_TOOL_TOOL_SEARCH | AUTONOMOUS_TOOL_TOOL_ACCESS
+            )
+    }
+}
+
+impl AutonomousAgentWorkflowBranch {
+    fn from_json(value: &JsonValue) -> Option<Self> {
+        let object = value.as_object()?;
+        Some(Self {
+            target_phase_id: json_non_empty_string(object.get("targetPhaseId"))?,
+            condition: AutonomousAgentWorkflowCondition::from_json(object.get("condition")?)?,
+        })
+    }
+}
+
+impl AutonomousAgentWorkflowCondition {
+    fn from_json(value: &JsonValue) -> Option<Self> {
+        let object = value.as_object()?;
+        match object.get("kind")?.as_str()?.trim() {
+            "always" => Some(Self::Always),
+            "todo_completed" => Some(Self::TodoCompleted {
+                todo_id: normalize_workflow_id(object.get("todoId")?)?,
+            }),
+            "tool_succeeded" => Some(Self::ToolSucceeded {
+                tool_name: json_non_empty_string(object.get("toolName"))?,
+                min_count: object
+                    .get("minCount")
+                    .and_then(JsonValue::as_u64)
+                    .filter(|count| *count > 0)
+                    .unwrap_or(1) as usize,
+            }),
+            _ => None,
+        }
+    }
+
+    fn satisfied(
+        &self,
+        state: &AutonomousAgentWorkflowRuntimeState,
+        todos: &BTreeMap<String, AutonomousTodoItem>,
+    ) -> bool {
+        match self {
+            Self::Always => true,
+            Self::TodoCompleted { todo_id } => todos
+                .get(todo_id)
+                .is_some_and(|item| item.status == AutonomousTodoStatus::Completed),
+            Self::ToolSucceeded {
+                tool_name,
+                min_count,
+            } => state.tool_successes.get(tool_name).copied().unwrap_or(0) >= *min_count,
+        }
+    }
+}
+
+fn json_non_empty_string(value: Option<&JsonValue>) -> Option<String> {
+    value
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_workflow_id(value: &JsonValue) -> Option<String> {
+    json_non_empty_string(Some(value)).and_then(|value| {
+        let normalized = value
+            .trim()
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.') {
+                    character.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        (!normalized.is_empty()).then_some(normalized)
+    })
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1040,18 +1596,62 @@ fn executable_on_path(command: &str) -> bool {
     false
 }
 
+pub fn runtime_host_metadata() -> RuntimeHostMetadata {
+    let timestamp_utc = crate::auth::now_timestamp();
+    let date_utc = timestamp_utc
+        .split_once('T')
+        .map(|(date, _)| date)
+        .unwrap_or(timestamp_utc.as_str())
+        .to_owned();
+    RuntimeHostMetadata {
+        timestamp_utc,
+        date_utc,
+        operating_system: env::consts::OS.into(),
+        operating_system_label: current_host_os_label().into(),
+        architecture: env::consts::ARCH.into(),
+        family: env::consts::FAMILY.into(),
+    }
+}
+
+fn current_host_os_label() -> &'static str {
+    match env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        "ios" => "iOS",
+        "android" => "Android",
+        _ => "Other",
+    }
+}
+
+pub fn tool_available_on_current_host(tool: &str) -> bool {
+    match tool {
+        AUTONOMOUS_TOOL_MACOS_AUTOMATION | AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED => {
+            cfg!(target_os = "macos")
+        }
+        AUTONOMOUS_TOOL_POWERSHELL => cfg!(target_os = "windows"),
+        _ => true,
+    }
+}
+
 pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
     if tool_name.starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX) {
         return AutonomousToolEffectClass::ExternalService;
     }
     match tool_name {
         AUTONOMOUS_TOOL_READ
+        | AUTONOMOUS_TOOL_READ_MANY
+        | AUTONOMOUS_TOOL_RESULT_PAGE
+        | AUTONOMOUS_TOOL_STAT
         | AUTONOMOUS_TOOL_SEARCH
         | AUTONOMOUS_TOOL_FIND
         | AUTONOMOUS_TOOL_GIT_STATUS
         | AUTONOMOUS_TOOL_GIT_DIFF
         | AUTONOMOUS_TOOL_LIST
+        | AUTONOMOUS_TOOL_LIST_TREE
+        | AUTONOMOUS_TOOL_DIRECTORY_DIGEST
         | AUTONOMOUS_TOOL_HASH
+        | AUTONOMOUS_TOOL_HARNESS_RUNNER
         | AUTONOMOUS_TOOL_CODE_INTEL
         | AUTONOMOUS_TOOL_LSP
         | AUTONOMOUS_TOOL_TOOL_SEARCH
@@ -1065,6 +1665,7 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
         | AUTONOMOUS_TOOL_TODO
         | AUTONOMOUS_TOOL_AGENT_COORDINATION
         | AUTONOMOUS_TOOL_AGENT_DEFINITION
+        | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE
@@ -1072,6 +1673,11 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
         AUTONOMOUS_TOOL_WRITE
         | AUTONOMOUS_TOOL_EDIT
         | AUTONOMOUS_TOOL_PATCH
+        | AUTONOMOUS_TOOL_COPY
+        | AUTONOMOUS_TOOL_FS_TRANSACTION
+        | AUTONOMOUS_TOOL_JSON_EDIT
+        | AUTONOMOUS_TOOL_TOML_EDIT
+        | AUTONOMOUS_TOOL_YAML_EDIT
         | AUTONOMOUS_TOOL_RENAME
         | AUTONOMOUS_TOOL_MKDIR
         | AUTONOMOUS_TOOL_NOTEBOOK_EDIT => AutonomousToolEffectClass::Write,
@@ -1131,12 +1737,22 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
 }
 
 pub fn tool_allowed_for_runtime_agent(agent_id: RuntimeAgentIdDto, tool_name: &str) -> bool {
-    if tool_name == AUTONOMOUS_TOOL_AGENT_DEFINITION {
+    if tool_name == AUTONOMOUS_TOOL_HARNESS_RUNNER {
+        return false;
+    }
+    if matches!(
+        tool_name,
+        AUTONOMOUS_TOOL_AGENT_DEFINITION | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION
+    ) {
         return agent_id == RuntimeAgentIdDto::AgentCreate;
     }
     match agent_id {
-        RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug | RuntimeAgentIdDto::Test => true,
+        RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug | RuntimeAgentIdDto::Generalist => {
+            true
+        }
+        RuntimeAgentIdDto::Plan => TOOL_ACCESS_PLANNING_TOOLS.contains(&tool_name),
         RuntimeAgentIdDto::Crawl => TOOL_ACCESS_REPOSITORY_RECON_TOOLS.contains(&tool_name),
+        RuntimeAgentIdDto::ComputerUse => TOOL_ACCESS_COMPUTER_USE_TOOLS.contains(&tool_name),
         RuntimeAgentIdDto::Ask | RuntimeAgentIdDto::AgentCreate => {
             matches!(tool_name, AUTONOMOUS_TOOL_TOOL_ACCESS)
                 || tool_effect_class(tool_name).is_ask_observe_only()
@@ -1155,10 +1771,16 @@ pub fn tool_allowed_for_runtime_agent_with_policy(
             .unwrap_or(true)
 }
 
-fn allowed_runtime_agent_labels(tool_name: &str) -> Vec<&'static str> {
+pub fn allowed_runtime_agent_labels(tool_name: &str) -> Vec<&'static str> {
     let mut agents = Vec::new();
     if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Ask, tool_name) {
         agents.push(RuntimeAgentIdDto::Ask.as_str());
+    }
+    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::ComputerUse, tool_name) {
+        agents.push(RuntimeAgentIdDto::ComputerUse.as_str());
+    }
+    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Plan, tool_name) {
+        agents.push(RuntimeAgentIdDto::Plan.as_str());
     }
     if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Engineer, tool_name) {
         agents.push(RuntimeAgentIdDto::Engineer.as_str());
@@ -1172,8 +1794,8 @@ fn allowed_runtime_agent_labels(tool_name: &str) -> Vec<&'static str> {
     if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::AgentCreate, tool_name) {
         agents.push(RuntimeAgentIdDto::AgentCreate.as_str());
     }
-    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Test, tool_name) {
-        agents.push(RuntimeAgentIdDto::Test.as_str());
+    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Generalist, tool_name) {
+        agents.push(RuntimeAgentIdDto::Generalist.as_str());
     }
     agents
 }
@@ -1185,8 +1807,118 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "core",
             "Read a repo-relative file as text, image preview, binary metadata, byte range, or line-hash anchored text.",
             &["file", "inspect", "read", "line_hash", "image", "binary"],
-            &["path", "systemPath", "mode", "startLine", "lineCount", "byteOffset", "byteCount", "includeLineHashes"],
-            &["Read src/lib.rs with line hashes before editing.", "Inspect an image preview in the imported repo."],
+            &[
+                "path",
+                "systemPath",
+                "mode",
+                "startLine",
+                "lineCount",
+                "maxBytesPerFile",
+                "byteOffset",
+                "byteCount",
+                "includeLineHashes",
+            ],
+            &[
+                "Read src/lib.rs with line hashes before editing.",
+                "Inspect an image preview in the imported repo.",
+            ],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_READ_MANY,
+            "core",
+            "Read a bounded ordered set of small repo-relative files with per-file errors and total byte caps.",
+            &["file", "inspect", "read", "batch", "line_hash"],
+            &[
+                "paths",
+                "mode",
+                "startLine",
+                "lineCount",
+                "maxBytesPerFile",
+                "maxTotalBytes",
+                "includeLineHashes",
+            ],
+            &[
+                "Read package.json and tsconfig.json in one bounded call.",
+                "Read several small source files with line hashes before planning edits.",
+            ],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_RESULT_PAGE,
+            "core",
+            "Read a bounded continuation slice from a tool artifact stored under this project's app-data tool-artifacts directory.",
+            &["artifact", "continuation", "pagination", "read", "app_data"],
+            &["artifactPath", "byteOffset", "maxBytes"],
+            &[
+                "Read the next slice from a command, patch, MCP, or manifest artifact path.",
+                "Use nextByteOffset from result_page to continue a large artifact without rerunning the original tool.",
+            ],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_STAT,
+            "core",
+            "Inspect repo-relative path metadata without reading file content, including missing paths, symlinks, optional small-file hashes, and optional git status.",
+            &[
+                "file",
+                "metadata",
+                "stat",
+                "exists",
+                "symlink",
+                "permissions",
+                "hash",
+                "git",
+            ],
+            &[
+                "path",
+                "followSymlinks",
+                "includeGitStatus",
+                "includeHash",
+                "strict",
+            ],
+            &[
+                "Check whether a path exists before deciding to read it.",
+                "Inspect file size and hash without loading content into the model.",
+            ],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_LIST_TREE,
+            "core",
+            "Return a compact deterministic repo-relative directory tree with depth, entry, ignore, and permission omission counts.",
+            &["directory", "tree", "inspect", "list", "git"],
+            &[
+                "path",
+                "maxDepth",
+                "maxEntries",
+                "includeGlobs",
+                "excludeGlobs",
+                "includeGitStatus",
+                "showOmitted",
+            ],
+            &[
+                "Show a compact tree under src.",
+                "Map a directory with git status and omission counts before planning edits.",
+            ],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
+            "core",
+            "Compute a deterministic digest for a repo-relative directory or file set with omission counts and a compact manifest.",
+            &["directory", "digest", "hash", "guard", "manifest"],
+            &[
+                "path",
+                "includeGlobs",
+                "excludeGlobs",
+                "maxFiles",
+                "hashMode",
+            ],
+            &[
+                "Compute a metadata-only digest for src before a recursive operation.",
+                "Compute a content-hash digest for a generated file set.",
+            ],
             "observe",
         ),
         catalog_entry(
@@ -1194,17 +1926,34 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "core",
             "Search repo-scoped files with regex or literal matching, globs, context lines, hidden/ignored controls, and deterministic capped results.",
             &["file", "search", "regex", "grep", "ripgrep", "code"],
-            &["query", "path", "regex", "ignoreCase", "includeHidden", "includeIgnored", "includeGlobs", "excludeGlobs", "contextLines", "maxResults"],
-            &["Search for a symbol before editing.", "Find TODO references with context lines."],
+            &[
+                "query",
+                "path",
+                "regex",
+                "ignoreCase",
+                "includeHidden",
+                "includeIgnored",
+                "includeGlobs",
+                "excludeGlobs",
+                "contextLines",
+                "maxResults",
+            ],
+            &[
+                "Search for a symbol before editing.",
+                "Find TODO references with context lines.",
+            ],
             "observe",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_FIND,
             "core",
-            "Find glob/pattern matches in repo-scoped files.",
+            "Find glob/pattern matches in repo-scoped files with optional bounded recursion depth.",
             &["file", "glob", "find", "tree"],
-            &["pattern", "path"],
-            &["Find **/*.rs files under src-tauri."],
+            &["pattern", "path", "maxDepth"],
+            &[
+                "Find **/*.rs files under src-tauri.",
+                "Find top-level package manifests with maxDepth 2.",
+            ],
             "observe",
         ),
         catalog_entry(
@@ -1229,7 +1978,14 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
             "core",
             "Search source-cited durable project records, approved memory, handoffs, decisions, constraints, questions, blockers, and current context manifests with freshness evidence.",
-            &["context", "memory", "records", "handoff", "retrieval", "citations"],
+            &[
+                "context",
+                "memory",
+                "records",
+                "handoff",
+                "retrieval",
+                "citations",
+            ],
             &[
                 "action",
                 "query",
@@ -1237,6 +1993,7 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
                 "memoryKinds",
                 "tags",
                 "relatedPaths",
+                "includeHistorical",
                 "limit",
             ],
             &["Search project records before prior-work-sensitive tasks."],
@@ -1247,7 +2004,7 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "core",
             "Read one source-cited durable project record or approved memory item by id.",
             &["context", "memory", "records", "read", "citations"],
-            &["action", "recordId", "memoryId"],
+            &["action", "recordId", "memoryId", "includeHistorical"],
             &["Read a cited prior decision by project record id."],
             "observe",
         ),
@@ -1373,16 +2130,29 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "List or activate deferred tool groups and exact tools.",
             &["tool", "activation", "capability", "registry"],
             &["action", "groups", "tools", "reason"],
-            &["Request command_readonly before running tests.", "Activate solana_alt after tool_search finds it."],
+            &[
+                "Request command_readonly before running tests.",
+                "Activate solana_alt after tool_search finds it.",
+            ],
             "registry_control",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_TOOL_SEARCH,
             "core",
             "Search deferred tool capabilities before requesting activation.",
-            &["tool", "search", "discovery", "catalog", "bm25", "capability"],
+            &[
+                "tool",
+                "search",
+                "discovery",
+                "catalog",
+                "bm25",
+                "capability",
+            ],
             &["query", "limit"],
-            &["Search for address lookup table tools.", "Find the smallest browser observation capability."],
+            &[
+                "Search for address lookup table tools.",
+                "Find the smallest browser observation capability.",
+            ],
             "observe",
         ),
         catalog_entry(
@@ -1409,6 +2179,25 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
                 "Save an approved custom agent definition after operator approval.",
             ],
             "agent_definition_state",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+            "agent_builder",
+            "Draft, validate, list, get, save, and update registry-backed Workflow definitions in app-data-backed state.",
+            &[
+                "workflow",
+                "definition",
+                "multi_agent",
+                "registry",
+                "validation",
+                "app_data",
+            ],
+            &["action", "projectId", "workflowId", "definition"],
+            &[
+                "Validate a multi-agent Workflow definition before saving.",
+                "Save an approved Workflow definition after operator approval.",
+            ],
+            "workflow_definition_state",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
@@ -1439,10 +2228,26 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
         catalog_entry(
             AUTONOMOUS_TOOL_TODO,
             "core",
-            "Maintain model-visible planning state for the current owned-agent run.",
-            &["plan", "todo", "task", "state"],
-            &["action", "id", "title", "notes", "status"],
-            &["Track inspect, edit, verify steps for a multi-file change."],
+            "Maintain model-visible planning state for the current owned-agent run, including Debug evidence ledgers.",
+            &["plan", "todo", "task", "state", "debug", "evidence"],
+            &[
+                "action",
+                "id",
+                "title",
+                "notes",
+                "status",
+                "mode",
+                "debugStage",
+                "evidence",
+                "phaseId",
+                "phaseTitle",
+                "sliceId",
+                "handoffNote",
+            ],
+            &[
+                "Track inspect, edit, verify steps for a multi-file change.",
+                "Record Debug symptom, hypothesis, experiment, root_cause, fix, and verification evidence.",
+            ],
             "observe",
         ),
         catalog_entry(
@@ -1477,7 +2282,16 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "mutation",
             "Apply an exact expected-text line-range edit with optional file and line hash anchors.",
             &["file", "edit", "line", "expected_text", "hash_guard"],
-            &["path", "startLine", "endLine", "expected", "replacement", "expectedHash", "startLineHash", "endLineHash"],
+            &[
+                "path",
+                "startLine",
+                "endLine",
+                "expected",
+                "replacement",
+                "expectedHash",
+                "startLineHash",
+                "endLineHash",
+            ],
             &["Replace a small function body after reading it."],
             "write",
         ),
@@ -1485,9 +2299,117 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_PATCH,
             "mutation",
             "Apply a canonical UTF-8 text patch with preview, expected-hash guards, exact diagnostics, and multi-file support.",
-            &["file", "patch", "replace", "exact_text", "multi_file", "preview", "hash_guard"],
-            &["path", "search", "replace", "replaceAll", "expectedHash", "preview", "operations"],
-            &["Preview a multi-file patch before writing.", "Replace an exact import statement with an expected hash."],
+            &[
+                "file",
+                "patch",
+                "replace",
+                "exact_text",
+                "multi_file",
+                "preview",
+                "hash_guard",
+            ],
+            &[
+                "path",
+                "search",
+                "replace",
+                "replaceAll",
+                "expectedHash",
+                "preview",
+                "operations",
+            ],
+            &[
+                "Preview a multi-file patch before writing.",
+                "Replace an exact import statement with an expected hash.",
+            ],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_COPY,
+            "mutation",
+            "Copy a repo-relative file or directory with preview and hash/digest guards.",
+            &["file", "copy", "directory", "preview", "hash_guard"],
+            &[
+                "from",
+                "to",
+                "recursive",
+                "expectedSourceHash",
+                "expectedSourceDigest",
+                "overwrite",
+                "expectedTargetHash",
+                "preview",
+            ],
+            &["Preview a guarded copy before writing."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_FS_TRANSACTION,
+            "mutation",
+            "Apply a guarded multi-step filesystem transaction with preview, validation, and rollback attempts.",
+            &[
+                "file",
+                "transaction",
+                "multi_file",
+                "preview",
+                "hash_guard",
+                "rollback",
+            ],
+            &[
+                "operations",
+                "preview",
+                "stopOnFirstError",
+                "expectedHash",
+                "expectedDigest",
+                "expectedSourceDigest",
+            ],
+            &[
+                "Preview a create/edit/rename plan before writing.",
+                "Apply multiple guarded file mutations with rollback attempts on partial failure.",
+            ],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_JSON_EDIT,
+            "mutation",
+            "Apply parser-backed JSON edits with preview and expected-hash guards.",
+            &["file", "json", "structured_edit", "preview", "hash_guard"],
+            &[
+                "path",
+                "operations",
+                "expectedHash",
+                "formattingMode",
+                "preview",
+            ],
+            &["Set or delete a package.json key without string search/replace."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_TOML_EDIT,
+            "mutation",
+            "Apply parser-backed TOML edits with preview and expected-hash guards.",
+            &["file", "toml", "structured_edit", "preview", "hash_guard"],
+            &[
+                "path",
+                "operations",
+                "expectedHash",
+                "formattingMode",
+                "preview",
+            ],
+            &["Set a Cargo.toml package or dependency key with parser validation."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_YAML_EDIT,
+            "mutation",
+            "Apply parser-backed YAML edits with preview and expected-hash guards.",
+            &["file", "yaml", "structured_edit", "preview", "hash_guard"],
+            &[
+                "path",
+                "operations",
+                "expectedHash",
+                "formattingMode",
+                "preview",
+            ],
+            &["Set a workflow YAML field with parser validation."],
             "write",
         ),
         catalog_entry(
@@ -1530,9 +2452,14 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_COMMAND_VERIFY,
             "command",
             "Run a narrowly allowlisted repo-scoped verification command for tests, checks, lint, build, or formatting verification.",
-            &["command", "verify", "test", "lint", "build", "cargo", "npm", "pnpm"],
+            &[
+                "command", "verify", "test", "lint", "build", "cargo", "npm", "pnpm",
+            ],
             &["argv", "cwd", "timeoutMs"],
-            &["Run cargo test for the changed crate.", "Run pnpm test for a scoped package."],
+            &[
+                "Run cargo test for the changed crate.",
+                "Run pnpm test for a scoped package.",
+            ],
             "command_verify",
         ),
         catalog_entry(
@@ -1549,7 +2476,15 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "command",
             "Start, read, or stop a repo-scoped long-running command session.",
             &["command", "session", "long_running", "dev_server", "watch"],
-            &["action", "argv", "cwd", "timeoutMs", "sessionId", "afterSequence", "maxBytes"],
+            &[
+                "action",
+                "argv",
+                "cwd",
+                "timeoutMs",
+                "sessionId",
+                "afterSequence",
+                "maxBytes",
+            ],
             &["Start a dev server or watcher, then read and stop it."],
             "long_running_process",
         ),
@@ -1557,9 +2492,28 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_PROCESS_MANAGER,
             "process_manager",
             "Manage Xero-owned long-running, interactive, grouped, restartable, and async-job processes, plus system process visibility and approval-gated external signaling.",
-            &["process", "pty", "async", "background", "output", "signal", "port"],
-            &["action", "processId", "groupId", "argv", "input", "timeoutMs", "maxBytes"],
-            &["Start an async build and await completion.", "Inspect system ports."],
+            &[
+                "process",
+                "pty",
+                "async",
+                "background",
+                "output",
+                "signal",
+                "port",
+            ],
+            &[
+                "action",
+                "processId",
+                "groupId",
+                "argv",
+                "input",
+                "timeoutMs",
+                "maxBytes",
+            ],
+            &[
+                "Start an async build and await completion.",
+                "Inspect system ports.",
+            ],
             "process_control",
         ),
         catalog_entry(
@@ -1605,7 +2559,14 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED,
             "system_diagnostics_privileged",
             "Run approval-gated diagnostics that may capture sensitive runtime or UI state, such as process samples and macOS accessibility snapshots.",
-            &["diagnostics", "process", "sample", "accessibility", "macos", "approval"],
+            &[
+                "diagnostics",
+                "process",
+                "sample",
+                "accessibility",
+                "macos",
+                "approval",
+            ],
             &[
                 "action",
                 "pid",
@@ -1627,7 +2588,14 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_MACOS_AUTOMATION,
             "macos",
             "macOS app/system automation: check permissions, list/launch/activate/quit apps, list/focus windows, and capture approval-gated screenshots.",
-            &["macos", "desktop", "window", "app", "screenshot", "permission"],
+            &[
+                "macos",
+                "desktop",
+                "window",
+                "app",
+                "screenshot",
+                "permission",
+            ],
             &["action", "bundleId", "appName", "windowId", "target"],
             &["List running apps.", "Capture a screenshot after approval."],
             "os_control",
@@ -1654,17 +2622,59 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_BROWSER_OBSERVE,
             "browser_observe",
             "Observe the in-app browser with page text, URL, screenshots, console, network, accessibility, tabs, and safe state reads.",
-            &["browser", "frontend", "ui", "dom", "screenshot", "accessibility", "console", "network", "storage", "cookies"],
-            &["action", "url", "selector", "text", "timeoutMs", "tabId", "area", "key"],
-            &["Observe current URL and page text.", "Capture an accessibility tree."],
+            &[
+                "browser",
+                "frontend",
+                "ui",
+                "dom",
+                "screenshot",
+                "accessibility",
+                "console",
+                "network",
+                "storage",
+                "cookies",
+            ],
+            &[
+                "action",
+                "url",
+                "selector",
+                "text",
+                "timeoutMs",
+                "tabId",
+                "area",
+                "key",
+            ],
+            &[
+                "Observe current URL and page text.",
+                "Capture an accessibility tree.",
+            ],
             "browser_observe",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_BROWSER_CONTROL,
             "browser_control",
             "Control the in-app browser with navigation, clicks, typing, key presses, scroll, cookie/storage writes, tab focus/close, and state restore.",
-            &["browser", "frontend", "ui", "dom", "click", "type", "navigation", "storage", "cookies"],
-            &["action", "url", "selector", "text", "timeoutMs", "tabId", "area", "key"],
+            &[
+                "browser",
+                "frontend",
+                "ui",
+                "dom",
+                "click",
+                "type",
+                "navigation",
+                "storage",
+                "cookies",
+            ],
+            &[
+                "action",
+                "url",
+                "selector",
+                "text",
+                "timeoutMs",
+                "tabId",
+                "area",
+                "key",
+            ],
             &["Click and type into a local app after activation."],
             "browser_control",
         ),
@@ -1672,7 +2682,16 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_EMULATOR,
             "emulator",
             "Drive mobile emulator automation.",
-            &["emulator", "mobile", "android", "ios", "device", "tap", "swipe", "screenshot"],
+            &[
+                "emulator",
+                "mobile",
+                "android",
+                "ios",
+                "device",
+                "tap",
+                "swipe",
+                "screenshot",
+            ],
             &["action", "input"],
             &["Launch an app and capture a screenshot."],
             "device_control",
@@ -1681,7 +2700,14 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_MCP_LIST,
             "mcp_list",
             "List connected MCP servers, tools, resources, and prompts over stdio, HTTP, or SSE without invoking capabilities.",
-            &["mcp", "model_context_protocol", "tool", "resource", "prompt", "external"],
+            &[
+                "mcp",
+                "model_context_protocol",
+                "tool",
+                "resource",
+                "prompt",
+                "external",
+            ],
             &["action", "serverId", "timeoutMs"],
             &["List MCP server tools."],
             "external_capability_observe",
@@ -1717,9 +2743,23 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             AUTONOMOUS_TOOL_SUBAGENT,
             "agent_ops",
             "Manage pane-contained child agents with role-scoped tool policy and trace lineage.",
-            &["agent", "subagent", "delegate", "explore", "verify", "parallel"],
-            &["action", "taskId", "role", "prompt", "modelId", "writeSet", "decision", "maxToolCalls"],
-            &["Spawn a researcher for a bounded codebase question.", "Poll an engineer and integrate its result with a parent decision."],
+            &[
+                "agent", "subagent", "delegate", "explore", "verify", "parallel",
+            ],
+            &[
+                "action",
+                "taskId",
+                "role",
+                "prompt",
+                "modelId",
+                "writeSet",
+                "decision",
+                "maxToolCalls",
+            ],
+            &[
+                "Spawn a researcher for a bounded codebase question.",
+                "Poll an engineer and integrate its result with a parent decision.",
+            ],
             "agent_delegation",
         ),
         catalog_entry(
@@ -1737,16 +2777,28 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "Inspect source symbols or JSON diagnostics without requiring command execution.",
             &["code", "symbol", "diagnostic", "intelligence", "static"],
             &["action", "query", "path", "limit"],
-            &["Find symbols named greet.", "Read diagnostics for a source file."],
+            &[
+                "Find symbols named greet.",
+                "Read diagnostics for a source file.",
+            ],
             "observe",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_LSP,
             "intelligence",
             "Inspect language-server availability and resolve source symbols or diagnostics through LSP with native fallback.",
-            &["lsp", "language_server", "symbol", "diagnostic", "install_suggestion"],
+            &[
+                "lsp",
+                "language_server",
+                "symbol",
+                "diagnostic",
+                "install_suggestion",
+            ],
             &["action", "query", "path", "limit", "serverId", "timeoutMs"],
-            &["List available language servers.", "Resolve symbol references with LSP."],
+            &[
+                "List available language servers.",
+                "Resolve symbol references with LSP.",
+            ],
             "observe",
         ),
         catalog_entry(
@@ -2050,13 +3102,17 @@ pub struct AutonomousToolRuntime {
     pub(super) web_runtime: AutonomousWebRuntime,
     pub(super) command_controls: Option<RuntimeRunControlStateDto>,
     pub(super) agent_tool_policy: Option<AutonomousAgentToolPolicy>,
+    pub(super) agent_workflow_policy: Option<AutonomousAgentWorkflowPolicy>,
+    pub(super) agent_workflow_state: Arc<Mutex<AutonomousAgentWorkflowRuntimeState>>,
     pub(super) agent_run_context: Option<AutonomousAgentRunContext>,
+    pub(super) tool_application_policy: ResolvedAgentToolApplicationStyleDto,
     pub(super) browser_control_preference: BrowserControlPreferenceDto,
     pub(super) soul_settings: SoulSettingsDto,
     pub(super) browser_executor: Option<Arc<dyn BrowserExecutor>>,
     pub(super) emulator_executor: Option<Arc<dyn EmulatorExecutor>>,
     pub(super) solana_executor: Option<Arc<dyn SolanaExecutor>>,
     pub(super) cancellation_token: Option<AgentRunCancellationToken>,
+    pub(super) tool_execution_cancelled: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub(super) mcp_registry_path: Option<PathBuf>,
     pub(super) environment_profile_database_path: Option<PathBuf>,
     pub(super) todo_items: Arc<Mutex<BTreeMap<String, AutonomousTodoItem>>>,
@@ -2066,6 +3122,7 @@ pub struct AutonomousToolRuntime {
     pub(super) subagent_write_scope: Option<AutonomousSubagentWriteScope>,
     pub(super) subagent_limits: AutonomousSubagentLimits,
     pub(super) delegated_tool_call_budget: Option<AutonomousDelegatedToolCallBudget>,
+    pub(super) delegated_usage_budget: Option<AutonomousDelegatedUsageBudget>,
     pub(super) skill_tool: Option<AutonomousSkillToolRuntime>,
     process_sessions: Arc<process::ProcessSessionRegistry>,
     owned_processes: Arc<process_manager::OwnedProcessRegistry>,
@@ -2078,16 +3135,23 @@ impl std::fmt::Debug for AutonomousToolRuntime {
             .field("limits", &self.limits)
             .field("command_controls", &self.command_controls)
             .field("agent_tool_policy", &self.agent_tool_policy)
+            .field("agent_workflow_policy", &self.agent_workflow_policy)
             .field("agent_run_context", &self.agent_run_context)
+            .field("tool_application_policy", &self.tool_application_policy)
             .field(
                 "browser_control_preference",
                 &self.browser_control_preference,
             )
             .field("soul_settings", &self.soul_settings)
             .field("mcp_registry_path", &self.mcp_registry_path)
+            .field(
+                "tool_execution_cancelled",
+                &self.tool_execution_cancelled.is_some(),
+            )
             .field("subagent_execution_depth", &self.subagent_execution_depth)
             .field("subagent_write_scope", &self.subagent_write_scope)
             .field("subagent_limits", &self.subagent_limits)
+            .field("delegated_usage_budget", &self.delegated_usage_budget)
             .field("skill_tool_enabled", &self.skill_tool.is_some())
             .finish_non_exhaustive()
     }
@@ -2133,6 +3197,13 @@ impl Default for AutonomousSubagentLimits {
 pub(super) struct AutonomousDelegatedToolCallBudget {
     owner: String,
     remaining: Arc<Mutex<usize>>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AutonomousDelegatedUsageBudget {
+    owner: String,
+    max_tokens: u64,
+    max_cost_micros: u64,
 }
 
 pub trait AutonomousSubagentExecutor: Send + Sync {
@@ -2205,13 +3276,19 @@ impl AutonomousToolRuntime {
             web_runtime: AutonomousWebRuntime::new(web_config),
             command_controls: None,
             agent_tool_policy: None,
+            agent_workflow_policy: None,
+            agent_workflow_state: Arc::new(Mutex::new(
+                AutonomousAgentWorkflowRuntimeState::default(),
+            )),
             agent_run_context: None,
+            tool_application_policy: ResolvedAgentToolApplicationStyleDto::default(),
             browser_control_preference: BrowserControlPreferenceDto::Default,
             soul_settings: default_soul_settings(),
             browser_executor: None,
             emulator_executor: None,
             solana_executor: None,
             cancellation_token: None,
+            tool_execution_cancelled: None,
             mcp_registry_path: None,
             environment_profile_database_path: None,
             todo_items: Arc::new(Mutex::new(BTreeMap::new())),
@@ -2221,6 +3298,7 @@ impl AutonomousToolRuntime {
             subagent_write_scope: None,
             subagent_limits: AutonomousSubagentLimits::default(),
             delegated_tool_call_budget: None,
+            delegated_usage_budget: None,
             skill_tool: None,
             process_sessions: Arc::new(process::ProcessSessionRegistry::default()),
             owned_processes: Arc::new(process_manager::OwnedProcessRegistry::default()),
@@ -2246,6 +3324,18 @@ impl AutonomousToolRuntime {
 
     pub fn browser_control_preference(&self) -> BrowserControlPreferenceDto {
         self.browser_control_preference
+    }
+
+    pub fn with_tool_application_policy(
+        mut self,
+        policy: ResolvedAgentToolApplicationStyleDto,
+    ) -> Self {
+        self.tool_application_policy = policy;
+        self
+    }
+
+    pub fn tool_application_policy(&self) -> &ResolvedAgentToolApplicationStyleDto {
+        &self.tool_application_policy
     }
 
     pub fn with_soul_settings(mut self, settings: SoulSettingsDto) -> Self {
@@ -2369,6 +3459,19 @@ impl AutonomousToolRuntime {
         self.agent_tool_policy.as_ref()
     }
 
+    pub fn with_agent_workflow_policy(
+        mut self,
+        policy: Option<AutonomousAgentWorkflowPolicy>,
+    ) -> Self {
+        let state = policy
+            .as_ref()
+            .map(AutonomousAgentWorkflowPolicy::initial_state)
+            .unwrap_or_default();
+        self.agent_workflow_policy = policy;
+        self.agent_workflow_state = Arc::new(Mutex::new(state));
+        self
+    }
+
     pub fn with_agent_run_context(
         mut self,
         project_id: impl Into<String>,
@@ -2383,6 +3486,17 @@ impl AutonomousToolRuntime {
         self
     }
 
+    pub fn with_durable_subagent_tasks_for_run(
+        mut self,
+        repo_root: &Path,
+        project_id: &str,
+        parent_run_id: &str,
+    ) -> CommandResult<Self> {
+        let tasks = load_subagent_tasks_for_parent(repo_root, project_id, parent_run_id)?;
+        self.subagent_tasks = Arc::new(Mutex::new(tasks));
+        Ok(self)
+    }
+
     pub fn agent_run_context(&self) -> Option<&AutonomousAgentRunContext> {
         self.agent_run_context.as_ref()
     }
@@ -2393,6 +3507,14 @@ impl AutonomousToolRuntime {
 
     pub fn with_cancellation_token(mut self, token: AgentRunCancellationToken) -> Self {
         self.cancellation_token = Some(token);
+        self
+    }
+
+    pub fn with_tool_execution_cancellation(
+        mut self,
+        is_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        self.tool_execution_cancelled = Some(is_cancelled);
         self
     }
 
@@ -2451,6 +3573,30 @@ impl AutonomousToolRuntime {
         self
     }
 
+    pub fn with_delegated_provider_usage_budget(
+        mut self,
+        owner: impl Into<String>,
+        max_tokens: u64,
+        max_cost_micros: u64,
+    ) -> Self {
+        self.delegated_usage_budget = Some(AutonomousDelegatedUsageBudget {
+            owner: owner.into(),
+            max_tokens,
+            max_cost_micros,
+        });
+        self
+    }
+
+    pub(crate) fn delegated_provider_usage_budget(&self) -> Option<(&str, u64, u64)> {
+        self.delegated_usage_budget.as_ref().map(|budget| {
+            (
+                budget.owner.as_str(),
+                budget.max_tokens,
+                budget.max_cost_micros,
+            )
+        })
+    }
+
     pub fn with_skill_tool(
         mut self,
         project_id: impl Into<String>,
@@ -2507,9 +3653,89 @@ impl AutonomousToolRuntime {
         self.skill_tool.is_some()
     }
 
+    fn enforce_agent_workflow_before_tool(&self, tool_name: &str) -> CommandResult<()> {
+        let Some(policy) = self.agent_workflow_policy.as_ref() else {
+            return Ok(());
+        };
+        let todos = self.todo_items.lock().map_err(|_| {
+            CommandError::system_fault(
+                "autonomous_tool_todo_lock_failed",
+                "Xero could not lock the owned-agent todo store.",
+            )
+        })?;
+        let mut state = self.agent_workflow_state.lock().map_err(|_| {
+            CommandError::system_fault(
+                "agent_workflow_state_lock_failed",
+                "Xero could not lock the custom-agent workflow state.",
+            )
+        })?;
+        policy.advance_state(&mut state, &todos);
+        let Some(phase) = policy.phase(&state.current_phase_id) else {
+            return Err(CommandError::policy_denied(
+                "Xero stopped this custom workflow because its current phase is not declared.",
+            ));
+        };
+        if let Some(retry_limit) = phase.retry_limit {
+            let failures = state
+                .phase_failures
+                .get(&phase.id)
+                .copied()
+                .unwrap_or_default();
+            if failures > retry_limit {
+                return Err(CommandError::policy_denied(format!(
+                    "Xero stopped custom workflow phase `{}` because its retryLimit of {} was exceeded.",
+                    phase.title, retry_limit
+                )));
+            }
+        }
+        if !phase.allows_tool(tool_name) {
+            return Err(CommandError::policy_denied(format!(
+                "Xero refused tool `{tool_name}` because custom workflow phase `{}` has not satisfied its required gates.",
+                phase.title
+            )));
+        }
+        Ok(())
+    }
+
+    fn record_agent_workflow_after_tool(
+        &self,
+        tool_name: &str,
+        succeeded: bool,
+    ) -> CommandResult<()> {
+        let Some(policy) = self.agent_workflow_policy.as_ref() else {
+            return Ok(());
+        };
+        let todos = self.todo_items.lock().map_err(|_| {
+            CommandError::system_fault(
+                "autonomous_tool_todo_lock_failed",
+                "Xero could not lock the owned-agent todo store.",
+            )
+        })?;
+        let mut state = self.agent_workflow_state.lock().map_err(|_| {
+            CommandError::system_fault(
+                "agent_workflow_state_lock_failed",
+                "Xero could not lock the custom-agent workflow state.",
+            )
+        })?;
+        if succeeded {
+            *state
+                .tool_successes
+                .entry(tool_name.to_owned())
+                .or_default() += 1;
+        } else {
+            let current_phase_id = state.current_phase_id.clone();
+            *state.phase_failures.entry(current_phase_id).or_default() += 1;
+        }
+        policy.advance_state(&mut state, &todos);
+        Ok(())
+    }
+
     fn check_cancelled(&self) -> CommandResult<()> {
-        if let Some(token) = &self.cancellation_token {
-            token.check_cancelled()?;
+        if self.is_cancelled() {
+            if let Some(token) = &self.cancellation_token {
+                token.check_cancelled()?;
+            }
+            return Err(crate::runtime::cancelled_error());
         }
         Ok(())
     }
@@ -2518,27 +3744,75 @@ impl AutonomousToolRuntime {
         self.cancellation_token
             .as_ref()
             .is_some_and(AgentRunCancellationToken::is_cancelled)
+            || self
+                .tool_execution_cancelled
+                .as_ref()
+                .is_some_and(|is_cancelled| is_cancelled())
+    }
+
+    pub fn harness_runner(
+        &self,
+        _request: AutonomousHarnessRunnerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        Err(CommandError::user_fixable(
+            "autonomous_harness_runner_requires_agent_core",
+            "The harness_runner tool needs the active Tool Registry V2 manifest and can only run through the owned-agent provider loop.",
+        ))
     }
 
     pub fn execute(&self, request: AutonomousToolRequest) -> CommandResult<AutonomousToolResult> {
         self.check_cancelled()?;
         self.consume_delegated_tool_call_budget()?;
+        let tool_name = request.tool_name();
+        self.enforce_agent_workflow_before_tool(tool_name)?;
+        let result = self.execute_without_workflow(request);
+        self.record_agent_workflow_after_tool(tool_name, result.is_ok())?;
+        result
+    }
+
+    fn execute_without_workflow(
+        &self,
+        request: AutonomousToolRequest,
+    ) -> CommandResult<AutonomousToolResult> {
         match request {
             AutonomousToolRequest::Read(request) => self.read(request),
+            AutonomousToolRequest::ReadMany(request) => self.read_many(request),
+            AutonomousToolRequest::ResultPage(request) => self.result_page(request),
+            AutonomousToolRequest::Stat(request) => self.stat(request),
             AutonomousToolRequest::Search(request) => self.search(request),
             AutonomousToolRequest::Find(request) => self.find(request),
             AutonomousToolRequest::GitStatus(request) => self.git_status(request),
             AutonomousToolRequest::GitDiff(request) => self.git_diff(request),
             AutonomousToolRequest::ToolAccess(request) => self.tool_access(request),
+            AutonomousToolRequest::HarnessRunner(request) => self.harness_runner(request),
             AutonomousToolRequest::WebSearch(request) => self.web_search(request),
             AutonomousToolRequest::WebFetch(request) => self.web_fetch(request),
             AutonomousToolRequest::Edit(request) => self.edit(request),
             AutonomousToolRequest::Write(request) => self.write(request),
             AutonomousToolRequest::Patch(request) => self.patch(request),
+            AutonomousToolRequest::Copy(request) => self.copy(request),
+            AutonomousToolRequest::FsTransaction(request) => self.fs_transaction(request),
+            AutonomousToolRequest::JsonEdit(request) => self.structured_edit(
+                request,
+                AutonomousStructuredEditFormat::Json,
+                AUTONOMOUS_TOOL_JSON_EDIT,
+            ),
+            AutonomousToolRequest::TomlEdit(request) => self.structured_edit(
+                request,
+                AutonomousStructuredEditFormat::Toml,
+                AUTONOMOUS_TOOL_TOML_EDIT,
+            ),
+            AutonomousToolRequest::YamlEdit(request) => self.structured_edit(
+                request,
+                AutonomousStructuredEditFormat::Yaml,
+                AUTONOMOUS_TOOL_YAML_EDIT,
+            ),
             AutonomousToolRequest::Delete(request) => self.delete(request),
             AutonomousToolRequest::Rename(request) => self.rename(request),
             AutonomousToolRequest::Mkdir(request) => self.mkdir(request),
             AutonomousToolRequest::List(request) => self.list(request),
+            AutonomousToolRequest::ListTree(request) => self.list_tree(request),
+            AutonomousToolRequest::DirectoryDigest(request) => self.directory_digest(request),
             AutonomousToolRequest::Hash(request) => self.hash(request),
             AutonomousToolRequest::Command(request) => self.command(request),
             AutonomousToolRequest::CommandSessionStart(request) => {
@@ -2566,6 +3840,7 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::WorkspaceIndex(request) => self.workspace_index(request),
             AutonomousToolRequest::AgentCoordination(request) => self.agent_coordination(request),
             AutonomousToolRequest::AgentDefinition(request) => self.agent_definition(request),
+            AutonomousToolRequest::WorkflowDefinition(request) => self.workflow_definition(request),
             AutonomousToolRequest::Skill(request) => self.skill(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
             AutonomousToolRequest::Emulator(request) => self.emulator(request),
@@ -2692,7 +3967,9 @@ impl AutonomousToolRuntime {
         request: AutonomousToolRequest,
     ) -> CommandResult<AutonomousToolResult> {
         self.check_cancelled()?;
-        match request {
+        let tool_name = request.tool_name();
+        self.enforce_agent_workflow_before_tool(tool_name)?;
+        let result = match request {
             AutonomousToolRequest::Read(request) => self.read_with_operator_approval(request),
             AutonomousToolRequest::Command(request) => self.command_with_operator_approval(request),
             AutonomousToolRequest::CommandSessionStart(request) => {
@@ -2713,8 +3990,13 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::AgentDefinition(request) => {
                 self.agent_definition_with_operator_approval(request)
             }
-            request => self.execute(request),
-        }
+            AutonomousToolRequest::WorkflowDefinition(request) => {
+                self.workflow_definition_with_operator_approval(request)
+            }
+            request => self.execute_without_workflow(request),
+        };
+        self.record_agent_workflow_after_tool(tool_name, result.is_ok())?;
+        result
     }
 
     fn solana<F>(&self, tool_name: &'static str, run: F) -> CommandResult<AutonomousToolResult>
@@ -2802,10 +4084,12 @@ impl AutonomousToolRuntime {
             AutonomousToolAccessAction::List => AutonomousToolAccessOutput {
                 action: "list".into(),
                 granted_tools: Vec::new(),
+                granted_tool_details: Vec::new(),
                 denied_tools: Vec::new(),
                 available_groups: self.available_tool_access_groups(),
                 available_tool_packs: self.available_tool_pack_manifests(),
                 tool_pack_health: self.tool_pack_health_reports(),
+                exposure_diagnostics: Some(Self::tool_access_exposure_diagnostics(None)),
                 message:
                     "Available tool groups returned. Request a group or specific tool by name."
                         .into(),
@@ -2852,13 +4136,23 @@ impl AutonomousToolRuntime {
                     }
                 }
 
+                let granted_tools = requested.into_iter().collect::<Vec<_>>();
+                let granted_tool_details = granted_tools
+                    .iter()
+                    .map(|tool| self.tool_access_tool_summary(tool))
+                    .collect::<Vec<_>>();
+
                 AutonomousToolAccessOutput {
                     action: "request".into(),
-                    granted_tools: requested.into_iter().collect(),
+                    granted_tools,
+                    granted_tool_details,
                     denied_tools: denied.into_iter().collect(),
                     available_groups: self.available_tool_access_groups(),
                     available_tool_packs: self.available_tool_pack_manifests(),
                     tool_pack_health: self.tool_pack_health_reports(),
+                    exposure_diagnostics: Some(Self::tool_access_exposure_diagnostics(
+                        request.reason.as_deref(),
+                    )),
                     message: "Requested tools will be exposed on the next provider turn.".into(),
                 }
             }
@@ -2879,6 +4173,11 @@ impl AutonomousToolRuntime {
                 group.tools.retain(|tool| {
                     self.tool_available_by_runtime(tool) && self.tool_allowed_by_active_agent(tool)
                 });
+                group.tool_summaries = group
+                    .tools
+                    .iter()
+                    .map(|tool| self.tool_access_tool_summary(tool))
+                    .collect();
                 if group.tools.is_empty() {
                     return None;
                 }
@@ -2893,6 +4192,49 @@ impl AutonomousToolRuntime {
                 Some(group)
             })
             .collect()
+    }
+
+    fn tool_access_tool_summary(&self, tool: &str) -> AutonomousToolAccessToolSummary {
+        let risk_class = tool_catalog_metadata_for_tool(tool, self.skill_tool_enabled())
+            .and_then(|metadata| {
+                metadata
+                    .get("riskClass")
+                    .and_then(JsonValue::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| {
+                tool_catalog_activation_groups(tool)
+                    .first()
+                    .and_then(|group| tool_access_group_definition(group))
+                    .map(|definition| definition.risk_class.to_owned())
+            })
+            .unwrap_or_else(|| "unknown".into());
+        AutonomousToolAccessToolSummary {
+            tool_name: tool.to_owned(),
+            effect_class: tool_effect_class(tool).as_str().into(),
+            risk_class,
+            runtime_available: self.tool_available_by_runtime(tool),
+            allowed_for_agent: self.tool_allowed_by_active_agent(tool),
+            activation_groups: tool_catalog_activation_groups(tool),
+        }
+    }
+
+    fn tool_access_exposure_diagnostics(reason: Option<&str>) -> JsonValue {
+        json!({
+            "schema": "xero.tool_exposure_diagnostics.v1",
+            "planner": "capability_planner_v1",
+            "requestReason": reason,
+            "traceLocation": "ToolRegistrySnapshot.exposurePlan",
+            "activationTraceEvent": "PolicyDecision(kind=tool_exposure_activation)",
+            "reasonSources": [
+                "startup_core",
+                "planner_classification",
+                "user_explicit_tool_marker",
+                "custom_policy",
+                "tool_access_request",
+                "verification_gate"
+            ],
+        })
     }
 
     fn available_tool_pack_manifests(&self) -> Vec<DomainToolPackManifest> {
@@ -2984,6 +4326,9 @@ impl AutonomousToolRuntime {
     }
 
     fn tool_available_by_runtime(&self, tool: &str) -> bool {
+        if !tool_available_on_current_host(tool) {
+            return false;
+        }
         if tool == AUTONOMOUS_TOOL_SKILL {
             return self.skill_tool_enabled();
         }
@@ -2996,9 +4341,6 @@ impl AutonomousToolRuntime {
         }
         if pack_ids.iter().any(|pack_id| pack_id == "solana") {
             return self.solana_executor.is_some();
-        }
-        if tool == AUTONOMOUS_TOOL_MACOS_AUTOMATION {
-            return cfg!(target_os = "macos");
         }
         true
     }
@@ -3056,20 +4398,31 @@ impl AutonomousToolRuntime {
 #[serde(rename_all = "snake_case", tag = "tool", content = "input")]
 pub enum AutonomousToolRequest {
     Read(AutonomousReadRequest),
+    ReadMany(AutonomousReadManyRequest),
+    ResultPage(AutonomousResultPageRequest),
+    Stat(AutonomousStatRequest),
     Search(AutonomousSearchRequest),
     Find(AutonomousFindRequest),
     GitStatus(AutonomousGitStatusRequest),
     GitDiff(AutonomousGitDiffRequest),
     ToolAccess(AutonomousToolAccessRequest),
+    HarnessRunner(AutonomousHarnessRunnerRequest),
     WebSearch(AutonomousWebSearchRequest),
     WebFetch(AutonomousWebFetchRequest),
     Edit(AutonomousEditRequest),
     Write(AutonomousWriteRequest),
     Patch(AutonomousPatchRequest),
+    Copy(AutonomousCopyRequest),
+    FsTransaction(AutonomousFsTransactionRequest),
+    JsonEdit(AutonomousStructuredEditRequest),
+    TomlEdit(AutonomousStructuredEditRequest),
+    YamlEdit(AutonomousStructuredEditRequest),
     Delete(AutonomousDeleteRequest),
     Rename(AutonomousRenameRequest),
     Mkdir(AutonomousMkdirRequest),
     List(AutonomousListRequest),
+    ListTree(AutonomousListTreeRequest),
+    DirectoryDigest(AutonomousDirectoryDigestRequest),
     #[serde(rename = "file_hash")]
     Hash(AutonomousHashRequest),
     Command(AutonomousCommandRequest),
@@ -3093,6 +4446,7 @@ pub enum AutonomousToolRequest {
     WorkspaceIndex(AutonomousWorkspaceIndexRequest),
     AgentCoordination(AutonomousAgentCoordinationRequest),
     AgentDefinition(AutonomousAgentDefinitionRequest),
+    WorkflowDefinition(AutonomousWorkflowDefinitionRequest),
     Skill(XeroSkillToolInput),
     Browser(AutonomousBrowserRequest),
     Emulator(AutonomousEmulatorRequest),
@@ -3122,6 +4476,146 @@ pub enum AutonomousToolRequest {
     SolanaDocs(AutonomousSolanaDocsRequest),
 }
 
+impl AutonomousToolRequest {
+    pub fn tool_name(&self) -> &'static str {
+        match self {
+            Self::Read(_) => AUTONOMOUS_TOOL_READ,
+            Self::ReadMany(_) => AUTONOMOUS_TOOL_READ_MANY,
+            Self::ResultPage(_) => AUTONOMOUS_TOOL_RESULT_PAGE,
+            Self::Stat(_) => AUTONOMOUS_TOOL_STAT,
+            Self::Search(_) => AUTONOMOUS_TOOL_SEARCH,
+            Self::Find(_) => AUTONOMOUS_TOOL_FIND,
+            Self::GitStatus(_) => AUTONOMOUS_TOOL_GIT_STATUS,
+            Self::GitDiff(_) => AUTONOMOUS_TOOL_GIT_DIFF,
+            Self::ToolAccess(_) => AUTONOMOUS_TOOL_TOOL_ACCESS,
+            Self::HarnessRunner(_) => AUTONOMOUS_TOOL_HARNESS_RUNNER,
+            Self::WebSearch(_) => AUTONOMOUS_TOOL_WEB_SEARCH,
+            Self::WebFetch(_) => AUTONOMOUS_TOOL_WEB_FETCH,
+            Self::Edit(_) => AUTONOMOUS_TOOL_EDIT,
+            Self::Write(_) => AUTONOMOUS_TOOL_WRITE,
+            Self::Patch(_) => AUTONOMOUS_TOOL_PATCH,
+            Self::Copy(_) => AUTONOMOUS_TOOL_COPY,
+            Self::FsTransaction(_) => AUTONOMOUS_TOOL_FS_TRANSACTION,
+            Self::JsonEdit(_) => AUTONOMOUS_TOOL_JSON_EDIT,
+            Self::TomlEdit(_) => AUTONOMOUS_TOOL_TOML_EDIT,
+            Self::YamlEdit(_) => AUTONOMOUS_TOOL_YAML_EDIT,
+            Self::Delete(_) => AUTONOMOUS_TOOL_DELETE,
+            Self::Rename(_) => AUTONOMOUS_TOOL_RENAME,
+            Self::Mkdir(_) => AUTONOMOUS_TOOL_MKDIR,
+            Self::List(_) => AUTONOMOUS_TOOL_LIST,
+            Self::ListTree(_) => AUTONOMOUS_TOOL_LIST_TREE,
+            Self::DirectoryDigest(_) => AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
+            Self::Hash(_) => AUTONOMOUS_TOOL_HASH,
+            Self::Command(_) => AUTONOMOUS_TOOL_COMMAND,
+            Self::CommandSessionStart(_) => AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+            Self::CommandSessionRead(_) => AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+            Self::CommandSessionStop(_) => AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+            Self::ProcessManager(_) => AUTONOMOUS_TOOL_PROCESS_MANAGER,
+            Self::SystemDiagnostics(_) => AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS,
+            Self::MacosAutomation(_) => AUTONOMOUS_TOOL_MACOS_AUTOMATION,
+            Self::Mcp(_) => AUTONOMOUS_TOOL_MCP,
+            Self::Subagent(_) => AUTONOMOUS_TOOL_SUBAGENT,
+            Self::Todo(_) => AUTONOMOUS_TOOL_TODO,
+            Self::NotebookEdit(_) => AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+            Self::CodeIntel(_) => AUTONOMOUS_TOOL_CODE_INTEL,
+            Self::Lsp(_) => AUTONOMOUS_TOOL_LSP,
+            Self::PowerShell(_) => AUTONOMOUS_TOOL_POWERSHELL,
+            Self::ToolSearch(_) => AUTONOMOUS_TOOL_TOOL_SEARCH,
+            Self::EnvironmentContext(_) => AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
+            Self::ProjectContext(request) => project_context_tool_name(request.action),
+            Self::WorkspaceIndex(_) => AUTONOMOUS_TOOL_WORKSPACE_INDEX,
+            Self::AgentCoordination(_) => AUTONOMOUS_TOOL_AGENT_COORDINATION,
+            Self::AgentDefinition(_) => AUTONOMOUS_TOOL_AGENT_DEFINITION,
+            Self::WorkflowDefinition(_) => AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+            Self::Skill(_) => AUTONOMOUS_TOOL_SKILL,
+            Self::Browser(request) => browser_tool_name(&request.action),
+            Self::Emulator(_) => AUTONOMOUS_TOOL_EMULATOR,
+            Self::SolanaCluster(_) => AUTONOMOUS_TOOL_SOLANA_CLUSTER,
+            Self::SolanaLogs(_) => AUTONOMOUS_TOOL_SOLANA_LOGS,
+            Self::SolanaTx(_) => AUTONOMOUS_TOOL_SOLANA_TX,
+            Self::SolanaSimulate(_) => AUTONOMOUS_TOOL_SOLANA_SIMULATE,
+            Self::SolanaExplain(_) => AUTONOMOUS_TOOL_SOLANA_EXPLAIN,
+            Self::SolanaAlt(_) => AUTONOMOUS_TOOL_SOLANA_ALT,
+            Self::SolanaIdl(_) => AUTONOMOUS_TOOL_SOLANA_IDL,
+            Self::SolanaCodama(_) => AUTONOMOUS_TOOL_SOLANA_CODAMA,
+            Self::SolanaPda(_) => AUTONOMOUS_TOOL_SOLANA_PDA,
+            Self::SolanaProgram(_) => AUTONOMOUS_TOOL_SOLANA_PROGRAM,
+            Self::SolanaDeploy(_) => AUTONOMOUS_TOOL_SOLANA_DEPLOY,
+            Self::SolanaUpgradeCheck(_) => AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK,
+            Self::SolanaSquads(_) => AUTONOMOUS_TOOL_SOLANA_SQUADS,
+            Self::SolanaVerifiedBuild(_) => AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
+            Self::SolanaAuditStatic(_) => AUTONOMOUS_TOOL_SOLANA_AUDIT_STATIC,
+            Self::SolanaAuditExternal(_) => AUTONOMOUS_TOOL_SOLANA_AUDIT_EXTERNAL,
+            Self::SolanaAuditFuzz(_) => AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ,
+            Self::SolanaAuditCoverage(_) => AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE,
+            Self::SolanaReplay(_) => AUTONOMOUS_TOOL_SOLANA_REPLAY,
+            Self::SolanaIndexer(_) => AUTONOMOUS_TOOL_SOLANA_INDEXER,
+            Self::SolanaSecrets(_) => AUTONOMOUS_TOOL_SOLANA_SECRETS,
+            Self::SolanaClusterDrift(_) => AUTONOMOUS_TOOL_SOLANA_CLUSTER_DRIFT,
+            Self::SolanaCost(_) => AUTONOMOUS_TOOL_SOLANA_COST,
+            Self::SolanaDocs(_) => AUTONOMOUS_TOOL_SOLANA_DOCS,
+        }
+    }
+}
+
+fn project_context_tool_name(action: AutonomousProjectContextAction) -> &'static str {
+    match action {
+        AutonomousProjectContextAction::SearchProjectRecords
+        | AutonomousProjectContextAction::SearchApprovedMemory
+        | AutonomousProjectContextAction::ListRecentHandoffs
+        | AutonomousProjectContextAction::ListActiveDecisionsConstraints
+        | AutonomousProjectContextAction::ListOpenQuestionsBlockers
+        | AutonomousProjectContextAction::ExplainCurrentContextPackage => {
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH
+        }
+        AutonomousProjectContextAction::GetProjectRecord
+        | AutonomousProjectContextAction::GetMemory => AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET,
+        AutonomousProjectContextAction::RecordContext
+        | AutonomousProjectContextAction::ProposeRecordCandidate => {
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD
+        }
+        AutonomousProjectContextAction::UpdateContext => AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE,
+        AutonomousProjectContextAction::RefreshFreshness => AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH,
+    }
+}
+
+fn browser_tool_name(action: &AutonomousBrowserAction) -> &'static str {
+    match action {
+        AutonomousBrowserAction::Open { .. }
+        | AutonomousBrowserAction::TabOpen { .. }
+        | AutonomousBrowserAction::Navigate { .. }
+        | AutonomousBrowserAction::Back
+        | AutonomousBrowserAction::Forward
+        | AutonomousBrowserAction::Reload
+        | AutonomousBrowserAction::Stop
+        | AutonomousBrowserAction::Click { .. }
+        | AutonomousBrowserAction::Type { .. }
+        | AutonomousBrowserAction::Scroll { .. }
+        | AutonomousBrowserAction::PressKey { .. }
+        | AutonomousBrowserAction::CookiesSet { .. }
+        | AutonomousBrowserAction::StorageWrite { .. }
+        | AutonomousBrowserAction::StorageClear { .. }
+        | AutonomousBrowserAction::StateRestore { .. }
+        | AutonomousBrowserAction::TabClose { .. }
+        | AutonomousBrowserAction::TabFocus { .. } => AUTONOMOUS_TOOL_BROWSER_CONTROL,
+        AutonomousBrowserAction::ReadText { .. }
+        | AutonomousBrowserAction::Query { .. }
+        | AutonomousBrowserAction::WaitForSelector { .. }
+        | AutonomousBrowserAction::WaitForLoad { .. }
+        | AutonomousBrowserAction::CurrentUrl
+        | AutonomousBrowserAction::HistoryState
+        | AutonomousBrowserAction::Screenshot
+        | AutonomousBrowserAction::CookiesGet
+        | AutonomousBrowserAction::StorageRead { .. }
+        | AutonomousBrowserAction::ConsoleLogs { .. }
+        | AutonomousBrowserAction::NetworkSummary { .. }
+        | AutonomousBrowserAction::AccessibilityTree { .. }
+        | AutonomousBrowserAction::StateSnapshot { .. }
+        | AutonomousBrowserAction::HarnessExtensionContract
+        | AutonomousBrowserAction::TabList => AUTONOMOUS_TOOL_BROWSER_OBSERVE,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousReadRequest {
@@ -3133,11 +4627,59 @@ pub struct AutonomousReadRequest {
     pub start_line: Option<usize>,
     pub line_count: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub around_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_file: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_offset: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_count: Option<usize>,
     #[serde(default)]
     pub include_line_hashes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousReadManyRequest {
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AutonomousReadMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_file: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_bytes: Option<usize>,
+    #[serde(default)]
+    pub include_line_hashes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousResultPageRequest {
+    pub artifact_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousStatRequest {
+    pub path: String,
+    #[serde(default)]
+    pub follow_symlinks: bool,
+    #[serde(default)]
+    pub include_git_status: bool,
+    #[serde(default)]
+    pub include_hash: bool,
+    #[serde(default)]
+    pub strict: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3161,6 +4703,10 @@ pub struct AutonomousSearchRequest {
     pub context_lines: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<usize>,
+    #[serde(default)]
+    pub files_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -3176,7 +4722,16 @@ pub enum AutonomousReadMode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousFindRequest {
     pub pattern: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AutonomousFindMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -3222,6 +4777,8 @@ pub struct AutonomousEditRequest {
     pub start_line_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_line_hash: Option<String>,
+    #[serde(default)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3229,6 +4786,14 @@ pub struct AutonomousEditRequest {
 pub struct AutonomousWriteRequest {
     pub path: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_hash: Option<String>,
+    #[serde(default)]
+    pub create_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
+    #[serde(default)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3264,12 +4829,157 @@ pub struct AutonomousPatchOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCopyRequest {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_source_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_source_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_target_hash: Option<String>,
+    #[serde(default)]
+    pub preview: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousFsTransactionAction {
+    #[default]
+    CreateFile,
+    ReplaceFile,
+    EditFile,
+    DeleteFile,
+    DeleteDirectory,
+    Rename,
+    Copy,
+    Mkdir,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionRequest {
+    pub operations: Vec<AutonomousFsTransactionOperation>,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub stop_on_first_error: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionOperation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub action: AutonomousFsTransactionAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+    #[serde(default)]
+    pub replace_all: bool,
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_source_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_source_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_target_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parents: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exist_ok: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousStructuredEditFormat {
+    Json,
+    Toml,
+    Yaml,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousStructuredEditFormattingMode {
+    #[default]
+    Normalize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousStructuredEditAction {
+    Set,
+    Delete,
+    AppendUnique,
+    SortKeys,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousStructuredEditRequest {
+    pub path: String,
+    pub operations: Vec<AutonomousStructuredEditOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_hash: Option<String>,
+    #[serde(default)]
+    pub formatting_mode: AutonomousStructuredEditFormattingMode,
+    #[serde(default)]
+    pub preview: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousStructuredEditOperation {
+    pub action: AutonomousStructuredEditAction,
+    pub pointer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousDeleteRequest {
     pub path: String,
     #[serde(default)]
     pub recursive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_digest: Option<String>,
+    #[serde(default)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3279,12 +4989,24 @@ pub struct AutonomousRenameRequest {
     pub to_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_target_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
+    #[serde(default)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousMkdirRequest {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parents: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exist_ok: Option<bool>,
+    #[serde(default)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3294,12 +5016,88 @@ pub struct AutonomousListRequest {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_by: Option<AutonomousListSortBy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_direction: Option<AutonomousListSortDirection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousListSortBy {
+    Path,
+    Name,
+    Kind,
+    Size,
+    Modified,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousListSortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousListTreeRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_globs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_globs: Vec<String>,
+    #[serde(default)]
+    pub include_git_status: bool,
+    #[serde(default)]
+    pub show_omitted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousDirectoryDigestHashMode {
+    MetadataOnly,
+    ContentHash,
+    GitIndexAware,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousDirectoryDigestRequest {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_globs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_globs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_files: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_mode: Option<AutonomousDirectoryDigestHashMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousHashRequest {
     pub path: String,
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_globs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_globs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_files: Option<usize>,
+    #[serde(default)]
+    pub manifest: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3723,6 +5521,211 @@ impl AutonomousSubagentRole {
     }
 }
 
+fn autonomous_subagent_role_from_str(value: &str) -> Option<AutonomousSubagentRole> {
+    match value {
+        "engineer" => Some(AutonomousSubagentRole::Engineer),
+        "debugger" => Some(AutonomousSubagentRole::Debugger),
+        "planner" => Some(AutonomousSubagentRole::Planner),
+        "researcher" => Some(AutonomousSubagentRole::Researcher),
+        "reviewer" => Some(AutonomousSubagentRole::Reviewer),
+        "agent_builder" => Some(AutonomousSubagentRole::AgentBuilder),
+        "browser" => Some(AutonomousSubagentRole::Browser),
+        "emulator" => Some(AutonomousSubagentRole::Emulator),
+        "solana" => Some(AutonomousSubagentRole::Solana),
+        "database" => Some(AutonomousSubagentRole::Database),
+        _ => None,
+    }
+}
+
+pub(super) fn persist_subagent_task_for_parent(
+    repo_root: &Path,
+    project_id: &str,
+    parent_run_id: &str,
+    task: &AutonomousSubagentTask,
+) -> CommandResult<()> {
+    let record = agent_subagent_task_record_from_task(project_id, parent_run_id, task)?;
+    project_store::upsert_agent_subagent_task(repo_root, &record)
+}
+
+pub(super) fn load_subagent_tasks_for_parent(
+    repo_root: &Path,
+    project_id: &str,
+    parent_run_id: &str,
+) -> CommandResult<BTreeMap<String, AutonomousSubagentTask>> {
+    let records =
+        project_store::list_agent_subagent_tasks_for_parent(repo_root, project_id, parent_run_id)?;
+    records
+        .into_iter()
+        .map(|record| {
+            let task = autonomous_subagent_task_from_record(record)?;
+            Ok((task.subagent_id.clone(), task))
+        })
+        .collect()
+}
+
+fn agent_subagent_task_record_from_task(
+    project_id: &str,
+    parent_run_id: &str,
+    task: &AutonomousSubagentTask,
+) -> CommandResult<project_store::AgentSubagentTaskRecord> {
+    let write_set_json = serde_json::to_string(&task.write_set).map_err(|error| {
+        CommandError::system_fault(
+            "agent_subagent_write_set_serialize_failed",
+            format!("Xero could not serialize subagent writeSet state: {error}"),
+        )
+    })?;
+    let input_log_json = serde_json::to_string(&task.input_log).map_err(|error| {
+        CommandError::system_fault(
+            "agent_subagent_input_log_serialize_failed",
+            format!("Xero could not serialize subagent input log: {error}"),
+        )
+    })?;
+    let budget_diagnostic_json = task
+        .budget_diagnostic
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_subagent_budget_diagnostic_serialize_failed",
+                format!("Xero could not serialize subagent budget diagnostics: {error}"),
+            )
+        })?;
+    Ok(project_store::AgentSubagentTaskRecord {
+        project_id: project_id.into(),
+        parent_run_id: task
+            .parent_run_id
+            .as_deref()
+            .unwrap_or(parent_run_id)
+            .into(),
+        subagent_id: task.subagent_id.clone(),
+        role: task.role.as_str().into(),
+        role_label: task.role_label.clone(),
+        prompt_hash: subagent_prompt_hash(&task.prompt),
+        prompt_preview: subagent_prompt_preview(&task.prompt),
+        model_id: task.model_id.clone(),
+        write_set_json,
+        verification_contract: task.verification_contract.clone(),
+        depth: task.depth as u64,
+        max_tool_calls: task.max_tool_calls as u64,
+        max_tokens: task.max_tokens,
+        max_cost_micros: task.max_cost_micros,
+        used_tool_calls: task.used_tool_calls as u64,
+        used_tokens: task.used_tokens,
+        used_cost_micros: task.used_cost_micros,
+        budget_status: if task.budget_status.trim().is_empty() {
+            "within_budget".into()
+        } else {
+            task.budget_status.clone()
+        },
+        budget_diagnostic_json,
+        status: task.status.clone(),
+        created_at: task.created_at.clone(),
+        started_at: task.started_at.clone(),
+        completed_at: task.completed_at.clone(),
+        cancelled_at: task.cancelled_at.clone(),
+        integrated_at: task.integrated_at.clone(),
+        child_run_id: task.run_id.clone(),
+        child_trace_id: task.trace_id.clone(),
+        parent_trace_id: task.parent_trace_id.clone(),
+        input_log_json,
+        result_summary: task.result_summary.clone(),
+        result_artifact: task.result_artifact.clone(),
+        parent_decision: task.parent_decision.clone(),
+        latest_summary: task.result_summary.clone(),
+        updated_at: crate::auth::now_timestamp(),
+    })
+}
+
+fn autonomous_subagent_task_from_record(
+    record: project_store::AgentSubagentTaskRecord,
+) -> CommandResult<AutonomousSubagentTask> {
+    let role = autonomous_subagent_role_from_str(&record.role).ok_or_else(|| {
+        CommandError::system_fault(
+            "agent_subagent_role_decode_failed",
+            format!(
+                "Xero could not decode durable subagent role `{}`.",
+                record.role
+            ),
+        )
+    })?;
+    let write_set =
+        serde_json::from_str::<Vec<String>>(&record.write_set_json).map_err(|error| {
+            CommandError::system_fault(
+                "agent_subagent_write_set_decode_failed",
+                format!("Xero could not decode durable subagent writeSet state: {error}"),
+            )
+        })?;
+    let input_log =
+        serde_json::from_str::<Vec<AutonomousSubagentInputRecord>>(&record.input_log_json)
+            .map_err(|error| {
+                CommandError::system_fault(
+                    "agent_subagent_input_log_decode_failed",
+                    format!("Xero could not decode durable subagent input log: {error}"),
+                )
+            })?;
+    let budget_diagnostic = record
+        .budget_diagnostic_json
+        .as_deref()
+        .map(serde_json::from_str::<JsonValue>)
+        .transpose()
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_subagent_budget_diagnostic_decode_failed",
+                format!("Xero could not decode durable subagent budget diagnostics: {error}"),
+            )
+        })?;
+    Ok(AutonomousSubagentTask {
+        subagent_id: record.subagent_id,
+        role,
+        role_label: record.role_label,
+        prompt: record.prompt_preview,
+        model_id: record.model_id,
+        write_set,
+        verification_contract: record.verification_contract,
+        depth: record.depth as usize,
+        max_tool_calls: record.max_tool_calls as usize,
+        max_tokens: record.max_tokens,
+        max_cost_micros: record.max_cost_micros,
+        used_tool_calls: record.used_tool_calls as usize,
+        used_tokens: record.used_tokens,
+        used_cost_micros: record.used_cost_micros,
+        budget_status: record.budget_status,
+        budget_diagnostic,
+        status: record.status,
+        created_at: record.created_at,
+        started_at: record.started_at,
+        completed_at: record.completed_at,
+        cancelled_at: record.cancelled_at,
+        integrated_at: record.integrated_at,
+        run_id: record.child_run_id,
+        trace_id: record.child_trace_id,
+        parent_run_id: Some(record.parent_run_id),
+        parent_trace_id: record.parent_trace_id,
+        input_log,
+        result_summary: record.result_summary,
+        result_artifact: record.result_artifact,
+        parent_decision: record.parent_decision,
+    })
+}
+
+fn subagent_prompt_hash(prompt: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(prompt.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn subagent_prompt_preview(prompt: &str) -> String {
+    if let Some(reason) = find_prohibited_persistence_content(prompt) {
+        return format!("[REDACTED: {reason}]");
+    }
+    prompt
+        .chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
+        .take(512)
+        .collect::<String>()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousSubagentRequest {
@@ -3772,6 +5775,16 @@ pub struct AutonomousSubagentTask {
     pub max_tool_calls: usize,
     pub max_tokens: u64,
     pub max_cost_micros: u64,
+    #[serde(default)]
+    pub used_tool_calls: usize,
+    #[serde(default)]
+    pub used_tokens: u64,
+    #[serde(default)]
+    pub used_cost_micros: u64,
+    #[serde(default)]
+    pub budget_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_diagnostic: Option<JsonValue>,
     pub status: String,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3818,6 +5831,54 @@ pub enum AutonomousTodoStatus {
     Completed,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousHarnessRunnerAction {
+    Manifest,
+    CompareReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousHarnessRunnerRequest {
+    pub action: AutonomousHarnessRunnerAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_report: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousHarnessRunnerOutput {
+    pub schema: String,
+    pub action: AutonomousHarnessRunnerAction,
+    pub passed: bool,
+    pub summary: String,
+    pub manifest_version: String,
+    pub manifest_signature: String,
+    pub item_count: usize,
+    pub comparison: JsonValue,
+    pub items: Vec<JsonValue>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousTodoMode {
+    Plan,
+    DebugEvidence,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousDebugEvidenceStage {
+    Symptom,
+    Reproduction,
+    Hypothesis,
+    Experiment,
+    RootCause,
+    Fix,
+    Verification,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousTodoRequest {
@@ -3830,6 +5891,20 @@ pub struct AutonomousTodoRequest {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AutonomousTodoStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AutonomousTodoMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_stage: Option<AutonomousDebugEvidenceStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3839,6 +5914,19 @@ pub struct AutonomousTodoItem {
     pub title: String,
     pub notes: Option<String>,
     pub status: AutonomousTodoStatus,
+    pub mode: AutonomousTodoMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_stage: Option<AutonomousDebugEvidenceStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_note: Option<String>,
     pub updated_at: String,
 }
 
@@ -3920,6 +6008,17 @@ pub enum AutonomousCommandPolicyOutcome {
     Escalated,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousCommandPolicyProfile {
+    ReadOnlyVerification,
+    GeneratedFileMutation,
+    DependencyInstallation,
+    ExternalNetwork,
+    DestructiveOperation,
+    GeneralExecution,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomousSafetyPolicyAction {
@@ -3969,6 +6068,7 @@ pub struct AutonomousSafetyPolicyDecision {
 pub struct AutonomousCommandPolicyTrace {
     pub outcome: AutonomousCommandPolicyOutcome,
     pub approval_mode: RuntimeRunApprovalModeDto,
+    pub profile: AutonomousCommandPolicyProfile,
     pub code: String,
     pub reason: String,
 }
@@ -3999,20 +6099,31 @@ pub struct AutonomousToolResult {
 )]
 pub enum AutonomousToolOutput {
     Read(AutonomousReadOutput),
+    ReadMany(AutonomousReadManyOutput),
+    ResultPage(AutonomousResultPageOutput),
+    Stat(AutonomousStatOutput),
     Search(AutonomousSearchOutput),
     Find(AutonomousFindOutput),
     GitStatus(AutonomousGitStatusOutput),
     GitDiff(AutonomousGitDiffOutput),
     ToolAccess(AutonomousToolAccessOutput),
+    HarnessRunner(AutonomousHarnessRunnerOutput),
     WebSearch(AutonomousWebSearchOutput),
     WebFetch(AutonomousWebFetchOutput),
     Edit(AutonomousEditOutput),
     Write(AutonomousWriteOutput),
     Patch(AutonomousPatchOutput),
+    Copy(AutonomousCopyOutput),
+    FsTransaction(AutonomousFsTransactionOutput),
+    JsonEdit(AutonomousStructuredEditOutput),
+    TomlEdit(AutonomousStructuredEditOutput),
+    YamlEdit(AutonomousStructuredEditOutput),
     Delete(AutonomousDeleteOutput),
     Rename(AutonomousRenameOutput),
     Mkdir(AutonomousMkdirOutput),
     List(AutonomousListOutput),
+    ListTree(AutonomousListTreeOutput),
+    DirectoryDigest(AutonomousDirectoryDigestOutput),
     Hash(AutonomousHashOutput),
     Command(AutonomousCommandOutput),
     CommandSession(AutonomousCommandSessionOutput),
@@ -4031,6 +6142,7 @@ pub enum AutonomousToolOutput {
     WorkspaceIndex(AutonomousWorkspaceIndexOutput),
     AgentCoordination(AutonomousAgentCoordinationOutput),
     AgentDefinition(AutonomousAgentDefinitionOutput),
+    WorkflowDefinition(AutonomousWorkflowDefinitionOutput),
     Skill(AutonomousSkillToolOutput),
     Browser(AutonomousBrowserOutput),
     Emulator(AutonomousEmulatorOutput),
@@ -4041,11 +6153,22 @@ pub enum AutonomousToolOutput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousReadOutput {
     pub path: String,
+    pub path_kind: AutonomousStatKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<String>,
     pub start_line: usize,
     pub line_count: usize,
     pub total_lines: usize,
     pub truncated: bool,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_omitted_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_kind: Option<AutonomousReadContentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4080,16 +6203,138 @@ pub struct AutonomousReadOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousReadManyError {
+    pub code: String,
+    pub class: CommandErrorClass,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl From<CommandError> for AutonomousReadManyError {
+    fn from(error: CommandError) -> Self {
+        Self {
+            code: error.code,
+            class: error.class,
+            message: error.message,
+            retryable: error.retryable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousReadManyItem {
+    pub path: String,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<AutonomousReadOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<AutonomousReadManyError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousReadManyOutput {
+    pub paths: Vec<String>,
+    pub results: Vec<AutonomousReadManyItem>,
+    pub total_files: usize,
+    pub ok_files: usize,
+    pub error_files: usize,
+    pub omitted_files: usize,
+    pub total_bytes: u64,
+    pub omitted_bytes: u64,
+    pub truncated: bool,
+    pub max_bytes_per_file: usize,
+    pub max_total_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousResultPageOutput {
+    pub artifact_path: String,
+    pub byte_offset: u64,
+    pub byte_count: usize,
+    pub total_bytes: u64,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_byte_offset: Option<u64>,
+    pub content: String,
+    pub encoding: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousStatKind {
+    File,
+    Directory,
+    Symlink,
+    Missing,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousStatPermissions {
+    pub readonly: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousStatOutput {
+    pub path: String,
+    pub path_kind: AutonomousStatKind,
+    pub exists: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<AutonomousStatPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_omitted_reason: Option<String>,
+    #[serde(default)]
+    pub follow_symlinks: bool,
+    #[serde(default)]
+    pub include_git_status: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_status: Vec<RepositoryStatusEntryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousSearchOutput {
     pub query: String,
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<AutonomousSearchFileSummary>,
     pub matches: Vec<AutonomousSearchMatch>,
     pub scanned_files: usize,
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub files_only: bool,
+    #[serde(default)]
+    pub returned_matches: usize,
+    #[serde(default)]
+    pub skipped_matches: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_matches: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched_files: Option<usize>,
+    pub omissions: AutonomousSearchOmissions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
     #[serde(default)]
@@ -4110,12 +6355,76 @@ pub struct AutonomousSearchOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSearchFileSummary {
+    pub path: String,
+    pub match_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSearchOmissions {
+    #[serde(default)]
+    pub ignored_directories: usize,
+    #[serde(default)]
+    pub filtered_files: usize,
+    #[serde(default)]
+    pub binary_files: usize,
+    #[serde(default)]
+    pub oversized_files: usize,
+    #[serde(default)]
+    pub unreadable_files: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousFindOutput {
     pub pattern: String,
     pub scope: Option<String>,
+    pub mode: AutonomousFindMode,
     pub matches: Vec<String>,
     pub scanned_files: usize,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub returned_matches: usize,
+    #[serde(default)]
+    pub skipped_matches: usize,
+    #[serde(default)]
+    pub file_count: usize,
+    #[serde(default)]
+    pub directory_count: usize,
+    #[serde(default)]
+    pub symlink_count: usize,
+    #[serde(default)]
+    pub other_count: usize,
+    pub omissions: AutonomousFindOmissions,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousFindMode {
+    Glob,
+    Name,
+    Extension,
+    PathPrefix,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFindOmissions {
+    #[serde(default)]
+    pub ignored_directories: usize,
+    #[serde(default)]
+    pub depth_limited_directories: usize,
+    #[serde(default)]
+    pub permission_denied: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4197,6 +6506,19 @@ pub struct AutonomousToolAccessGroup {
     pub description: String,
     pub tools: Vec<String>,
     pub risk_class: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_summaries: Vec<AutonomousToolAccessToolSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousToolAccessToolSummary {
+    pub tool_name: String,
+    pub effect_class: String,
+    pub risk_class: String,
+    pub runtime_available: bool,
+    pub allowed_for_agent: bool,
+    pub activation_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4204,12 +6526,16 @@ pub struct AutonomousToolAccessGroup {
 pub struct AutonomousToolAccessOutput {
     pub action: String,
     pub granted_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted_tool_details: Vec<AutonomousToolAccessToolSummary>,
     pub denied_tools: Vec<String>,
     pub available_groups: Vec<AutonomousToolAccessGroup>,
     #[serde(default)]
     pub available_tool_packs: Vec<DomainToolPackManifest>,
     #[serde(default)]
     pub tool_pack_health: Vec<DomainToolPackHealthReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_diagnostics: Option<JsonValue>,
     pub message: String,
 }
 
@@ -4220,6 +6546,10 @@ pub struct AutonomousEditOutput {
     pub start_line: usize,
     pub end_line: usize,
     pub replacement_len: usize,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4238,6 +6568,20 @@ pub struct AutonomousWriteOutput {
     pub path: String,
     pub created: bool,
     pub bytes_written: usize,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4254,12 +6598,17 @@ pub struct AutonomousPatchOutput {
     pub files: Vec<AutonomousPatchFileOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<AutonomousPatchFailure>,
+    pub rollback_status: AutonomousFsTransactionRollbackStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
+    #[serde(default)]
+    pub diff_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_ending: Option<AutonomousLineEnding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4275,8 +6624,27 @@ pub struct AutonomousPatchFileOutput {
     pub old_hash: String,
     pub new_hash: String,
     pub diff: String,
+    pub guard_status: AutonomousPatchGuardStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_ranges: Vec<AutonomousPatchChangedRange>,
     pub line_ending: AutonomousLineEnding,
     pub bom_preserved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousPatchGuardStatus {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected_hashes: Vec<String>,
+    pub current_hash: String,
+    pub matched: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousPatchChangedRange {
+    pub start_line: usize,
+    pub end_line: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4291,10 +6659,189 @@ pub struct AutonomousPatchFailure {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCopyOmissions {
+    pub symlinks: usize,
+    pub existing_targets: usize,
+    pub unsupported: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCopyOperation {
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_path: Option<String>,
+    pub to_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(default)]
+    pub overwritten: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCopyOutput {
+    pub from_path: String,
+    pub to_path: String,
+    pub recursive: bool,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub overwritten: bool,
+    pub copied_files: usize,
+    pub copied_bytes: u64,
+    pub created_directories: usize,
+    pub source_kind: AutonomousStatKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_hash: Option<String>,
+    pub omitted: AutonomousCopyOmissions,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<AutonomousCopyOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionError {
+    pub code: String,
+    pub class: CommandErrorClass,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl From<CommandError> for AutonomousFsTransactionError {
+    fn from(error: CommandError) -> Self {
+        Self {
+            code: error.code,
+            class: error.class,
+            message: error.message,
+            retryable: error.retryable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionValidationSummary {
+    pub ok: bool,
+    pub validated_operations: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<AutonomousFsTransactionOperationResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionRollbackAttempt {
+    pub path: String,
+    pub action: String,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<AutonomousFsTransactionError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionRollbackStatus {
+    pub attempted: bool,
+    pub succeeded: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<AutonomousFsTransactionRollbackAttempt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionOperationResult {
+    pub index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub action: AutonomousFsTransactionAction,
+    pub ok: bool,
+    pub status: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<AutonomousFsTransactionError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFsTransactionOutput {
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    pub operation_count: usize,
+    pub validation: AutonomousFsTransactionValidationSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planned_operations: Vec<AutonomousFsTransactionOperationResult>,
+    pub rollback_status: AutonomousFsTransactionRollbackStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<AutonomousFsTransactionOperationResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousStructuredEditOutput {
+    pub path: String,
+    pub format: AutonomousStructuredEditFormat,
+    pub operations_applied: usize,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    pub formatting_mode: AutonomousStructuredEditFormattingMode,
+    pub old_hash: String,
+    pub new_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    pub line_ending: AutonomousLineEnding,
+    pub bom_preserved: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_changes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousDeleteOutput {
     pub path: String,
     pub recursive: bool,
     pub existed: bool,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub deleted_count: usize,
+    #[serde(default)]
+    pub file_count: usize,
+    #[serde(default)]
+    pub directory_count: usize,
+    #[serde(default)]
+    pub symlink_count: usize,
+    #[serde(default)]
+    pub other_count: usize,
+    #[serde(default)]
+    pub bytes_estimated: u64,
+    #[serde(default)]
+    pub bytes_remaining: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4302,6 +6849,25 @@ pub struct AutonomousDeleteOutput {
 pub struct AutonomousRenameOutput {
     pub from_path: String,
     pub to_path: String,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub overwritten: bool,
+    pub source_kind: AutonomousStatKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    #[serde(default)]
+    pub target_existed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<AutonomousStatKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4309,6 +6875,14 @@ pub struct AutonomousRenameOutput {
 pub struct AutonomousMkdirOutput {
     pub path: String,
     pub created: bool,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub preview: bool,
+    pub parents: bool,
+    pub exist_ok: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4317,6 +6891,8 @@ pub struct AutonomousListEntry {
     pub path: String,
     pub kind: String,
     pub bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4325,14 +6901,146 @@ pub struct AutonomousListOutput {
     pub path: String,
     pub entries: Vec<AutonomousListEntry>,
     pub truncated: bool,
+    pub max_depth: usize,
+    pub max_results: usize,
+    pub sort_by: AutonomousListSortBy,
+    pub sort_direction: AutonomousListSortDirection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub returned_entries: usize,
+    pub skipped_entries: usize,
+    pub file_count: usize,
+    pub directory_count: usize,
+    pub symlink_count: usize,
+    pub other_count: usize,
+    pub omitted: AutonomousListOmissions,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousListOmissions {
+    pub depth: usize,
+    pub entry_cap: usize,
+    pub ignored_directory: usize,
+    pub permission: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousListTreeOmissions {
+    pub depth: usize,
+    pub entry_cap: usize,
+    pub ignored_directory: usize,
+    pub permission: usize,
+    pub filtered: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousListTreeNode {
+    pub name: String,
+    pub path: String,
+    pub path_kind: AutonomousStatKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<AutonomousListTreeNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousListTreeOutput {
+    pub path: String,
+    pub root: AutonomousListTreeNode,
+    pub file_count: usize,
+    pub directory_count: usize,
+    pub symlink_count: usize,
+    pub other_count: usize,
+    pub max_depth: usize,
+    pub max_entries: usize,
+    pub truncated: bool,
+    pub omitted: AutonomousListTreeOmissions,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_status: Vec<RepositoryStatusEntryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousDirectoryDigestOmissions {
+    pub max_files: usize,
+    pub ignored_directory: usize,
+    pub permission: usize,
+    pub filtered: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousDirectoryDigestEntry {
+    pub path: String,
+    pub path_kind: AutonomousStatKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousDirectoryDigestOutput {
+    pub path: String,
+    pub digest: String,
+    pub algorithm: String,
+    pub hash_mode: AutonomousDirectoryDigestHashMode,
+    pub file_count: usize,
+    pub directory_count: usize,
+    pub symlink_count: usize,
+    pub other_count: usize,
+    pub total_bytes: u64,
+    pub max_files: usize,
+    pub truncated: bool,
+    pub omitted: AutonomousDirectoryDigestOmissions,
+    pub manifest: Vec<AutonomousDirectoryDigestEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousHashOutput {
     pub path: String,
+    pub path_kind: AutonomousStatKind,
+    pub algorithm: String,
+    pub mode: String,
     pub sha256: String,
     pub bytes: u64,
+    pub file_count: usize,
+    pub max_files: usize,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<AutonomousHashFileEntry>,
+    pub omitted: AutonomousHashOmissions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousHashFileEntry {
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousHashOmissions {
+    pub max_files: usize,
+    pub ignored_directory: usize,
+    pub permission: usize,
+    pub filtered: usize,
+    pub unsupported: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4340,6 +7048,7 @@ pub struct AutonomousHashOutput {
 pub struct AutonomousCommandOutput {
     pub argv: Vec<String>,
     pub cwd: String,
+    pub intent: String,
     pub stdout: Option<String>,
     pub stderr: Option<String>,
     pub stdout_truncated: bool,
@@ -4350,8 +7059,26 @@ pub struct AutonomousCommandOutput {
     pub timed_out: bool,
     pub spawned: bool,
     pub policy: AutonomousCommandPolicyTrace,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<RepositoryStatusEntryDto>,
+    pub changed_files_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_artifact: Option<AutonomousCommandOutputArtifact>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_next_actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxExecutionMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCommandOutputArtifact {
+    pub path: String,
+    pub byte_count: usize,
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+    pub redacted: bool,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4850,6 +7577,20 @@ pub struct AutonomousMcpOutput {
     pub capability_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_artifact: Option<AutonomousMcpResultArtifact>,
+    #[serde(default)]
+    pub result_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_original_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousMcpResultArtifact {
+    pub id: String,
+    pub path: String,
+    pub byte_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4976,7 +7717,10 @@ pub struct AutonomousToolSearchMatch {
     pub schema_fields: Vec<String>,
     pub examples: Vec<String>,
     pub risk_class: String,
+    pub effect_class: String,
     pub runtime_available: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub why_matched: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5195,11 +7939,55 @@ mod tests {
     }
 
     #[test]
+    fn plan_runtime_agent_uses_exact_planning_tool_allowlist() {
+        let expected: BTreeSet<&str> = TOOL_ACCESS_PLANNING_TOOLS.iter().copied().collect();
+        let observed: BTreeSet<&str> = deferred_tool_catalog(true)
+            .into_iter()
+            .filter(|entry| {
+                tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Plan, entry.tool_name)
+            })
+            .map(|entry| entry.tool_name)
+            .collect();
+
+        assert_eq!(observed, expected);
+        for blocked_tool in [
+            AUTONOMOUS_TOOL_EDIT,
+            AUTONOMOUS_TOOL_WRITE,
+            AUTONOMOUS_TOOL_PATCH,
+            AUTONOMOUS_TOOL_DELETE,
+            AUTONOMOUS_TOOL_RENAME,
+            AUTONOMOUS_TOOL_MKDIR,
+            AUTONOMOUS_TOOL_COMMAND_PROBE,
+            AUTONOMOUS_TOOL_COMMAND_VERIFY,
+            AUTONOMOUS_TOOL_COMMAND_RUN,
+            AUTONOMOUS_TOOL_COMMAND_SESSION,
+            AUTONOMOUS_TOOL_PROCESS_MANAGER,
+            AUTONOMOUS_TOOL_BROWSER_OBSERVE,
+            AUTONOMOUS_TOOL_BROWSER_CONTROL,
+            AUTONOMOUS_TOOL_WEB_SEARCH,
+            AUTONOMOUS_TOOL_WEB_FETCH,
+            AUTONOMOUS_TOOL_MCP_LIST,
+            AUTONOMOUS_TOOL_MCP_CALL_TOOL,
+            AUTONOMOUS_TOOL_SUBAGENT,
+            AUTONOMOUS_TOOL_SKILL,
+            AUTONOMOUS_TOOL_AGENT_DEFINITION,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH,
+        ] {
+            assert!(
+                !tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Plan, blocked_tool),
+                "Plan should not be allowed to use {blocked_tool}"
+            );
+        }
+    }
+
+    #[test]
     fn crawl_repository_recon_policy_keeps_readonly_command_access_but_blocks_mutation() {
         let policy = AutonomousAgentToolPolicy::from_policy_label("repository_recon");
 
         for allowed_tool in [
             AUTONOMOUS_TOOL_READ,
+            AUTONOMOUS_TOOL_STAT,
             AUTONOMOUS_TOOL_SEARCH,
             AUTONOMOUS_TOOL_GIT_STATUS,
             AUTONOMOUS_TOOL_COMMAND_PROBE,
@@ -5239,5 +8027,414 @@ mod tests {
                 "repository_recon should block {blocked_tool}"
             );
         }
+    }
+
+    #[test]
+    fn planning_policy_allows_todo_but_blocks_mutation_and_commands() {
+        let policy = AutonomousAgentToolPolicy::from_policy_label("planning");
+
+        for allowed_tool in [
+            AUTONOMOUS_TOOL_READ,
+            AUTONOMOUS_TOOL_SEARCH,
+            AUTONOMOUS_TOOL_GIT_STATUS,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD,
+            AUTONOMOUS_TOOL_WORKSPACE_INDEX,
+            AUTONOMOUS_TOOL_TODO,
+        ] {
+            assert!(
+                tool_allowed_for_runtime_agent_with_policy(
+                    RuntimeAgentIdDto::Plan,
+                    allowed_tool,
+                    Some(&policy),
+                ),
+                "planning should allow {allowed_tool}"
+            );
+        }
+
+        for blocked_tool in [
+            AUTONOMOUS_TOOL_EDIT,
+            AUTONOMOUS_TOOL_WRITE,
+            AUTONOMOUS_TOOL_PATCH,
+            AUTONOMOUS_TOOL_DELETE,
+            AUTONOMOUS_TOOL_COMMAND_PROBE,
+            AUTONOMOUS_TOOL_COMMAND_VERIFY,
+            AUTONOMOUS_TOOL_COMMAND_RUN,
+            AUTONOMOUS_TOOL_PROCESS_MANAGER,
+            AUTONOMOUS_TOOL_BROWSER_OBSERVE,
+            AUTONOMOUS_TOOL_WEB_SEARCH,
+            AUTONOMOUS_TOOL_CODE_INTEL,
+            AUTONOMOUS_TOOL_LSP,
+            AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
+            AUTONOMOUS_TOOL_SKILL,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE,
+        ] {
+            assert!(
+                !tool_allowed_for_runtime_agent_with_policy(
+                    RuntimeAgentIdDto::Plan,
+                    blocked_tool,
+                    Some(&policy),
+                ),
+                "planning should block {blocked_tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn computer_use_policy_allows_bounded_ui_control_but_blocks_repo_mutation_and_commands() {
+        let policy = AutonomousAgentToolPolicy::from_policy_label("computer_use");
+
+        for allowed_tool in [
+            AUTONOMOUS_TOOL_TOOL_ACCESS,
+            AUTONOMOUS_TOOL_TOOL_SEARCH,
+            AUTONOMOUS_TOOL_TODO,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET,
+            AUTONOMOUS_TOOL_BROWSER_OBSERVE,
+            AUTONOMOUS_TOOL_BROWSER_CONTROL,
+            AUTONOMOUS_TOOL_BROWSER,
+            AUTONOMOUS_TOOL_EMULATOR,
+            AUTONOMOUS_TOOL_MACOS_AUTOMATION,
+            AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE,
+        ] {
+            assert!(
+                tool_allowed_for_runtime_agent_with_policy(
+                    RuntimeAgentIdDto::ComputerUse,
+                    allowed_tool,
+                    Some(&policy),
+                ),
+                "computer_use should allow {allowed_tool}"
+            );
+        }
+
+        for blocked_tool in [
+            AUTONOMOUS_TOOL_READ,
+            AUTONOMOUS_TOOL_WRITE,
+            AUTONOMOUS_TOOL_EDIT,
+            AUTONOMOUS_TOOL_PATCH,
+            AUTONOMOUS_TOOL_DELETE,
+            AUTONOMOUS_TOOL_COMMAND_RUN,
+            AUTONOMOUS_TOOL_COMMAND_SESSION,
+            AUTONOMOUS_TOOL_PROCESS_MANAGER,
+            AUTONOMOUS_TOOL_GIT_STATUS,
+            AUTONOMOUS_TOOL_MCP_CALL_TOOL,
+            AUTONOMOUS_TOOL_SKILL,
+            AUTONOMOUS_TOOL_SUBAGENT,
+        ] {
+            assert!(
+                !tool_allowed_for_runtime_agent_with_policy(
+                    RuntimeAgentIdDto::ComputerUse,
+                    blocked_tool,
+                    Some(&policy),
+                ),
+                "computer_use should block {blocked_tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_definition_object_policy_allows_broad_effect_classes_when_opted_in() {
+        let policy = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": ["observe", "command"],
+                "allowedTools": [],
+                "deniedTools": [],
+                "allowedToolPacks": [],
+                "deniedToolPacks": [],
+                "commandAllowed": true,
+                "destructiveWriteAllowed": false
+            }
+        }))
+        .expect("policy");
+
+        assert!(policy.allows_tool(AUTONOMOUS_TOOL_READ));
+        assert!(policy.allows_tool(AUTONOMOUS_TOOL_COMMAND_PROBE));
+        assert!(!policy.allows_tool(AUTONOMOUS_TOOL_WRITE));
+    }
+
+    #[test]
+    fn agent_definition_object_policy_denials_override_allowed_tools() {
+        let policy = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": ["observe"],
+                "allowedTools": [AUTONOMOUS_TOOL_READ],
+                "deniedTools": [AUTONOMOUS_TOOL_READ],
+                "allowedToolPacks": [],
+                "deniedToolPacks": [],
+                "commandAllowed": false,
+                "destructiveWriteAllowed": false
+            }
+        }))
+        .expect("policy");
+
+        assert!(!policy.allows_tool(AUTONOMOUS_TOOL_READ));
+        assert!(policy.allows_tool(AUTONOMOUS_TOOL_SEARCH));
+    }
+
+    #[test]
+    fn s21_agent_definition_tool_packs_expand_and_intersect_with_runtime_policy() {
+        let allowed = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": [],
+                "allowedTools": [],
+                "deniedTools": [],
+                "allowedToolPacks": ["project_context"],
+                "deniedToolPacks": [],
+                "commandAllowed": false,
+                "destructiveWriteAllowed": false,
+                "skillRuntimeAllowed": false
+            }
+        }))
+        .expect("allowed pack policy");
+
+        assert!(allowed.allowed_tool_packs.contains("project_context"));
+        assert!(tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
+            Some(&allowed),
+        ));
+        assert!(tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD,
+            Some(&allowed),
+        ));
+        assert!(!tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_SKILL,
+            Some(&allowed),
+        ));
+        assert!(!tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Ask,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD,
+            Some(&allowed),
+        ));
+
+        let denied = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": ["observe"],
+                "allowedTools": [],
+                "deniedTools": [],
+                "allowedToolPacks": [],
+                "deniedToolPacks": ["project_context"],
+                "commandAllowed": false,
+                "destructiveWriteAllowed": false,
+                "skillRuntimeAllowed": false
+            }
+        }))
+        .expect("denied pack policy");
+
+        assert!(denied.denied_tool_packs.contains("project_context"));
+        assert!(!tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
+            Some(&denied),
+        ));
+        assert!(tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_READ,
+            Some(&denied),
+        ));
+    }
+
+    #[test]
+    fn s23_custom_agent_subagent_policy_requires_declared_child_roles() {
+        let policy = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": ["agent_delegation"],
+                "allowedTools": [AUTONOMOUS_TOOL_SUBAGENT],
+                "deniedTools": [],
+                "allowedToolPacks": [],
+                "deniedToolPacks": [],
+                "subagentAllowed": true,
+                "allowedSubagentRoles": ["reviewer"],
+                "deniedSubagentRoles": ["browser"]
+            }
+        }))
+        .expect("subagent policy");
+
+        assert!(policy.allows_tool(AUTONOMOUS_TOOL_SUBAGENT));
+        assert!(policy.allows_subagent_role(AutonomousSubagentRole::Reviewer));
+        assert!(!policy.allows_subagent_role(AutonomousSubagentRole::Engineer));
+        assert!(!policy.allows_subagent_role(AutonomousSubagentRole::Browser));
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = AutonomousToolRuntime::new(tempdir.path())
+            .expect("runtime")
+            .with_agent_tool_policy(Some(policy));
+        let allowed = runtime
+            .subagent(AutonomousSubagentRequest {
+                action: AutonomousSubagentAction::Spawn,
+                task_id: None,
+                role: Some(AutonomousSubagentRole::Reviewer),
+                prompt: Some("Review the proposed change and summarize risks.".into()),
+                model_id: None,
+                timeout_ms: None,
+                max_tool_calls: None,
+                max_tokens: None,
+                max_cost_micros: None,
+                write_set: Vec::new(),
+                decision: None,
+            })
+            .expect("declared role can spawn");
+        match allowed.output {
+            AutonomousToolOutput::Subagent(output) => {
+                assert_eq!(output.task.role, AutonomousSubagentRole::Reviewer);
+                assert_eq!(output.task.status, "registered");
+            }
+            output => panic!("unexpected output: {output:?}"),
+        }
+
+        let denied = runtime
+            .subagent(AutonomousSubagentRequest {
+                action: AutonomousSubagentAction::Spawn,
+                task_id: None,
+                role: Some(AutonomousSubagentRole::Engineer),
+                prompt: Some("Edit the implementation.".into()),
+                model_id: None,
+                timeout_ms: None,
+                max_tool_calls: None,
+                max_tokens: None,
+                max_cost_micros: None,
+                write_set: vec!["src/lib.rs".into()],
+                decision: None,
+            })
+            .expect_err("undeclared role is blocked");
+        assert_eq!(denied.code, "policy_denied");
+        assert!(denied.message.contains("allowedSubagentRoles"));
+    }
+
+    #[test]
+    fn s22_custom_workflow_fails_closed_until_required_gate_is_satisfied() {
+        let policy = AutonomousAgentWorkflowPolicy::from_definition_snapshot(&json!({
+            "workflowStructure": {
+                "startPhaseId": "inspect",
+                "phases": [
+                    {
+                        "id": "inspect",
+                        "title": "Inspect",
+                        "allowedTools": [AUTONOMOUS_TOOL_READ, AUTONOMOUS_TOOL_TODO],
+                        "requiredChecks": [
+                            {"kind": "todo_completed", "todoId": "inspect_done"}
+                        ],
+                        "retryLimit": 1,
+                        "branches": [
+                            {
+                                "targetPhaseId": "edit",
+                                "condition": {"kind": "todo_completed", "todoId": "inspect_done"}
+                            }
+                        ]
+                    },
+                    {
+                        "id": "edit",
+                        "title": "Edit",
+                        "allowedTools": [AUTONOMOUS_TOOL_WRITE],
+                        "requiredChecks": []
+                    }
+                ]
+            }
+        }))
+        .expect("workflow policy");
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = AutonomousToolRuntime::new(tempdir.path())
+            .expect("runtime")
+            .with_agent_workflow_policy(Some(policy));
+
+        let denied = runtime
+            .execute(AutonomousToolRequest::Write(AutonomousWriteRequest {
+                path: "notes.txt".into(),
+                content: "premature write\n".into(),
+                expected_hash: None,
+                create_only: false,
+                overwrite: None,
+                preview: false,
+            }))
+            .expect_err("write is gated before inspect todo completes");
+        assert_eq!(denied.code, "policy_denied");
+        assert!(denied.message.contains("required gates"));
+        assert!(!tempdir.path().join("notes.txt").exists());
+
+        runtime
+            .execute(AutonomousToolRequest::Todo(AutonomousTodoRequest {
+                action: AutonomousTodoAction::Upsert,
+                id: Some("inspect_done".into()),
+                title: Some("Inspection gate satisfied".into()),
+                notes: None,
+                status: Some(AutonomousTodoStatus::Completed),
+                mode: None,
+                debug_stage: None,
+                evidence: Some("Read required context.".into()),
+                phase_id: Some("inspect".into()),
+                phase_title: Some("Inspect".into()),
+                slice_id: None,
+                handoff_note: None,
+            }))
+            .expect("complete gate todo");
+
+        runtime
+            .execute(AutonomousToolRequest::Write(AutonomousWriteRequest {
+                path: "notes.txt".into(),
+                content: "gated write\n".into(),
+                expected_hash: None,
+                create_only: false,
+                overwrite: None,
+                preview: false,
+            }))
+            .expect("write allowed after workflow gate");
+        assert_eq!(
+            std::fs::read_to_string(tempdir.path().join("notes.txt")).expect("read written file"),
+            "gated write\n"
+        );
+    }
+
+    #[test]
+    fn s24_external_service_and_browser_control_require_explicit_policy_flags() {
+        let denied = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": ["observe", "external_service", "browser_control"],
+                "allowedTools": [],
+                "deniedTools": [],
+                "allowedToolPacks": [],
+                "deniedToolPacks": [],
+                "externalServiceAllowed": false,
+                "browserControlAllowed": false
+            }
+        }))
+        .expect("denied risky policy");
+
+        assert!(!tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_WEB_FETCH,
+            Some(&denied),
+        ));
+        assert!(!tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_BROWSER_CONTROL,
+            Some(&denied),
+        ));
+
+        let allowed = AutonomousAgentToolPolicy::from_definition_snapshot(&json!({
+            "toolPolicy": {
+                "allowedEffectClasses": ["observe", "external_service", "browser_control"],
+                "allowedTools": [],
+                "deniedTools": [],
+                "allowedToolPacks": [],
+                "deniedToolPacks": [],
+                "externalServiceAllowed": true,
+                "browserControlAllowed": true
+            }
+        }))
+        .expect("allowed risky policy");
+
+        assert!(tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_WEB_FETCH,
+            Some(&allowed),
+        ));
+        assert!(tool_allowed_for_runtime_agent_with_policy(
+            RuntimeAgentIdDto::Engineer,
+            AUTONOMOUS_TOOL_BROWSER_CONTROL,
+            Some(&allowed),
+        ));
     }
 }

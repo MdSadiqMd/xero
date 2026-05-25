@@ -23,15 +23,16 @@ use super::{
 use crate::{
     commands::{CommandError, CommandResult, ProviderModelThinkingEffortDto},
     runtime::{
+        is_supported_xai_text_model_id,
         process_tree::{
             cleanup_process_group_after_root_exit, configure_process_tree_root,
             terminate_process_tree,
         },
         redaction::find_prohibited_persistence_content,
-        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
+        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID,
         GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
         OPENAI_API_PROVIDER_ID, OPENAI_CODEX_DEFAULT_MODEL_ID, OPENAI_CODEX_PROVIDER_ID,
-        OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID,
+        OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID, XAI_DEFAULT_MODEL_ID, XAI_PROVIDER_ID,
     },
 };
 
@@ -47,13 +48,16 @@ const OPENAI_CODEX_API_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_BETA_HEADER: &str = "responses=experimental";
 const OPENAI_CODEX_ORIGINATOR: &str = "pi";
 const OPENAI_CODEX_TEXT_VERBOSITY: &str = "medium";
+const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProviderConfig {
     Fake,
     OpenAiResponses(OpenAiResponsesProviderConfig),
     OpenAiCodexResponses(OpenAiCodexResponsesProviderConfig),
+    XaiResponses(XaiResponsesProviderConfig),
     OpenAiCompatible(OpenAiCompatibleProviderConfig),
+    DeepSeek(DeepSeekProviderConfig),
     Anthropic(AnthropicProviderConfig),
     Bedrock(BedrockProviderConfig),
     Vertex(VertexProviderConfig),
@@ -80,12 +84,29 @@ pub struct OpenAiCodexResponsesProviderConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XaiResponsesProviderConfig {
+    pub provider_id: String,
+    pub model_id: String,
+    pub base_url: String,
+    pub bearer_token: String,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiCompatibleProviderConfig {
     pub provider_id: String,
     pub model_id: String,
     pub base_url: String,
     pub api_key: Option<String>,
     pub api_version: Option<String>,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSeekProviderConfig {
+    pub model_id: String,
+    pub base_url: String,
+    pub api_key: String,
     pub timeout_ms: u64,
 }
 
@@ -125,8 +146,22 @@ pub fn create_provider_adapter(
         AgentProviderConfig::OpenAiCodexResponses(config) => {
             OpenAiCodexResponsesAdapter::new(config).map(|adapter| Box::new(adapter) as _)
         }
+        AgentProviderConfig::XaiResponses(config) => {
+            XaiResponsesAdapter::new(config).map(|adapter| Box::new(adapter) as _)
+        }
         AgentProviderConfig::OpenAiCompatible(config) => {
             OpenAiCompatibleAdapter::new(config).map(|adapter| Box::new(adapter) as _)
+        }
+        AgentProviderConfig::DeepSeek(config) => {
+            OpenAiCompatibleAdapter::new(OpenAiCompatibleProviderConfig {
+                provider_id: DEEPSEEK_PROVIDER_ID.into(),
+                model_id: config.model_id,
+                base_url: config.base_url,
+                api_key: Some(config.api_key),
+                api_version: None,
+                timeout_ms: config.timeout_ms,
+            })
+            .map(|adapter| Box::new(adapter) as _)
         }
         AgentProviderConfig::Anthropic(config) => {
             AnthropicAdapter::new(config).map(|adapter| Box::new(adapter) as _)
@@ -232,6 +267,58 @@ impl ProviderAdapter for OpenAiResponsesAdapter {
             self.client
                 .post(url.clone())
                 .bearer_auth(&self.config.api_key)
+                .json(&body)
+        })?;
+        parse_openai_responses_sse(self.provider_id(), response, emit)
+    }
+}
+
+#[derive(Debug)]
+struct XaiResponsesAdapter {
+    config: XaiResponsesProviderConfig,
+    client: Client,
+}
+
+impl XaiResponsesAdapter {
+    fn new(mut config: XaiResponsesProviderConfig) -> CommandResult<Self> {
+        normalize_required(&mut config.provider_id, "providerId")?;
+        normalize_required(&mut config.model_id, "modelId")?;
+        normalize_required(&mut config.base_url, "baseUrl")?;
+        normalize_required(&mut config.bearer_token, "bearerToken")?;
+        if !is_supported_xai_text_model_id(&config.model_id) {
+            return Err(CommandError::user_fixable(
+                "xai_model_not_supported_by_text_runtime",
+                format!(
+                    "Xero's xAI owned runtime currently supports Grok 4.3 text models only; `{}` is not available for agent turns.",
+                    config.model_id
+                ),
+            ));
+        }
+        let client = provider_http_client(config.timeout_ms)?;
+        Ok(Self { config, client })
+    }
+}
+
+impl ProviderAdapter for XaiResponsesAdapter {
+    fn provider_id(&self) -> &str {
+        self.config.provider_id.as_str()
+    }
+
+    fn model_id(&self) -> &str {
+        self.config.model_id.as_str()
+    }
+
+    fn stream_turn(
+        &self,
+        request: &ProviderTurnRequest,
+        emit: &mut dyn FnMut(ProviderStreamEvent) -> CommandResult<()>,
+    ) -> CommandResult<ProviderTurnOutcome> {
+        let url = responses_url(&self.config.base_url)?;
+        let body = xai_responses_request_body(self.provider_id(), &self.config.model_id, request)?;
+        let response = send_provider_json_request(self.provider_id(), || {
+            self.client
+                .post(url.clone())
+                .bearer_auth(&self.config.bearer_token)
                 .json(&body)
         })?;
         parse_openai_responses_sse(self.provider_id(), response, emit)
@@ -630,11 +717,12 @@ fn openai_chat_request_body(
     model_id: &str,
     request: &ProviderTurnRequest,
 ) -> CommandResult<JsonValue> {
+    ensure_openai_request_has_no_attachments(provider_id, request)?;
     let mut body = JsonMap::new();
     body.insert("model".into(), json!(model_id));
     body.insert(
         "messages".into(),
-        JsonValue::Array(openai_chat_messages(request)?),
+        JsonValue::Array(openai_chat_messages(provider_id, request)?),
     );
     body.insert(
         "tools".into(),
@@ -645,6 +733,22 @@ fn openai_chat_request_body(
     if provider_supports_openai_stream_options(provider_id) {
         body.insert("stream_options".into(), json!({ "include_usage": true }));
     }
+    if provider_id == DEEPSEEK_PROVIDER_ID {
+        body.insert("thinking".into(), json!({ "type": "enabled" }));
+        if let Some(effort) = request.controls.active.thinking_effort.as_ref() {
+            body.insert(
+                "reasoning_effort".into(),
+                json!(deepseek_thinking_effort_value(effort)),
+            );
+        }
+    } else if provider_id == OPENROUTER_PROVIDER_ID {
+        if let Some(effort) = request.controls.active.thinking_effort.as_ref() {
+            body.insert(
+                "reasoning".into(),
+                json!({ "effort": openrouter_reasoning_effort_value(effort) }),
+            );
+        }
+    }
     Ok(JsonValue::Object(body))
 }
 
@@ -654,12 +758,16 @@ fn provider_supports_openai_stream_options(provider_id: &str) -> bool {
         OPENAI_API_PROVIDER_ID
             | OPENAI_CODEX_PROVIDER_ID
             | OPENROUTER_PROVIDER_ID
+            | DEEPSEEK_PROVIDER_ID
             | GITHUB_MODELS_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
     )
 }
 
-fn openai_chat_messages(request: &ProviderTurnRequest) -> CommandResult<Vec<JsonValue>> {
+fn openai_chat_messages(
+    provider_id: &str,
+    request: &ProviderTurnRequest,
+) -> CommandResult<Vec<JsonValue>> {
     let mut messages = vec![json!({
         "role": "system",
         "content": request.system_prompt,
@@ -672,10 +780,26 @@ fn openai_chat_messages(request: &ProviderTurnRequest) -> CommandResult<Vec<Json
             ProviderMessage::Assistant {
                 content,
                 tool_calls,
+                reasoning_content,
+                reasoning_details,
             } => {
                 let mut object = JsonMap::new();
                 object.insert("role".into(), json!("assistant"));
                 object.insert("content".into(), json!(content));
+                if provider_replays_openai_reasoning_content(provider_id) {
+                    if let Some(reasoning_content) = reasoning_content
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|reasoning| !reasoning.is_empty())
+                    {
+                        object.insert("reasoning_content".into(), json!(reasoning_content));
+                    }
+                }
+                if provider_replays_openai_reasoning_details(provider_id) {
+                    if let Some(reasoning_details) = reasoning_details {
+                        object.insert("reasoning_details".into(), reasoning_details.clone());
+                    }
+                }
                 if !tool_calls.is_empty() {
                     object.insert(
                         "tool_calls".into(),
@@ -698,6 +822,32 @@ fn openai_chat_messages(request: &ProviderTurnRequest) -> CommandResult<Vec<Json
         }
     }
     Ok(messages)
+}
+
+fn provider_replays_openai_reasoning_content(provider_id: &str) -> bool {
+    matches!(provider_id, DEEPSEEK_PROVIDER_ID | OPENROUTER_PROVIDER_ID)
+}
+
+fn provider_replays_openai_reasoning_details(provider_id: &str) -> bool {
+    provider_id == OPENROUTER_PROVIDER_ID
+}
+
+fn collect_reasoning_details(buffer: &mut Vec<JsonValue>, reasoning_details: JsonValue) {
+    match reasoning_details {
+        JsonValue::Array(items) => {
+            buffer.extend(items.into_iter().filter(|item| !item.is_null()));
+        }
+        value if !value.is_null() => buffer.push(value),
+        _ => {}
+    }
+}
+
+fn merged_reasoning_details(buffer: Vec<JsonValue>) -> Option<JsonValue> {
+    if buffer.is_empty() {
+        None
+    } else {
+        Some(JsonValue::Array(buffer))
+    }
 }
 
 fn openai_chat_tool(tool: &AgentToolDescriptor) -> JsonValue {
@@ -727,6 +877,7 @@ fn openai_responses_request_body(
     model_id: &str,
     request: &ProviderTurnRequest,
 ) -> CommandResult<JsonValue> {
+    ensure_openai_request_has_no_attachments(provider_id, request)?;
     let mut body = JsonMap::new();
     body.insert("model".into(), json!(model_id));
     body.insert("instructions".into(), json!(request.system_prompt));
@@ -752,12 +903,48 @@ fn openai_responses_request_body(
     Ok(JsonValue::Object(body))
 }
 
+fn xai_responses_request_body(
+    provider_id: &str,
+    model_id: &str,
+    request: &ProviderTurnRequest,
+) -> CommandResult<JsonValue> {
+    ensure_openai_request_has_no_attachments(provider_id, request)?;
+    let mut body = JsonMap::new();
+    body.insert("model".into(), json!(model_id));
+    body.insert("instructions".into(), json!(request.system_prompt));
+    body.insert(
+        "input".into(),
+        JsonValue::Array(openai_response_input(request)?),
+    );
+    if !request.tools.is_empty() {
+        body.insert(
+            "tools".into(),
+            JsonValue::Array(request.tools.iter().map(xai_response_tool).collect()),
+        );
+        body.insert("tool_choice".into(), json!("auto"));
+    }
+    body.insert("stream".into(), json!(true));
+    body.insert("max_output_tokens".into(), json!(DEFAULT_MAX_OUTPUT_TOKENS));
+    if let Some(effort) = request
+        .controls
+        .active
+        .thinking_effort
+        .as_ref()
+        .and_then(xai_reasoning_effort_value)
+        .filter(|_| is_supported_xai_text_model_id(model_id))
+    {
+        body.insert("reasoning".into(), json!({ "effort": effort }));
+    }
+    Ok(JsonValue::Object(body))
+}
+
 fn openai_codex_responses_request_body(
     provider_id: &str,
     model_id: &str,
     request: &ProviderTurnRequest,
     prompt_cache_key: Option<&str>,
 ) -> CommandResult<JsonValue> {
+    ensure_openai_request_has_no_attachments(provider_id, request)?;
     let mut body = JsonMap::new();
     body.insert("model".into(), json!(model_id));
     body.insert("store".into(), json!(false));
@@ -804,6 +991,26 @@ fn openai_codex_responses_request_body(
     Ok(JsonValue::Object(body))
 }
 
+fn ensure_openai_request_has_no_attachments(
+    provider_id: &str,
+    request: &ProviderTurnRequest,
+) -> CommandResult<()> {
+    let attachment = request.messages.iter().find_map(|message| match message {
+        ProviderMessage::User { attachments, .. } => attachments.first(),
+        ProviderMessage::Assistant { .. } | ProviderMessage::Tool { .. } => None,
+    });
+    if let Some(attachment) = attachment {
+        return Err(CommandError::user_fixable(
+            "provider_attachment_unsupported",
+            format!(
+                "Xero cannot send attachment `{}` to provider `{provider_id}` because this owned OpenAI-style adapter does not serialize attachments yet.",
+                attachment.original_name
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn openai_response_input(request: &ProviderTurnRequest) -> CommandResult<Vec<JsonValue>> {
     let mut input = Vec::new();
     for message in &request.messages {
@@ -814,6 +1021,7 @@ fn openai_response_input(request: &ProviderTurnRequest) -> CommandResult<Vec<Jso
             ProviderMessage::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 if !content.trim().is_empty() {
                     input.push(json!({ "role": "assistant", "content": content }));
@@ -856,6 +1064,7 @@ fn openai_codex_response_input(request: &ProviderTurnRequest) -> CommandResult<V
             ProviderMessage::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 if !content.trim().is_empty() {
                     input.push(json!({
@@ -902,6 +1111,42 @@ fn openai_response_tool(tool: &AgentToolDescriptor) -> JsonValue {
         "description": tool.description,
         "parameters": tool.input_schema,
     })
+}
+
+fn xai_response_tool(tool: &AgentToolDescriptor) -> JsonValue {
+    json!({
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": xai_sanitize_tool_schema(tool.input_schema.clone()),
+    })
+}
+
+fn xai_sanitize_tool_schema(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(mut object) => {
+            for key in [
+                "minLength",
+                "maxLength",
+                "minItems",
+                "maxItems",
+                "minProperties",
+                "maxProperties",
+                "uniqueItems",
+            ] {
+                object.remove(key);
+            }
+            for value in object.values_mut() {
+                let sanitized = xai_sanitize_tool_schema(std::mem::take(value));
+                *value = sanitized;
+            }
+            JsonValue::Object(object)
+        }
+        JsonValue::Array(items) => {
+            JsonValue::Array(items.into_iter().map(xai_sanitize_tool_schema).collect())
+        }
+        value => value,
+    }
 }
 
 fn openai_codex_response_tool(tool: &AgentToolDescriptor) -> JsonValue {
@@ -1004,11 +1249,44 @@ fn openai_compatible_auth_header_name(provider_id: &str) -> &'static str {
 
 fn thinking_effort_value(effort: &ProviderModelThinkingEffortDto) -> &'static str {
     match effort {
+        ProviderModelThinkingEffortDto::None => "none",
         ProviderModelThinkingEffortDto::Minimal => "minimal",
         ProviderModelThinkingEffortDto::Low => "low",
         ProviderModelThinkingEffortDto::Medium => "medium",
         ProviderModelThinkingEffortDto::High => "high",
         ProviderModelThinkingEffortDto::XHigh => "xhigh",
+    }
+}
+
+fn deepseek_thinking_effort_value(effort: &ProviderModelThinkingEffortDto) -> &'static str {
+    match effort {
+        ProviderModelThinkingEffortDto::XHigh => "max",
+        ProviderModelThinkingEffortDto::None
+        | ProviderModelThinkingEffortDto::Minimal
+        | ProviderModelThinkingEffortDto::Low
+        | ProviderModelThinkingEffortDto::Medium
+        | ProviderModelThinkingEffortDto::High => "high",
+    }
+}
+
+fn openrouter_reasoning_effort_value(effort: &ProviderModelThinkingEffortDto) -> &'static str {
+    match effort {
+        ProviderModelThinkingEffortDto::XHigh => "xhigh",
+        ProviderModelThinkingEffortDto::None
+        | ProviderModelThinkingEffortDto::Minimal
+        | ProviderModelThinkingEffortDto::Low
+        | ProviderModelThinkingEffortDto::Medium
+        | ProviderModelThinkingEffortDto::High => "high",
+    }
+}
+
+fn xai_reasoning_effort_value(effort: &ProviderModelThinkingEffortDto) -> Option<&'static str> {
+    match effort {
+        ProviderModelThinkingEffortDto::None => Some("none"),
+        ProviderModelThinkingEffortDto::Low => Some("low"),
+        ProviderModelThinkingEffortDto::Medium => Some("medium"),
+        ProviderModelThinkingEffortDto::High => Some("high"),
+        ProviderModelThinkingEffortDto::Minimal | ProviderModelThinkingEffortDto::XHigh => None,
     }
 }
 
@@ -1092,6 +1370,7 @@ fn anthropic_messages(request: &ProviderTurnRequest) -> CommandResult<Vec<JsonVa
             ProviderMessage::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 let mut blocks = Vec::new();
                 if !content.trim().is_empty() {
@@ -1241,6 +1520,8 @@ struct OpenAiChatDelta {
     #[serde(default)]
     reasoning_content: Option<String>,
     #[serde(default)]
+    reasoning_details: Option<JsonValue>,
+    #[serde(default)]
     tool_calls: Vec<OpenAiToolCallDelta>,
 }
 
@@ -1289,6 +1570,8 @@ fn parse_openai_chat_sse(
     emit: &mut dyn FnMut(ProviderStreamEvent) -> CommandResult<()>,
 ) -> CommandResult<ProviderTurnOutcome> {
     let mut message = String::new();
+    let mut reasoning_content_buffer = String::new();
+    let mut reasoning_details_buffer = Vec::<JsonValue>::new();
     let mut partial_calls = BTreeMap::<usize, PartialToolCall>::new();
     let mut usage = None;
 
@@ -1332,12 +1615,19 @@ fn parse_openai_chat_sse(
                 content,
                 reasoning,
                 reasoning_content,
+                reasoning_details,
                 tool_calls,
             } = choice.delta;
+            if provider_replays_openai_reasoning_details(provider_id) {
+                if let Some(reasoning_details) = reasoning_details {
+                    collect_reasoning_details(&mut reasoning_details_buffer, reasoning_details);
+                }
+            }
             if let Some(reasoning) = reasoning_content
                 .or(reasoning)
                 .filter(|reasoning| !reasoning.is_empty())
             {
+                reasoning_content_buffer.push_str(&reasoning);
                 emit(ProviderStreamEvent::ReasoningSummary(reasoning))?;
             }
             if let Some(content) = content {
@@ -1366,7 +1656,20 @@ fn parse_openai_chat_sse(
         }
     }
 
-    finish_provider_turn(provider_id, message, partial_calls, usage)
+    let reasoning_content = provider_replays_openai_reasoning_content(provider_id)
+        .then(|| reasoning_content_buffer.trim().to_owned())
+        .filter(|reasoning| !reasoning.is_empty());
+    let reasoning_details = provider_replays_openai_reasoning_details(provider_id)
+        .then(|| merged_reasoning_details(reasoning_details_buffer))
+        .flatten();
+    finish_provider_turn(
+        provider_id,
+        message,
+        reasoning_content,
+        reasoning_details,
+        partial_calls,
+        usage,
+    )
 }
 
 fn parse_openai_responses_sse(
@@ -1468,7 +1771,7 @@ fn parse_openai_responses_sse(
         }
     }
 
-    finish_provider_turn(provider_id, message, partial_calls, usage)
+    finish_provider_turn(provider_id, message, None, None, partial_calls, usage)
 }
 
 fn emit_openai_responses_reasoning_summary_event(
@@ -1830,7 +2133,7 @@ fn parse_anthropic_sse(
     if let Some(usage) = usage.as_ref() {
         emit(ProviderStreamEvent::Usage(usage.clone()))?;
     }
-    finish_provider_turn(provider_id, message, partial_calls, usage)
+    finish_provider_turn(provider_id, message, None, None, partial_calls, usage)
 }
 
 fn parse_anthropic_json_response(
@@ -1923,12 +2226,14 @@ fn parse_anthropic_json_response(
     if let Some(usage) = usage.as_ref() {
         emit(ProviderStreamEvent::Usage(usage.clone()))?;
     }
-    finish_provider_turn(provider_id, message, partial_calls, usage)
+    finish_provider_turn(provider_id, message, None, None, partial_calls, usage)
 }
 
 fn finish_provider_turn(
     provider_id: &str,
     message: String,
+    reasoning_content: Option<String>,
+    reasoning_details: Option<JsonValue>,
     partial_calls: BTreeMap<usize, PartialToolCall>,
     usage: Option<ProviderUsage>,
 ) -> CommandResult<ProviderTurnOutcome> {
@@ -1947,14 +2252,7 @@ fn finish_provider_turn(
         let input = if partial.arguments.trim().is_empty() {
             JsonValue::Object(JsonMap::new())
         } else {
-            serde_json::from_str(&partial.arguments).map_err(|error| {
-                CommandError::user_fixable(
-                    "agent_provider_tool_arguments_invalid",
-                    format!(
-                        "Xero could not decode {provider_id} tool call `{name}` arguments as JSON: {error}"
-                    ),
-                )
-            })?
+            parse_tool_arguments(provider_id, &name, &partial.arguments)?
         };
         let mut tool_call_id = partial
             .id
@@ -1976,14 +2274,81 @@ fn finish_provider_turn(
     }
 
     if tool_calls.is_empty() {
-        Ok(ProviderTurnOutcome::Complete { message, usage })
+        Ok(ProviderTurnOutcome::Complete {
+            message,
+            reasoning_content,
+            reasoning_details,
+            usage,
+        })
     } else {
         Ok(ProviderTurnOutcome::ToolCalls {
             message,
+            reasoning_content,
+            reasoning_details,
             tool_calls,
             usage,
         })
     }
+}
+
+fn parse_tool_arguments(
+    provider_id: &str,
+    tool_name: &str,
+    arguments: &str,
+) -> CommandResult<JsonValue> {
+    match serde_json::from_str(arguments) {
+        Ok(value) => Ok(value),
+        Err(original_error) if provider_id == XAI_PROVIDER_ID => {
+            let decoded = decode_basic_html_entities(arguments);
+            if decoded != arguments {
+                if let Ok(value) = serde_json::from_str(&decoded) {
+                    return Ok(value);
+                }
+            }
+            Err(tool_arguments_decode_error(
+                provider_id,
+                tool_name,
+                original_error,
+            ))
+        }
+        Err(error) => Err(tool_arguments_decode_error(provider_id, tool_name, error)),
+    }
+}
+
+fn tool_arguments_decode_error(
+    provider_id: &str,
+    tool_name: &str,
+    error: serde_json::Error,
+) -> CommandError {
+    CommandError::user_fixable(
+        "agent_provider_tool_arguments_invalid",
+        format!(
+            "Xero could not decode {provider_id} tool call `{tool_name}` arguments as JSON: {error}"
+        ),
+    )
+}
+
+fn decode_basic_html_entities(value: &str) -> String {
+    let mut decoded = value.to_owned();
+    for _ in 0..2 {
+        let next = decoded
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&#34;", "\"")
+            .replace("&#x22;", "\"")
+            .replace("&#X22;", "\"")
+            .replace("&apos;", "'")
+            .replace("&#39;", "'")
+            .replace("&#x27;", "'")
+            .replace("&#X27;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">");
+        if next == decoded {
+            break;
+        }
+        decoded = next;
+    }
+    decoded
 }
 
 fn send_provider_json_request<F>(provider_id: &str, mut build: F) -> CommandResult<Response>
@@ -2272,6 +2637,18 @@ impl Default for OpenAiCodexResponsesProviderConfig {
     }
 }
 
+impl Default for XaiResponsesProviderConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: XAI_PROVIDER_ID.into(),
+            model_id: XAI_DEFAULT_MODEL_ID.into(),
+            base_url: XAI_API_BASE_URL.into(),
+            bearer_token: String::new(),
+            timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
+        }
+    }
+}
+
 impl Default for AnthropicProviderConfig {
     fn default() -> Self {
         Self {
@@ -2286,11 +2663,13 @@ impl Default for AnthropicProviderConfig {
 }
 
 #[allow(dead_code)]
-fn _known_provider_ids() -> [&'static str; 10] {
+fn _known_provider_ids() -> [&'static str; 12] {
     [
         OPENAI_CODEX_PROVIDER_ID,
         OPENAI_API_PROVIDER_ID,
         OPENROUTER_PROVIDER_ID,
+        DEEPSEEK_PROVIDER_ID,
+        XAI_PROVIDER_ID,
         ANTHROPIC_PROVIDER_ID,
         GITHUB_MODELS_PROVIDER_ID,
         OLLAMA_PROVIDER_ID,
@@ -2308,6 +2687,7 @@ mod tests {
         RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
         RuntimeRunControlStateDto,
     };
+    use crate::runtime::{agent_core::builtin_tool_descriptors, AUTONOMOUS_TOOL_PATCH};
 
     fn test_request() -> ProviderTurnRequest {
         ProviderTurnRequest {
@@ -2337,6 +2717,7 @@ mod tests {
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,
+                    auto_compact_enabled: true,
                     revision: 1,
                     applied_at: "2026-04-24T00:00:00Z".into(),
                 },
@@ -2361,6 +2742,12 @@ mod tests {
                 .expect("github body");
         assert_eq!(github["stream_options"]["include_usage"], true);
 
+        let deepseek = openai_chat_request_body(DEEPSEEK_PROVIDER_ID, "deepseek-v4-pro", &request)
+            .expect("deepseek body");
+        assert_eq!(deepseek["stream_options"]["include_usage"], true);
+        assert_eq!(deepseek["thinking"]["type"], "enabled");
+        assert!(deepseek.get("reasoning").is_none());
+
         let ollama = openai_chat_request_body(OLLAMA_PROVIDER_ID, "llama3.1", &request)
             .expect("ollama body");
         assert_eq!(ollama["stream"], true);
@@ -2371,6 +2758,89 @@ mod tests {
                 .expect("gemini body");
         assert_eq!(gemini["stream"], true);
         assert!(gemini.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn deepseek_body_uses_thinking_effort_and_replays_reasoning_content() {
+        let mut request = test_request();
+        request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::XHigh);
+        request.messages.push(ProviderMessage::Assistant {
+            content: "I will read the file.".into(),
+            reasoning_content: Some("tool call rationale".into()),
+            reasoning_details: None,
+            tool_calls: vec![AgentToolCall {
+                tool_call_id: "call-1".into(),
+                tool_name: "read".into(),
+                input: json!({ "path": "src/lib.rs" }),
+            }],
+        });
+
+        let body = openai_chat_request_body(DEEPSEEK_PROVIDER_ID, "deepseek-v4-pro", &request)
+            .expect("deepseek body");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "max");
+        assert!(body.get("reasoning").is_none());
+        assert_eq!(
+            body["messages"][2]["reasoning_content"],
+            "tool call rationale"
+        );
+    }
+
+    #[test]
+    fn openrouter_replays_reasoning_details_without_sending_deepseek_thinking() {
+        let mut request = test_request();
+        request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::Medium);
+        request.messages.push(ProviderMessage::Assistant {
+            content: "I will inspect context.".into(),
+            reasoning_content: Some("brief rationale".into()),
+            reasoning_details: Some(json!([
+                { "type": "reasoning.text", "text": "opaque provider detail" }
+            ])),
+            tool_calls: Vec::new(),
+        });
+
+        let body =
+            openai_chat_request_body(OPENROUTER_PROVIDER_ID, "deepseek/deepseek-v4-pro", &request)
+                .expect("openrouter body");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["messages"][2]["reasoning_content"], "brief rationale");
+        assert!(body["messages"][2]["reasoning_details"].is_array());
+    }
+
+    #[test]
+    fn openai_style_adapters_fail_closed_when_user_attachments_are_present() {
+        let mut request = test_request();
+        request.messages = vec![ProviderMessage::User {
+            content: "read the attachment".into(),
+            attachments: vec![MessageAttachment {
+                kind: MessageAttachmentKind::Text,
+                absolute_path: std::path::PathBuf::from("/tmp/note.md"),
+                media_type: "text/markdown".into(),
+                original_name: "note.md".into(),
+                size_bytes: 12,
+                width: None,
+                height: None,
+            }],
+        }];
+
+        let chat_error = openai_chat_request_body(OPENAI_API_PROVIDER_ID, "gpt-4.1", &request)
+            .expect_err("chat adapter should deny attachments");
+        assert_eq!(chat_error.code, "provider_attachment_unsupported");
+
+        let responses_error =
+            openai_responses_request_body(OPENAI_API_PROVIDER_ID, "gpt-5.4", &request)
+                .expect_err("responses adapter should deny attachments");
+        assert_eq!(responses_error.code, "provider_attachment_unsupported");
+
+        let codex_error = openai_codex_responses_request_body(
+            OPENAI_CODEX_PROVIDER_ID,
+            "gpt-5.4",
+            &request,
+            None,
+        )
+        .expect_err("codex responses adapter should deny attachments");
+        assert_eq!(codex_error.code, "provider_attachment_unsupported");
     }
 
     #[test]
@@ -2475,6 +2945,145 @@ mod tests {
         )
         .expect("gpt-5.1 body");
         assert_eq!(gpt_5_1["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn xai_responses_body_uses_native_reasoning_and_sanitized_tool_schema() {
+        let mut request = test_request();
+        request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::High);
+        request.tools[0].input_schema = json!({
+            "type": "object",
+            "maxProperties": 1,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                },
+                "tags": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "uniqueItems": true,
+                    "items": { "type": "string", "maxLength": 16 }
+                }
+            }
+        });
+
+        let body = xai_responses_request_body(XAI_PROVIDER_ID, XAI_DEFAULT_MODEL_ID, &request)
+            .expect("xAI body");
+
+        assert_eq!(body["model"], XAI_DEFAULT_MODEL_ID);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["tool_choice"], "auto");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(body["reasoning"].get("summary").is_none());
+        assert!(body["tools"][0]["parameters"]
+            .get("maxProperties")
+            .is_none());
+        assert!(body["tools"][0]["parameters"]["properties"]["path"]
+            .get("minLength")
+            .is_none());
+        assert!(body["tools"][0]["parameters"]["properties"]["path"]
+            .get("maxLength")
+            .is_none());
+        assert!(body["tools"][0]["parameters"]["properties"]["tags"]
+            .get("minItems")
+            .is_none());
+        assert!(body["tools"][0]["parameters"]["properties"]["tags"]
+            .get("maxItems")
+            .is_none());
+        assert!(body["tools"][0]["parameters"]["properties"]["tags"]
+            .get("uniqueItems")
+            .is_none());
+        assert!(
+            body["tools"][0]["parameters"]["properties"]["tags"]["items"]
+                .get("maxLength")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn xai_responses_body_supports_none_reasoning_and_drops_unsupported_efforts() {
+        let mut request = test_request();
+        request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::None);
+
+        let body = xai_responses_request_body(XAI_PROVIDER_ID, "grok-4.3-latest", &request)
+            .expect("xAI alias body");
+        assert_eq!(body["reasoning"]["effort"], "none");
+
+        request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::XHigh);
+        let body = xai_responses_request_body(XAI_PROVIDER_ID, XAI_DEFAULT_MODEL_ID, &request)
+            .expect("xAI body");
+        assert!(body.get("reasoning").is_none());
+
+        request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::High);
+        let body = xai_responses_request_body(XAI_PROVIDER_ID, "grok-imagine-video", &request)
+            .expect("xAI unsupported body preview");
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn xai_adapter_rejects_non_text_models() {
+        let error = XaiResponsesAdapter::new(XaiResponsesProviderConfig {
+            model_id: "grok-imagine-image-quality".into(),
+            bearer_token: "test-token".into(),
+            ..XaiResponsesProviderConfig::default()
+        })
+        .expect_err("Imagine model should not bind to text runtime");
+
+        assert_eq!(error.code, "xai_model_not_supported_by_text_runtime");
+    }
+
+    #[test]
+    fn xai_tool_arguments_retry_after_html_entity_decode() {
+        let mut partial_calls = BTreeMap::new();
+        partial_calls.insert(
+            0,
+            PartialToolCall {
+                id: Some("call-1".into()),
+                name: Some("read".into()),
+                arguments: "{&quot;path&quot;:&quot;src/lib.rs&quot;}".into(),
+            },
+        );
+
+        let outcome = finish_provider_turn(
+            XAI_PROVIDER_ID,
+            String::new(),
+            None,
+            None,
+            partial_calls,
+            None,
+        )
+        .expect("xAI tool args should decode");
+
+        match outcome {
+            ProviderTurnOutcome::ToolCalls { tool_calls, .. } => {
+                assert_eq!(tool_calls[0].input["path"], "src/lib.rs");
+            }
+            ProviderTurnOutcome::Complete { .. } => panic!("expected tool call turn"),
+        }
+    }
+
+    #[test]
+    fn openai_codex_patch_tool_parameters_keep_root_object_type() {
+        let mut request = test_request();
+        request.tools = vec![builtin_tool_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.name == AUTONOMOUS_TOOL_PATCH)
+            .expect("patch descriptor")];
+
+        let body = openai_codex_responses_request_body(
+            OPENAI_CODEX_PROVIDER_ID,
+            "gpt-5.5",
+            &request,
+            None,
+        )
+        .expect("codex body");
+
+        assert_eq!(body["tools"][0]["name"], AUTONOMOUS_TOOL_PATCH);
+        assert_eq!(body["tools"][0]["parameters"]["type"], "object");
+        assert!(body["tools"][0]["parameters"]["oneOf"].is_array());
     }
 
     #[test]
@@ -2625,8 +3234,15 @@ mod tests {
             },
         );
 
-        let outcome = finish_provider_turn("test-provider", String::new(), partial_calls, None)
-            .expect("provider turn");
+        let outcome = finish_provider_turn(
+            "test-provider",
+            String::new(),
+            None,
+            None,
+            partial_calls,
+            None,
+        )
+        .expect("provider turn");
         match outcome {
             ProviderTurnOutcome::ToolCalls { tool_calls, .. } => {
                 assert_eq!(tool_calls.len(), 1);
@@ -2646,8 +3262,9 @@ mod tests {
                 arguments: "{".into(),
             },
         );
-        let error = finish_provider_turn("test-provider", String::new(), malformed, None)
-            .expect_err("malformed tool JSON should fail");
+        let error =
+            finish_provider_turn("test-provider", String::new(), None, None, malformed, None)
+                .expect_err("malformed tool JSON should fail");
         assert_eq!(error.code, "agent_provider_tool_arguments_invalid");
     }
 
@@ -2677,9 +3294,15 @@ mod tests {
             &event,
             0,
         ));
-        let outcome =
-            finish_provider_turn(OPENAI_CODEX_PROVIDER_ID, String::new(), partial_calls, None)
-                .expect("provider turn");
+        let outcome = finish_provider_turn(
+            OPENAI_CODEX_PROVIDER_ID,
+            String::new(),
+            None,
+            None,
+            partial_calls,
+            None,
+        )
+        .expect("provider turn");
 
         match outcome {
             ProviderTurnOutcome::ToolCalls { tool_calls, .. } => {
@@ -2739,7 +3362,7 @@ mod tests {
                 arguments: r#"{"path":"src/lib.rs"}"#.into(),
             },
         );
-        let error = finish_provider_turn("test-provider", String::new(), blank, None)
+        let error = finish_provider_turn("test-provider", String::new(), None, None, blank, None)
             .expect_err("blank tool id should fail");
         assert_eq!(error.code, "invalid_request");
 
@@ -2760,8 +3383,9 @@ mod tests {
                 arguments: r#"{"path":"client/src-tauri/src/lib.rs"}"#.into(),
             },
         );
-        let error = finish_provider_turn("test-provider", String::new(), duplicate, None)
-            .expect_err("duplicate tool id should fail");
+        let error =
+            finish_provider_turn("test-provider", String::new(), None, None, duplicate, None)
+                .expect_err("duplicate tool id should fail");
         assert_eq!(error.code, "agent_provider_tool_call_duplicate");
 
         let mut blank_name = BTreeMap::new();
@@ -2773,8 +3397,9 @@ mod tests {
                 arguments: "{}".into(),
             },
         );
-        let error = finish_provider_turn("test-provider", String::new(), blank_name, None)
-            .expect_err("blank tool name should fail");
+        let error =
+            finish_provider_turn("test-provider", String::new(), None, None, blank_name, None)
+                .expect_err("blank tool name should fail");
         assert_eq!(error.code, "invalid_request");
     }
 
@@ -2795,6 +3420,13 @@ mod tests {
                 model_id: "gpt-5.4".into(),
                 base_url: "https://api.openai.com/v1".into(),
                 api_key: "test-key".into(),
+                timeout_ms: 1_000,
+            }),
+            AgentProviderConfig::XaiResponses(XaiResponsesProviderConfig {
+                provider_id: XAI_PROVIDER_ID.into(),
+                model_id: XAI_DEFAULT_MODEL_ID.into(),
+                base_url: XAI_API_BASE_URL.into(),
+                bearer_token: "test-key".into(),
                 timeout_ms: 1_000,
             }),
             AgentProviderConfig::OpenAiCompatible(OpenAiCompatibleProviderConfig {
@@ -2844,6 +3476,12 @@ mod tests {
                 base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
                 api_key: Some("test-key".into()),
                 api_version: None,
+                timeout_ms: 1_000,
+            }),
+            AgentProviderConfig::DeepSeek(DeepSeekProviderConfig {
+                model_id: "deepseek-v4-pro".into(),
+                base_url: "https://api.deepseek.com".into(),
+                api_key: "test-key".into(),
                 timeout_ms: 1_000,
             }),
             AgentProviderConfig::Anthropic(AnthropicProviderConfig {

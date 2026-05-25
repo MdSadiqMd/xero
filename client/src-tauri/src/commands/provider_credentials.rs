@@ -18,7 +18,8 @@ use crate::{
     },
     runtime::{
         resolve_runtime_provider_identity, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
-        OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, VERTEX_PROVIDER_ID,
+        CURSOR_PROVIDER_ID, DEEPSEEK_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+        OPENAI_CODEX_PROVIDER_ID, VERTEX_PROVIDER_ID, XAI_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -197,7 +198,7 @@ fn validate_per_provider_fields(
     kind: ProviderCredentialKind,
     api_key: Option<&str>,
     base_url: Option<&str>,
-    _api_version: Option<&str>,
+    api_version: Option<&str>,
     region: Option<&str>,
     project_id: Option<&str>,
 ) -> CommandResult<()> {
@@ -231,6 +232,75 @@ fn validate_per_provider_fields(
             }
             let url = base_url.ok_or_else(|| CommandError::invalid_request("baseUrl"))?;
             validate_base_url(url)?;
+        }
+        DEEPSEEK_PROVIDER_ID => {
+            if !matches!(kind, ProviderCredentialKind::ApiKey) {
+                return Err(CommandError::user_fixable(
+                    "provider_credentials_invalid_kind",
+                    "Xero requires kind=api_key for DeepSeek credentials.",
+                ));
+            }
+            if api_key.is_none() {
+                return Err(CommandError::invalid_request("apiKey"));
+            }
+            if base_url.is_some() {
+                return Err(CommandError::invalid_request("baseUrl"));
+            }
+            if api_version.is_some() {
+                return Err(CommandError::invalid_request("apiVersion"));
+            }
+            if region.is_some() {
+                return Err(CommandError::invalid_request("region"));
+            }
+            if project_id.is_some() {
+                return Err(CommandError::invalid_request("projectId"));
+            }
+        }
+        XAI_PROVIDER_ID => {
+            if !matches!(kind, ProviderCredentialKind::ApiKey) {
+                return Err(CommandError::user_fixable(
+                    "provider_credentials_invalid_kind",
+                    "Xero requires kind=api_key for xAI credentials saved outside OAuth.",
+                ));
+            }
+            if api_key.is_none() {
+                return Err(CommandError::invalid_request("apiKey"));
+            }
+            if base_url.is_some() {
+                return Err(CommandError::invalid_request("baseUrl"));
+            }
+            if api_version.is_some() {
+                return Err(CommandError::invalid_request("apiVersion"));
+            }
+            if region.is_some() {
+                return Err(CommandError::invalid_request("region"));
+            }
+            if project_id.is_some() {
+                return Err(CommandError::invalid_request("projectId"));
+            }
+        }
+        CURSOR_PROVIDER_ID => {
+            if !matches!(kind, ProviderCredentialKind::ApiKey) {
+                return Err(CommandError::user_fixable(
+                    "provider_credentials_invalid_kind",
+                    "Xero requires kind=api_key for Cursor credentials.",
+                ));
+            }
+            if api_key.is_none() {
+                return Err(CommandError::invalid_request("apiKey"));
+            }
+            if base_url.is_some() {
+                return Err(CommandError::invalid_request("baseUrl"));
+            }
+            if api_version.is_some() {
+                return Err(CommandError::invalid_request("apiVersion"));
+            }
+            if region.is_some() {
+                return Err(CommandError::invalid_request("region"));
+            }
+            if project_id.is_some() {
+                return Err(CommandError::invalid_request("projectId"));
+            }
         }
         OPENAI_API_PROVIDER_ID => {
             if !matches!(
@@ -374,6 +444,120 @@ mod tests {
         )
         .expect_err("openrouter without api_key should fail");
         assert_eq!(err.code, "invalid_request");
+    }
+
+    #[test]
+    fn validate_deepseek_requires_api_key_and_rejects_endpoint_metadata() {
+        validate_per_provider_fields(
+            DEEPSEEK_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            Some("sk-test"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("DeepSeek with an API key and built-in endpoint should pass");
+
+        let missing_key = validate_per_provider_fields(
+            DEEPSEEK_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("DeepSeek without api_key should fail");
+        assert_eq!(missing_key.code, "invalid_request");
+
+        let custom_url = validate_per_provider_fields(
+            DEEPSEEK_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            Some("sk-test"),
+            Some("https://api.deepseek.com/v1"),
+            None,
+            None,
+            None,
+        )
+        .expect_err("first-party DeepSeek should reject custom base_url");
+        assert_eq!(custom_url.code, "invalid_request");
+    }
+
+    #[test]
+    fn validate_xai_requires_api_key_and_rejects_endpoint_metadata() {
+        validate_per_provider_fields(
+            XAI_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            Some("xai-test"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("xAI with an API key and built-in endpoint should pass");
+
+        let missing_key = validate_per_provider_fields(
+            XAI_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("xAI without api_key should fail");
+        assert_eq!(missing_key.code, "invalid_request");
+
+        let custom_url = validate_per_provider_fields(
+            XAI_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            Some("xai-test"),
+            Some("https://api.x.ai/v1"),
+            None,
+            None,
+            None,
+        )
+        .expect_err("native xAI should reject custom base_url");
+        assert_eq!(custom_url.code, "invalid_request");
+    }
+
+    #[test]
+    fn validate_cursor_requires_api_key_and_rejects_endpoint_metadata() {
+        validate_per_provider_fields(
+            CURSOR_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            Some("cursor-test"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("Cursor with an API key and built-in bridge should pass");
+
+        let missing_key = validate_per_provider_fields(
+            CURSOR_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("Cursor without api_key should fail");
+        assert_eq!(missing_key.code, "invalid_request");
+
+        let custom_url = validate_per_provider_fields(
+            CURSOR_PROVIDER_ID,
+            ProviderCredentialKind::ApiKey,
+            Some("cursor-test"),
+            Some("https://api.cursor.com/v1"),
+            None,
+            None,
+            None,
+        )
+        .expect_err("Cursor should reject custom base_url");
+        assert_eq!(custom_url.code, "invalid_request");
     }
 
     #[test]

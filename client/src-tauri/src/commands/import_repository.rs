@@ -58,9 +58,13 @@ pub fn import_repository<R: Runtime>(
         .map_err(|error| {
             crate::commands::CommandError::retryable(
                 "repository_status_emit_failed",
-                format!("Xero imported the repo but could not emit the repository status event: {error}"),
+                format!(
+                    "Xero imported the repo but could not emit the repository status event: {error}"
+                ),
             )
         })?;
+
+    crate::commands::remote_bridge::publish_remote_project_list_to_cloud(&app, state.inner());
 
     Ok(ImportRepositoryResponseDto {
         project: imported.project,

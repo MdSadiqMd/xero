@@ -1,0 +1,131 @@
+name: macOS Signed Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-signed-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVER_URL: https://api.xeroshell.com
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            artifact_suffix: macos-aarch64
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_suffix: macos-x86_64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Set up protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ github.token }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri -> target
+          shared-key: macos-signed-build-${{ matrix.artifact_suffix }}
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate signing secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing $name for signed macOS CI build."
+              exit 1
+            fi
+          done
+
+      - name: Build signed Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          XERO_SKIP_IDB_COMPANION_FETCH: "1"
+          VITE_XERO_SERVER_URL: ${{ env.SERVER_URL }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: client
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.macos.conf.json -- --bin xero-desktop
+
+      - name: Verify signing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_BUNDLE=$(find client/src-tauri/target -name "Xero.app" -type d | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "::error::Missing Xero.app bundle."
+            exit 1
+          fi
+
+          APP_TAR=$(find client/src-tauri/target -name "*.app.tar.gz" -type f | head -1)
+          APP_SIG=$(find client/src-tauri/target -name "*.app.tar.gz.sig" -type f | head -1)
+          if [ -z "$APP_TAR" ] || [ -z "$APP_SIG" ]; then
+            echo "::error::Missing macOS updater archive or signature."
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          spctl --assess --type execute --verbose "$APP_BUNDLE"
+          bash client/src-tauri/scripts/verify-macos-portable-linkage.sh "$APP_BUNDLE"
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xero-${{ matrix.artifact_suffix }}
+          path: |
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error

@@ -87,6 +87,20 @@ impl AgentToolDescriptor {
             }
         }
 
+        let application_metadata = tool_application_metadata_for_tool(&self.name);
+        telemetry_attributes.insert(
+            "xero.tool.application.family".into(),
+            application_metadata.family.clone(),
+        );
+        telemetry_attributes.insert(
+            "xero.tool.application.kind".into(),
+            tool_application_kind_label(application_metadata.kind).into(),
+        );
+        telemetry_attributes.insert(
+            "xero.tool.application.dispatch_safety".into(),
+            tool_batch_dispatch_safety_label(application_metadata.dispatch_safety).into(),
+        );
+
         xero_agent_core::ToolDescriptorV2 {
             name: self.name.clone(),
             description: self.description.clone(),
@@ -96,6 +110,7 @@ impl AgentToolDescriptor {
                 .and_then(|catalog| catalog.get("tags"))
                 .map(json_string_vec)
                 .unwrap_or_default(),
+            application_metadata,
             effect_class,
             mutability: core_mutability_for_tool(&self.name),
             sandbox_requirement: core_sandbox_requirement_for_tool(&self.name),
@@ -103,7 +118,7 @@ impl AgentToolDescriptor {
             telemetry_attributes,
             result_truncation: xero_agent_core::ToolResultTruncationContract {
                 max_output_bytes: 64 * 1024,
-                preserve_json_shape: false,
+                preserve_json_shape: true,
             },
         }
     }
@@ -113,6 +128,7 @@ impl AgentToolDescriptor {
 pub struct ToolRegistry {
     descriptors: Vec<AgentToolDescriptor>,
     dynamic_routes: BTreeMap<String, AutonomousDynamicToolRoute>,
+    exposure_plan: ToolExposurePlan,
     options: ToolRegistryOptions,
 }
 
@@ -122,6 +138,7 @@ pub struct ToolRegistryOptions {
     pub browser_control_preference: BrowserControlPreferenceDto,
     pub runtime_agent_id: RuntimeAgentIdDto,
     pub agent_tool_policy: Option<AutonomousAgentToolPolicy>,
+    pub tool_application_policy: ResolvedAgentToolApplicationStyleDto,
 }
 
 impl Default for ToolRegistryOptions {
@@ -131,6 +148,173 @@ impl Default for ToolRegistryOptions {
             browser_control_preference: BrowserControlPreferenceDto::Default,
             runtime_agent_id: RuntimeAgentIdDto::Ask,
             agent_tool_policy: None,
+            tool_application_policy: ResolvedAgentToolApplicationStyleDto::default(),
+        }
+    }
+}
+
+const TOOL_EXPOSURE_PLAN_SCHEMA: &str = "xero.tool_exposure_plan.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExposurePlan {
+    pub schema: String,
+    pub strategy: String,
+    pub runtime_agent_id: RuntimeAgentIdDto,
+    pub task_classification: ToolExposureTaskClassification,
+    pub provider_tool_support: String,
+    pub environment_health: String,
+    #[serde(default)]
+    pub tool_application_style: AgentToolApplicationStyleDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_application_style_source: Option<AgentToolApplicationStyleResolutionSourceDto>,
+    pub entries: Vec<ToolExposureEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExposureTaskClassification {
+    pub kind: String,
+    pub requires_plan: bool,
+    pub score: u8,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExposureEntry {
+    pub tool_name: String,
+    pub reasons: Vec<ToolExposureReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolExposureReason {
+    pub source: String,
+    pub reason_code: String,
+    pub detail: String,
+}
+
+impl ToolExposurePlan {
+    pub(crate) fn empty(
+        runtime_agent_id: RuntimeAgentIdDto,
+        strategy: impl Into<String>,
+        task_classification: ToolExposureTaskClassification,
+    ) -> Self {
+        Self {
+            schema: TOOL_EXPOSURE_PLAN_SCHEMA.into(),
+            strategy: strategy.into(),
+            runtime_agent_id,
+            task_classification,
+            provider_tool_support: "tool_schemas_supported_by_selected_provider".into(),
+            environment_health: "runtime_availability_checked_by_tool_runtime".into(),
+            tool_application_style: AgentToolApplicationStyleDto::Balanced,
+            tool_application_style_source: Some(
+                AgentToolApplicationStyleResolutionSourceDto::GlobalDefault,
+            ),
+            entries: Vec::new(),
+        }
+    }
+
+    pub(crate) fn apply_tool_application_policy(
+        &mut self,
+        policy: &ResolvedAgentToolApplicationStyleDto,
+    ) {
+        self.tool_application_style = policy.style;
+        self.tool_application_style_source = Some(policy.source);
+    }
+
+    pub(crate) fn for_tool_names<I, S>(
+        runtime_agent_id: RuntimeAgentIdDto,
+        strategy: impl Into<String>,
+        tool_names: I,
+        source: &str,
+        reason_code: &str,
+        detail: &str,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut plan = Self::empty(
+            runtime_agent_id,
+            strategy,
+            ToolExposureTaskClassification::manual("not_task_classified"),
+        );
+        plan.add_tools(tool_names, source, reason_code, detail);
+        plan
+    }
+
+    pub(crate) fn tool_names(&self) -> BTreeSet<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.tool_name.clone())
+            .collect()
+    }
+
+    pub(crate) fn add_tools<I, S>(
+        &mut self,
+        tool_names: I,
+        source: &str,
+        reason_code: &str,
+        detail: &str,
+    ) where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for tool_name in tool_names {
+            self.add_tool(tool_name.as_ref(), source, reason_code, detail);
+        }
+        self.entries
+            .sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
+    }
+
+    pub(crate) fn add_tool(
+        &mut self,
+        tool_name: &str,
+        source: &str,
+        reason_code: &str,
+        detail: &str,
+    ) {
+        let reason = ToolExposureReason {
+            source: source.into(),
+            reason_code: reason_code.into(),
+            detail: detail.into(),
+        };
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.tool_name == tool_name)
+        {
+            if !entry.reasons.contains(&reason) {
+                entry.reasons.push(reason);
+                entry.reasons.sort_by(|left, right| {
+                    left.source
+                        .cmp(&right.source)
+                        .then(left.reason_code.cmp(&right.reason_code))
+                });
+            }
+            return;
+        }
+        self.entries.push(ToolExposureEntry {
+            tool_name: tool_name.into(),
+            reasons: vec![reason],
+        });
+    }
+
+    pub(crate) fn retain_tools(&mut self, allowed: &BTreeSet<String>) {
+        self.entries
+            .retain(|entry| allowed.contains(entry.tool_name.as_str()));
+    }
+}
+
+impl ToolExposureTaskClassification {
+    pub(crate) fn manual(kind: &str) -> Self {
+        Self {
+            kind: kind.into(),
+            requires_plan: false,
+            score: 0,
+            reason_codes: Vec::new(),
         }
     }
 }
@@ -141,21 +325,40 @@ impl ToolRegistry {
     }
 
     pub fn builtin_with_options(options: ToolRegistryOptions) -> Self {
+        let mut descriptors = builtin_tool_descriptors()
+            .into_iter()
+            .filter(|descriptor| {
+                options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
+            })
+            .filter(|descriptor| tool_available_on_current_host(&descriptor.name))
+            .filter(|descriptor| {
+                tool_allowed_for_runtime_agent_with_policy(
+                    options.runtime_agent_id,
+                    &descriptor.name,
+                    options.agent_tool_policy.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        sort_descriptors_for_tool_application_style(
+            &mut descriptors,
+            options.tool_application_policy.style,
+        );
+        let exposure_plan = ToolExposurePlan::for_tool_names(
+            options.runtime_agent_id,
+            "builtin_full_registry",
+            descriptors
+                .iter()
+                .map(|descriptor| descriptor.name.as_str()),
+            "startup_core",
+            "builtin_full_registry",
+            "Full built-in registry requested for contract export, harness setup, or explicit diagnostic use.",
+        );
+        let mut exposure_plan = exposure_plan;
+        exposure_plan.apply_tool_application_policy(&options.tool_application_policy);
         Self {
-            descriptors: builtin_tool_descriptors()
-                .into_iter()
-                .filter(|descriptor| {
-                    options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
-                })
-                .filter(|descriptor| {
-                    tool_allowed_for_runtime_agent_with_policy(
-                        options.runtime_agent_id,
-                        &descriptor.name,
-                        options.agent_tool_policy.as_ref(),
-                    )
-                })
-                .collect(),
+            descriptors,
             dynamic_routes: BTreeMap::new(),
+            exposure_plan,
             options,
         }
     }
@@ -175,11 +378,14 @@ impl ToolRegistry {
         mut options: ToolRegistryOptions,
     ) -> Self {
         options.runtime_agent_id = controls.active.runtime_agent_id;
-        let mut names = select_tool_names_for_prompt(repo_root, prompt, controls, &options);
+        let mut exposure_plan =
+            plan_tool_exposure_for_prompt(repo_root, prompt, controls, &options);
+        let mut names = exposure_plan.tool_names();
         if !options.skill_tool_enabled {
             names.remove(AUTONOMOUS_TOOL_SKILL);
         }
-        Self::for_tool_names_with_options(names, options)
+        exposure_plan.retain_tools(&names);
+        Self::for_tool_names_with_options_and_exposure(names, options, exposure_plan)
     }
 
     pub fn for_tool_names(tool_names: BTreeSet<String>) -> Self {
@@ -190,21 +396,58 @@ impl ToolRegistry {
         tool_names: BTreeSet<String>,
         options: ToolRegistryOptions,
     ) -> Self {
-        let descriptors = builtin_tool_descriptors()
+        let exposure_plan = ToolExposurePlan::for_tool_names(
+            options.runtime_agent_id,
+            "explicit_tool_set",
+            tool_names.iter().map(String::as_str),
+            "user_explicit_tool_marker",
+            "explicit_tool_set",
+            "Tool registry was created from an explicit tool set.",
+        );
+        let mut exposure_plan = exposure_plan;
+        exposure_plan.apply_tool_application_policy(&options.tool_application_policy);
+        Self::for_tool_names_with_options_and_exposure(tool_names, options, exposure_plan)
+    }
+
+    fn for_tool_names_with_options_and_exposure(
+        tool_names: BTreeSet<String>,
+        options: ToolRegistryOptions,
+        mut exposure_plan: ToolExposurePlan,
+    ) -> Self {
+        let mut descriptors = builtin_tool_descriptors()
             .into_iter()
             .filter(|descriptor| {
                 tool_names.contains(descriptor.name.as_str())
                     && (options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL)
+                    && tool_available_on_current_host(&descriptor.name)
                     && tool_allowed_for_runtime_agent_with_policy(
                         options.runtime_agent_id,
                         &descriptor.name,
                         options.agent_tool_policy.as_ref(),
                     )
             })
-            .collect();
+            .collect::<Vec<_>>();
+        sort_descriptors_for_tool_application_style(
+            &mut descriptors,
+            options.tool_application_policy.style,
+        );
+        let allowed = descriptors
+            .iter()
+            .map(|descriptor| descriptor.name.clone())
+            .collect::<BTreeSet<_>>();
+        if options.agent_tool_policy.is_some() {
+            exposure_plan.add_tools(
+                allowed.iter().map(String::as_str),
+                "custom_policy",
+                "custom_policy_allowed",
+                "The active custom agent policy allowed this tool after base agent filtering.",
+            );
+        }
+        exposure_plan.retain_tools(&allowed);
         Self {
             descriptors,
             dynamic_routes: BTreeMap::new(),
+            exposure_plan,
             options,
         }
     }
@@ -214,11 +457,22 @@ impl ToolRegistry {
         dynamic_routes: BTreeMap<String, AutonomousDynamicToolRoute>,
         options: ToolRegistryOptions,
     ) -> Self {
-        let mut descriptors = descriptors
+        let builtin_descriptors = builtin_tool_descriptors()
             .into_iter()
+            .map(|descriptor| (descriptor.name.clone(), descriptor))
+            .collect::<BTreeMap<_, _>>();
+        let descriptors = descriptors
+            .into_iter()
+            .map(|descriptor| {
+                builtin_descriptors
+                    .get(&descriptor.name)
+                    .cloned()
+                    .unwrap_or(descriptor)
+            })
             .filter(|descriptor| {
                 options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
             })
+            .filter(|descriptor| tool_available_on_current_host(&descriptor.name))
             .filter(|descriptor| {
                 tool_allowed_for_runtime_agent_with_policy(
                     options.runtime_agent_id,
@@ -226,11 +480,57 @@ impl ToolRegistry {
                     options.agent_tool_policy.as_ref(),
                 )
             })
+            .filter(|descriptor| {
+                options
+                    .agent_tool_policy
+                    .as_ref()
+                    .map(|policy| {
+                        dynamic_routes
+                            .get(&descriptor.name)
+                            .map(|route| policy.allows_dynamic_tool_route(&descriptor.name, route))
+                            .unwrap_or(true)
+                    })
+                    .unwrap_or(true)
+            })
             .collect::<Vec<_>>();
+        let mut descriptors_by_name = BTreeMap::new();
+        for descriptor in descriptors {
+            descriptors_by_name.insert(descriptor.name.clone(), descriptor);
+        }
+        let mut descriptors = descriptors_by_name.into_values().collect::<Vec<_>>();
+        let allowed_dynamic_names = descriptors
+            .iter()
+            .filter(|descriptor| dynamic_tool_name_is_safe(&descriptor.name))
+            .map(|descriptor| descriptor.name.clone())
+            .collect::<BTreeSet<_>>();
+        let dynamic_routes = dynamic_routes
+            .into_iter()
+            .filter(|(tool_name, route)| {
+                allowed_dynamic_names.contains(tool_name)
+                    && dynamic_tool_route_name_is_safe(tool_name, route)
+            })
+            .collect();
         descriptors.sort_by(|left, right| left.name.cmp(&right.name));
+        sort_descriptors_for_tool_application_style(
+            &mut descriptors,
+            options.tool_application_policy.style,
+        );
+        let exposure_plan = ToolExposurePlan::for_tool_names(
+            options.runtime_agent_id,
+            "persisted_registry_snapshot",
+            descriptors
+                .iter()
+                .map(|descriptor| descriptor.name.as_str()),
+            "startup_core",
+            "persisted_registry_snapshot",
+            "Active registry was reconstructed from persisted descriptors.",
+        );
+        let mut exposure_plan = exposure_plan;
+        exposure_plan.apply_tool_application_policy(&options.tool_application_policy);
         Self {
             descriptors,
             dynamic_routes,
+            exposure_plan,
             options,
         }
     }
@@ -248,6 +548,17 @@ impl ToolRegistry {
 
     pub(crate) fn dynamic_routes(&self) -> &BTreeMap<String, AutonomousDynamicToolRoute> {
         &self.dynamic_routes
+    }
+
+    pub(crate) fn exposure_plan(&self) -> &ToolExposurePlan {
+        &self.exposure_plan
+    }
+
+    pub(crate) fn replace_exposure_plan(&mut self, mut exposure_plan: ToolExposurePlan) {
+        let allowed = self.descriptor_names();
+        exposure_plan.retain_tools(&allowed);
+        exposure_plan.apply_tool_application_policy(&self.options.tool_application_policy);
+        self.exposure_plan = exposure_plan;
     }
 
     pub fn into_descriptors(self) -> Vec<AgentToolDescriptor> {
@@ -272,9 +583,31 @@ impl ToolRegistry {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.expand_with_tool_names_for_reason(
+            tool_names,
+            "runtime_expansion",
+            "registry_expanded",
+            "The active registry was expanded by runtime orchestration.",
+        );
+    }
+
+    pub(crate) fn expand_with_tool_names_for_reason<I, S>(
+        &mut self,
+        tool_names: I,
+        source: &str,
+        reason_code: &str,
+        detail: &str,
+    ) where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut names = self.descriptor_names();
-        for tool_name in tool_names {
-            names.insert(tool_name.as_ref().to_owned());
+        let requested = tool_names
+            .into_iter()
+            .map(|tool_name| tool_name.as_ref().to_owned())
+            .collect::<Vec<_>>();
+        for tool_name in &requested {
+            names.insert(tool_name.clone());
         }
         let dynamic_descriptors = self
             .descriptors
@@ -287,19 +620,39 @@ impl ToolRegistry {
         next.descriptors.extend(dynamic_descriptors);
         next.descriptors
             .sort_by(|left, right| left.name.cmp(&right.name));
+        sort_descriptors_for_tool_application_style(
+            &mut next.descriptors,
+            next.options.tool_application_policy.style,
+        );
         next.dynamic_routes = dynamic_routes;
+        next.exposure_plan = self.exposure_plan.clone();
+        next.exposure_plan.add_tools(
+            requested.iter().map(String::as_str),
+            source,
+            reason_code,
+            detail,
+        );
+        let allowed = next.descriptor_names();
+        next.exposure_plan.retain_tools(&allowed);
         *self = next;
     }
 
-    pub(crate) fn expand_with_tool_names_from_runtime<I, S>(
+    pub(crate) fn expand_with_tool_names_from_runtime_for_reason<I, S>(
         &mut self,
         tool_names: I,
         tool_runtime: &AutonomousToolRuntime,
+        source: &str,
+        reason_code: &str,
+        detail: &str,
     ) -> CommandResult<()>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        let requested = tool_names
+            .into_iter()
+            .map(|tool_name| tool_name.as_ref().to_owned())
+            .collect::<Vec<_>>();
         let mut descriptors_by_name = self
             .descriptors
             .iter()
@@ -312,10 +665,11 @@ impl ToolRegistry {
             .map(|descriptor| (descriptor.name.clone(), descriptor))
             .collect::<BTreeMap<_, _>>();
 
-        for tool_name in tool_names {
-            let tool_name = tool_name.as_ref();
+        for tool_name in &requested {
+            let tool_name = tool_name.as_str();
             if let Some(descriptor) = builtin_descriptors.get(tool_name) {
                 if (self.options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL)
+                    && tool_available_on_current_host(&descriptor.name)
                     && tool_allowed_for_runtime_agent_with_policy(
                         self.options.runtime_agent_id,
                         &descriptor.name,
@@ -335,21 +689,44 @@ impl ToolRegistry {
                     .unwrap_or(true)
             {
                 if let Some(dynamic) = tool_runtime.dynamic_tool_descriptor(tool_name)? {
-                    descriptors_by_name.insert(
-                        dynamic.name.clone(),
-                        AgentToolDescriptor {
-                            name: dynamic.name.clone(),
-                            description: dynamic.description,
-                            input_schema: dynamic.input_schema,
-                        },
-                    );
-                    dynamic_routes.insert(dynamic.name, dynamic.route);
+                    if self
+                        .options
+                        .agent_tool_policy
+                        .as_ref()
+                        .map(|policy| policy.allows_dynamic_tool_descriptor(&dynamic))
+                        .unwrap_or(true)
+                    {
+                        descriptors_by_name.insert(
+                            dynamic.name.clone(),
+                            AgentToolDescriptor {
+                                name: dynamic.name.clone(),
+                                description: dynamic.description,
+                                input_schema: dynamic.input_schema,
+                            },
+                        );
+                        dynamic_routes.insert(dynamic.name, dynamic.route);
+                    }
                 }
             }
         }
 
         self.descriptors = descriptors_by_name.into_values().collect();
+        sort_descriptors_for_tool_application_style(
+            &mut self.descriptors,
+            self.options.tool_application_policy.style,
+        );
         self.dynamic_routes = dynamic_routes;
+        let allowed = self.descriptor_names();
+        self.exposure_plan.add_tools(
+            requested
+                .iter()
+                .filter(|tool_name| allowed.contains(tool_name.as_str()))
+                .map(String::as_str),
+            source,
+            reason_code,
+            detail,
+        );
+        self.exposure_plan.retain_tools(&allowed);
         Ok(())
     }
 
@@ -359,6 +736,15 @@ impl ToolRegistry {
                 || tool_call
                     .tool_name
                     .starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX);
+            if known_tool && !tool_available_on_current_host(&tool_call.tool_name) {
+                return Err(CommandError::user_fixable(
+                    "agent_tool_unavailable_on_host",
+                    format!(
+                        "Tool `{}` is unavailable on the current host operating system.",
+                        tool_call.tool_name
+                    ),
+                ));
+            }
             if known_tool
                 && !tool_allowed_for_runtime_agent_with_policy(
                     self.options.runtime_agent_id,
@@ -391,7 +777,18 @@ impl ToolRegistry {
             ));
         }
 
+        validate_call_for_runtime_agent(self.options.runtime_agent_id, tool_call)?;
+
         if let Some(route) = self.dynamic_routes.get(&tool_call.tool_name) {
+            if !self
+                .options
+                .agent_tool_policy
+                .as_ref()
+                .map(|policy| policy.allows_dynamic_tool_route(&tool_call.tool_name, route))
+                .unwrap_or(true)
+            {
+                return Err(agent_tool_mcp_policy_denied(&tool_call.tool_name));
+            }
             return match route {
                 AutonomousDynamicToolRoute::McpTool {
                     server_id,
@@ -408,22 +805,42 @@ impl ToolRegistry {
         }
 
         if let Some(request) = decode_action_level_tool_call(tool_call) {
-            return request;
+            let request = request?;
+            self.enforce_tool_policy_for_request(&tool_call.tool_name, &request)?;
+            return Ok(request);
         }
 
         let request_value = json!({
             "tool": tool_call.tool_name,
             "input": tool_call.input,
         });
-        serde_json::from_value::<AutonomousToolRequest>(request_value).map_err(|error| {
-            CommandError::user_fixable(
-                "agent_tool_call_invalid",
-                format!(
-                    "Xero could not decode owned-agent tool call `{}` for `{}`: {error}",
-                    tool_call.tool_call_id, tool_call.tool_name
-                ),
-            )
-        })
+        let request =
+            serde_json::from_value::<AutonomousToolRequest>(request_value).map_err(|error| {
+                CommandError::user_fixable(
+                    "agent_tool_call_invalid",
+                    format!(
+                        "Xero could not decode owned-agent tool call `{}` for `{}`: {error}",
+                        tool_call.tool_call_id, tool_call.tool_name
+                    ),
+                )
+            })?;
+        self.enforce_tool_policy_for_request(&tool_call.tool_name, &request)?;
+        Ok(request)
+    }
+
+    fn enforce_tool_policy_for_request(
+        &self,
+        tool_name: &str,
+        request: &AutonomousToolRequest,
+    ) -> CommandResult<()> {
+        if let (Some(policy), AutonomousToolRequest::Mcp(request)) =
+            (self.options.agent_tool_policy.as_ref(), request)
+        {
+            if !policy.allows_mcp_request(request) {
+                return Err(agent_tool_mcp_policy_denied(tool_name));
+            }
+        }
+        Ok(())
     }
 
     pub fn validate_call(&self, tool_call: &AgentToolCall) -> CommandResult<()> {
@@ -432,6 +849,225 @@ impl ToolRegistry {
 
     pub(crate) fn runtime_agent_id(&self) -> RuntimeAgentIdDto {
         self.options.runtime_agent_id
+    }
+
+    pub(crate) fn tool_application_policy(&self) -> &ResolvedAgentToolApplicationStyleDto {
+        &self.options.tool_application_policy
+    }
+}
+
+fn sort_descriptors_for_tool_application_style(
+    descriptors: &mut Vec<AgentToolDescriptor>,
+    style: AgentToolApplicationStyleDto,
+) {
+    if style == AgentToolApplicationStyleDto::Balanced {
+        return;
+    }
+
+    let mut indexed = descriptors.drain(..).enumerate().collect::<Vec<_>>();
+    indexed.sort_by_key(|(index, descriptor)| {
+        (
+            tool_application_descriptor_rank(descriptor.name.as_str(), style),
+            *index,
+        )
+    });
+    descriptors.extend(indexed.into_iter().map(|(_, descriptor)| descriptor));
+}
+
+fn dynamic_tool_name_is_safe(tool_name: &str) -> bool {
+    tool_name.starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX)
+        && !tool_access_all_known_tools().contains(tool_name)
+}
+
+fn dynamic_tool_route_name_is_safe(tool_name: &str, route: &AutonomousDynamicToolRoute) -> bool {
+    match route {
+        AutonomousDynamicToolRoute::McpTool { .. } => dynamic_tool_name_is_safe(tool_name),
+    }
+}
+
+fn tool_application_descriptor_rank(tool_name: &str, style: AgentToolApplicationStyleDto) -> u8 {
+    match style {
+        AgentToolApplicationStyleDto::DeclarativeFirst => {
+            if tool_name == AUTONOMOUS_TOOL_PATCH || is_repository_discovery_batch_tool(tool_name) {
+                0
+            } else if is_granular_repository_discovery_tool(tool_name)
+                || is_edit_family_tool(tool_name)
+            {
+                1
+            } else {
+                0
+            }
+        }
+        AgentToolApplicationStyleDto::Conservative => {
+            if tool_name == AUTONOMOUS_TOOL_PATCH || is_repository_discovery_batch_tool(tool_name) {
+                1
+            } else {
+                0
+            }
+        }
+        AgentToolApplicationStyleDto::Balanced => 0,
+    }
+}
+
+fn is_edit_family_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        AUTONOMOUS_TOOL_EDIT
+            | AUTONOMOUS_TOOL_WRITE
+            | AUTONOMOUS_TOOL_PATCH
+            | AUTONOMOUS_TOOL_COPY
+            | AUTONOMOUS_TOOL_FS_TRANSACTION
+            | AUTONOMOUS_TOOL_JSON_EDIT
+            | AUTONOMOUS_TOOL_TOML_EDIT
+            | AUTONOMOUS_TOOL_YAML_EDIT
+            | AUTONOMOUS_TOOL_DELETE
+            | AUTONOMOUS_TOOL_RENAME
+            | AUTONOMOUS_TOOL_MKDIR
+            | AUTONOMOUS_TOOL_NOTEBOOK_EDIT
+    )
+}
+
+fn is_repository_discovery_batch_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        AUTONOMOUS_TOOL_SEARCH
+            | AUTONOMOUS_TOOL_FIND
+            | AUTONOMOUS_TOOL_LIST
+            | AUTONOMOUS_TOOL_LIST_TREE
+            | AUTONOMOUS_TOOL_DIRECTORY_DIGEST
+            | AUTONOMOUS_TOOL_READ_MANY
+            | AUTONOMOUS_TOOL_RESULT_PAGE
+            | AUTONOMOUS_TOOL_TOOL_SEARCH
+            | AUTONOMOUS_TOOL_WORKSPACE_INDEX
+            | AUTONOMOUS_TOOL_CODE_INTEL
+            | AUTONOMOUS_TOOL_LSP
+    )
+}
+
+fn is_granular_repository_discovery_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        AUTONOMOUS_TOOL_READ | AUTONOMOUS_TOOL_STAT | AUTONOMOUS_TOOL_HASH
+    )
+}
+
+fn tool_application_metadata_for_tool(tool_name: &str) -> xero_agent_core::ToolApplicationMetadata {
+    match tool_name {
+        AUTONOMOUS_TOOL_PATCH => xero_agent_core::ToolApplicationMetadata {
+            family: "edit".into(),
+            kind: xero_agent_core::ToolApplicationKind::Declarative,
+            dispatch_safety: xero_agent_core::ToolBatchDispatchSafety::ToolOwnedAtomic,
+            safety_requirements: vec![
+                "supports_preview".into(),
+                "validates_all_targets_before_writing".into(),
+                "guards_expected_hashes".into(),
+                "reports_diff".into(),
+            ],
+        },
+        AUTONOMOUS_TOOL_SEARCH
+        | AUTONOMOUS_TOOL_FIND
+        | AUTONOMOUS_TOOL_LIST
+        | AUTONOMOUS_TOOL_LIST_TREE
+        | AUTONOMOUS_TOOL_DIRECTORY_DIGEST
+        | AUTONOMOUS_TOOL_READ_MANY
+        | AUTONOMOUS_TOOL_RESULT_PAGE
+        | AUTONOMOUS_TOOL_WORKSPACE_INDEX
+        | AUTONOMOUS_TOOL_CODE_INTEL
+        | AUTONOMOUS_TOOL_LSP => xero_agent_core::ToolApplicationMetadata {
+            family: "discovery".into(),
+            kind: xero_agent_core::ToolApplicationKind::ReadOnlyBatch,
+            dispatch_safety: xero_agent_core::ToolBatchDispatchSafety::ParallelReadOnly,
+            safety_requirements: vec![
+                "read_only".into(),
+                "bounded_results".into(),
+                "bounded_scope".into(),
+                "explicit_failure_modes".into(),
+            ],
+        },
+        AUTONOMOUS_TOOL_TOOL_SEARCH => xero_agent_core::ToolApplicationMetadata {
+            family: "tool_discovery".into(),
+            kind: xero_agent_core::ToolApplicationKind::ReadOnlyBatch,
+            dispatch_safety: xero_agent_core::ToolBatchDispatchSafety::ParallelReadOnly,
+            safety_requirements: vec![
+                "read_only".into(),
+                "bounded_results".into(),
+                "catalog_only".into(),
+            ],
+        },
+        AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH | AUTONOMOUS_TOOL_PROJECT_CONTEXT_GET => {
+            xero_agent_core::ToolApplicationMetadata {
+                family: "context".into(),
+                kind: xero_agent_core::ToolApplicationKind::ReadOnlyBatch,
+                dispatch_safety: xero_agent_core::ToolBatchDispatchSafety::ParallelReadOnly,
+                safety_requirements: vec![
+                    "read_only".into(),
+                    "bounded_results".into(),
+                    "app_data_scope".into(),
+                ],
+            }
+        }
+        AUTONOMOUS_TOOL_READ | AUTONOMOUS_TOOL_STAT | AUTONOMOUS_TOOL_HASH => {
+            xero_agent_core::ToolApplicationMetadata::granular("file")
+        }
+        AUTONOMOUS_TOOL_EDIT
+        | AUTONOMOUS_TOOL_WRITE
+        | AUTONOMOUS_TOOL_COPY
+        | AUTONOMOUS_TOOL_FS_TRANSACTION
+        | AUTONOMOUS_TOOL_JSON_EDIT
+        | AUTONOMOUS_TOOL_TOML_EDIT
+        | AUTONOMOUS_TOOL_YAML_EDIT
+        | AUTONOMOUS_TOOL_DELETE
+        | AUTONOMOUS_TOOL_RENAME
+        | AUTONOMOUS_TOOL_MKDIR
+        | AUTONOMOUS_TOOL_NOTEBOOK_EDIT => {
+            xero_agent_core::ToolApplicationMetadata::granular("edit")
+        }
+        AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD
+        | AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE
+        | AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH
+        | AUTONOMOUS_TOOL_AGENT_COORDINATION
+        | AUTONOMOUS_TOOL_TODO
+        | AUTONOMOUS_TOOL_AGENT_DEFINITION
+        | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION => {
+            xero_agent_core::ToolApplicationMetadata::granular("runtime_state")
+        }
+        AUTONOMOUS_TOOL_COMMAND_PROBE
+        | AUTONOMOUS_TOOL_COMMAND_VERIFY
+        | AUTONOMOUS_TOOL_COMMAND_RUN
+        | AUTONOMOUS_TOOL_COMMAND_SESSION
+        | AUTONOMOUS_TOOL_COMMAND_SESSION_START
+        | AUTONOMOUS_TOOL_COMMAND_SESSION_READ
+        | AUTONOMOUS_TOOL_COMMAND_SESSION_STOP
+        | AUTONOMOUS_TOOL_COMMAND
+        | AUTONOMOUS_TOOL_POWERSHELL => {
+            xero_agent_core::ToolApplicationMetadata::granular("command")
+        }
+        AUTONOMOUS_TOOL_BROWSER
+        | AUTONOMOUS_TOOL_BROWSER_OBSERVE
+        | AUTONOMOUS_TOOL_BROWSER_CONTROL => {
+            xero_agent_core::ToolApplicationMetadata::granular("browser")
+        }
+        _ => xero_agent_core::ToolApplicationMetadata::default(),
+    }
+}
+
+fn tool_application_kind_label(kind: xero_agent_core::ToolApplicationKind) -> &'static str {
+    match kind {
+        xero_agent_core::ToolApplicationKind::Granular => "granular",
+        xero_agent_core::ToolApplicationKind::Declarative => "declarative",
+        xero_agent_core::ToolApplicationKind::ReadOnlyBatch => "read_only_batch",
+        xero_agent_core::ToolApplicationKind::MutatingBatch => "mutating_batch",
+    }
+}
+
+fn tool_batch_dispatch_safety_label(
+    dispatch_safety: xero_agent_core::ToolBatchDispatchSafety,
+) -> &'static str {
+    match dispatch_safety {
+        xero_agent_core::ToolBatchDispatchSafety::NotBatch => "not_batch",
+        xero_agent_core::ToolBatchDispatchSafety::ParallelReadOnly => "parallel_read_only",
+        xero_agent_core::ToolBatchDispatchSafety::SequentialMutating => "sequential_mutating",
+        xero_agent_core::ToolBatchDispatchSafety::ToolOwnedAtomic => "tool_owned_atomic",
     }
 }
 
@@ -584,6 +1220,29 @@ fn decode_action_level_tool_call(
         }),
         _ => return None,
     })
+}
+
+fn validate_call_for_runtime_agent(
+    runtime_agent_id: RuntimeAgentIdDto,
+    tool_call: &AgentToolCall,
+) -> CommandResult<()> {
+    if tool_call.tool_name == AUTONOMOUS_TOOL_TODO
+        && tool_call
+            .input
+            .get("mode")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|mode| mode == "debug_evidence")
+        && runtime_agent_id != RuntimeAgentIdDto::Debug
+    {
+        return Err(CommandError::user_fixable(
+            "agent_debug_evidence_todo_mode_denied",
+            format!(
+                "The {} agent cannot use todo mode `debug_evidence`; that structured evidence ledger is reserved for Debug runs.",
+                runtime_agent_id.label()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -784,6 +1443,13 @@ fn agent_tool_boundary_violation(
     )
 }
 
+fn agent_tool_mcp_policy_denied(tool_name: &str) -> CommandError {
+    CommandError::user_fixable(
+        "agent_tool_mcp_policy_denied",
+        format!("Custom agent policy denied MCP access for tool `{tool_name}`."),
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentToolCall {
@@ -801,7 +1467,21 @@ pub struct AgentToolResult {
     pub summary: String,
     pub output: JsonValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistence: Option<AgentToolResultPersistenceMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_assistant_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentToolResultPersistenceMetadata {
+    pub persisted_full: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persisted_artifact: Option<String>,
+    pub registry_truncated: bool,
+    pub original_bytes: usize,
+    pub persisted_bytes: usize,
+    pub omitted_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -856,6 +1536,7 @@ pub trait ProviderAdapter {
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,
+                    auto_compact_enabled: false,
                     revision: 1,
                     applied_at: crate::auth::now_timestamp(),
                 },
@@ -864,7 +1545,7 @@ pub trait ProviderAdapter {
         };
 
         match self.stream_turn(&turn, emit)? {
-            ProviderTurnOutcome::Complete { message, usage } => Ok(ProviderCompactionOutcome {
+            ProviderTurnOutcome::Complete { message, usage, .. } => Ok(ProviderCompactionOutcome {
                 summary: message,
                 usage,
             }),
@@ -891,11 +1572,11 @@ pub trait ProviderAdapter {
                 .join("\n")
         };
         let prompt = format!(
-            "Extract durable memory candidates from this Xero coding-agent transcript. Return only a JSON array. Each item must contain scope, kind, text, confidence, and sourceItemIds. scope must be project or session. kind must be project_fact, user_preference, decision, session_summary, or troubleshooting. Do not include secrets. Do not include duplicates of existing approved or candidate memories.\n\nExisting memories:\n{existing}\n\nTranscript:\n{}",
+            "Extract durable memory candidates from this Xero coding-agent transcript. Return only a JSON array. Each item must contain scope, kind, text, confidence, and sourceItemIds. scope must be project or session. kind must be project_fact, user_preference, decision, session_summary, or troubleshooting. Do not include secrets. Do not include duplicates of existing approved or candidate memories. If the transcript includes code rollback events, do not promote implementation details from reverted turns as durable facts unless the candidate explicitly includes rollback provenance.\n\nExisting memories:\n{existing}\n\nTranscript:\n{}",
             request.transcript
         );
         let turn = ProviderTurnRequest {
-            system_prompt: "You propose durable context candidates for a coding-agent desktop app. Return strict JSON only, never markdown. Capture stable project facts, user preferences, decisions, session summaries, and troubleshooting facts. Prefer no item over a weak item. Never include secrets.".into(),
+            system_prompt: "You propose durable context candidates for a coding-agent desktop app. Return strict JSON only, never markdown. Capture stable project facts, user preferences, decisions, session summaries, and troubleshooting facts. Treat code rollback events as provenance; reverted implementation details are not durable project facts unless the memory explicitly mentions the rollback. Prefer no item over a weak item. Never include secrets.".into(),
             messages: vec![ProviderMessage::User {
                 content: prompt,
                 attachments: Vec::new(),
@@ -912,6 +1593,7 @@ pub trait ProviderAdapter {
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,
+                    auto_compact_enabled: false,
                     revision: 1,
                     applied_at: crate::auth::now_timestamp(),
                 },
@@ -920,7 +1602,7 @@ pub trait ProviderAdapter {
         };
 
         match self.stream_turn(&turn, emit)? {
-            ProviderTurnOutcome::Complete { message, usage } => {
+            ProviderTurnOutcome::Complete { message, usage, .. } => {
                 let candidates = parse_provider_memory_candidates(&message)?;
                 Ok(ProviderMemoryExtractionOutcome { candidates, usage })
             }
@@ -951,6 +1633,11 @@ pub enum ProviderMessage {
     },
     Assistant {
         content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_details: Option<JsonValue>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<AgentToolCall>,
     },
     Tool {
@@ -1045,10 +1732,14 @@ fn parse_provider_memory_candidates(message: &str) -> CommandResult<Vec<Provider
 pub enum ProviderTurnOutcome {
     Complete {
         message: String,
+        reasoning_content: Option<String>,
+        reasoning_details: Option<JsonValue>,
         usage: Option<ProviderUsage>,
     },
     ToolCalls {
         message: String,
+        reasoning_content: Option<String>,
+        reasoning_details: Option<JsonValue>,
         tool_calls: Vec<AgentToolCall>,
         usage: Option<ProviderUsage>,
     },
@@ -1094,49 +1785,78 @@ impl ProviderAdapter for FakeProviderAdapter {
             emit(ProviderStreamEvent::MessageDelta(message.clone()))?;
             return Ok(ProviderTurnOutcome::ToolCalls {
                 message,
+                reasoning_content: None,
+                reasoning_details: None,
                 tool_calls: vec![AgentToolCall {
                     tool_call_id: format!("fake-tool-call-verify-{}", request.turn_index),
                     tool_name: AUTONOMOUS_TOOL_COMMAND_VERIFY.into(),
-                    input: json!({ "argv": ["echo", "xero-verification-ok"] }),
+                    input: json!({ "argv": ["cargo", "test", "--help"] }),
                 }],
                 usage: Some(ProviderUsage::default()),
             });
         }
 
-        if request
+        let has_tool_message = request
             .messages
             .iter()
-            .any(|message| matches!(message, ProviderMessage::Tool { .. }))
-        {
+            .any(|message| matches!(message, ProviderMessage::Tool { .. }));
+        let continuation_prompt = request
+            .messages
+            .iter()
+            .rposition(|message| matches!(message, ProviderMessage::Tool { .. }))
+            .and_then(|last_tool_index| {
+                request
+                    .messages
+                    .iter()
+                    .skip(last_tool_index.saturating_add(1))
+                    .rev()
+                    .find_map(|message| match message {
+                        ProviderMessage::User { content, .. } => Some(content.clone()),
+                        _ => None,
+                    })
+            });
+        let user_prompt = if let Some(prompt) = continuation_prompt {
+            prompt
+        } else if has_tool_message {
+            String::new()
+        } else {
+            request
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    ProviderMessage::User { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let tool_calls = parse_fake_tool_directives(&user_prompt);
+        if has_tool_message && tool_calls.is_empty() {
             let message =
                 "Owned agent run completed through the Xero model-loop scaffold.".to_string();
             emit(ProviderStreamEvent::MessageDelta(message.clone()))?;
             return Ok(ProviderTurnOutcome::Complete {
                 message,
+                reasoning_content: None,
+                reasoning_details: None,
                 usage: Some(ProviderUsage::default()),
             });
         }
 
-        let user_prompt = request
-            .messages
-            .iter()
-            .filter_map(|message| match message {
-                ProviderMessage::User { content, .. } => Some(content.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let tool_calls = parse_fake_tool_directives(&user_prompt);
         let message = "Xero owned-agent runtime accepted the task.".to_string();
         emit(ProviderStreamEvent::MessageDelta(message.clone()))?;
         if tool_calls.is_empty() {
             Ok(ProviderTurnOutcome::Complete {
                 message,
+                reasoning_content: None,
+                reasoning_details: None,
                 usage: Some(ProviderUsage::default()),
             })
         } else {
             Ok(ProviderTurnOutcome::ToolCalls {
                 message,
+                reasoning_content: None,
+                reasoning_details: None,
                 tool_calls,
                 usage: Some(ProviderUsage::default()),
             })
@@ -1491,6 +2211,61 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_mcp_routes_cannot_shadow_builtin_tools() {
+        let registry = ToolRegistry::from_descriptors_with_dynamic_routes(
+            vec![AgentToolDescriptor {
+                name: AUTONOMOUS_TOOL_READ.into(),
+                description: "MCP impostor read descriptor.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "selector": { "type": "string" }
+                    }
+                }),
+            }],
+            BTreeMap::from([(
+                AUTONOMOUS_TOOL_READ.into(),
+                AutonomousDynamicToolRoute::McpTool {
+                    server_id: "workspace".into(),
+                    tool_name: "read".into(),
+                },
+            )]),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                ..ToolRegistryOptions::default()
+            },
+        );
+
+        assert!(registry
+            .dynamic_routes()
+            .get(AUTONOMOUS_TOOL_READ)
+            .is_none());
+        let descriptor = registry
+            .descriptor(AUTONOMOUS_TOOL_READ)
+            .expect("canonical read descriptor");
+        assert!(!descriptor.description.contains("MCP impostor"));
+        assert!(descriptor
+            .input_schema
+            .get("properties")
+            .and_then(JsonValue::as_object)
+            .is_some_and(|properties| properties.contains_key("maxBytesPerFile")));
+        match registry
+            .decode_call(&AgentToolCall {
+                tool_call_id: "call-read".into(),
+                tool_name: AUTONOMOUS_TOOL_READ.into(),
+                input: json!({ "path": "README.md", "maxBytesPerFile": 65536 }),
+            })
+            .expect("decode read call")
+        {
+            AutonomousToolRequest::Read(request) => {
+                assert_eq!(request.path, "README.md");
+                assert_eq!(request.max_bytes_per_file, Some(65536));
+            }
+            other => panic!("expected builtin read request, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn ask_registry_filters_and_denies_forbidden_tools_at_decode() {
         let registry = ToolRegistry::for_tool_names_with_options(
             BTreeSet::from([
@@ -1555,6 +2330,50 @@ mod tests {
     }
 
     #[test]
+    fn registry_filters_tools_that_do_not_match_the_current_host_os() {
+        let registry = ToolRegistry::for_tool_names_with_options(
+            BTreeSet::from([
+                AUTONOMOUS_TOOL_MACOS_AUTOMATION.to_string(),
+                AUTONOMOUS_TOOL_POWERSHELL.to_string(),
+                AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED.to_string(),
+            ]),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                ..ToolRegistryOptions::default()
+            },
+        );
+        let names = registry.descriptor_names();
+
+        assert_eq!(
+            names.contains(AUTONOMOUS_TOOL_MACOS_AUTOMATION),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            names.contains(AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            names.contains(AUTONOMOUS_TOOL_POWERSHELL),
+            cfg!(target_os = "windows")
+        );
+
+        let unavailable_tool = if cfg!(target_os = "windows") {
+            AUTONOMOUS_TOOL_MACOS_AUTOMATION
+        } else {
+            AUTONOMOUS_TOOL_POWERSHELL
+        };
+        let error = registry
+            .decode_call(&AgentToolCall {
+                tool_call_id: "call-os-specific".into(),
+                tool_name: unavailable_tool.into(),
+                input: json!({}),
+            })
+            .expect_err("host-unavailable tools must fail closed");
+
+        assert_eq!(error.code, "agent_tool_unavailable_on_host");
+    }
+
+    #[test]
     fn action_level_wrappers_reject_actions_outside_their_surface() {
         let registry = ToolRegistry::for_tool_names_with_options(
             BTreeSet::from([
@@ -1616,9 +2435,57 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_exposes_harness_surface_without_agent_definition_mutation() {
+    fn debug_evidence_todo_mode_is_reserved_for_debug_agent() {
+        let debug_registry = ToolRegistry::for_tool_names_with_options(
+            BTreeSet::from([AUTONOMOUS_TOOL_TODO.to_string()]),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Debug,
+                ..ToolRegistryOptions::default()
+            },
+        );
+
+        let request = debug_registry
+            .decode_call(&AgentToolCall {
+                tool_call_id: "call-debug-ledger".into(),
+                tool_name: AUTONOMOUS_TOOL_TODO.into(),
+                input: json!({
+                    "action": "upsert",
+                    "title": "Reproduced panic",
+                    "mode": "debug_evidence",
+                    "debugStage": "reproduction",
+                    "evidence": "cargo test reproduced the panic"
+                }),
+            })
+            .expect("Debug may use structured evidence ledger todos");
+        assert!(matches!(request, AutonomousToolRequest::Todo(_)));
+
+        let engineer_registry = ToolRegistry::for_tool_names_with_options(
+            BTreeSet::from([AUTONOMOUS_TOOL_TODO.to_string()]),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                ..ToolRegistryOptions::default()
+            },
+        );
+        let error = engineer_registry
+            .decode_call(&AgentToolCall {
+                tool_call_id: "call-engineer-ledger".into(),
+                tool_name: AUTONOMOUS_TOOL_TODO.into(),
+                input: json!({
+                    "action": "upsert",
+                    "title": "Engineer should not use debug ledger",
+                    "mode": "debug_evidence",
+                    "debugStage": "hypothesis"
+                }),
+            })
+            .expect_err("debug evidence mode is Debug-only");
+
+        assert_eq!(error.code, "agent_debug_evidence_todo_mode_denied");
+    }
+
+    #[test]
+    fn engineer_registry_excludes_removed_test_harness_and_agent_definition_mutation() {
         let registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
-            runtime_agent_id: RuntimeAgentIdDto::Test,
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             skill_tool_enabled: true,
             ..ToolRegistryOptions::default()
         });
@@ -1630,6 +2497,11 @@ mod tests {
             AUTONOMOUS_TOOL_GIT_STATUS,
             AUTONOMOUS_TOOL_GIT_DIFF,
             AUTONOMOUS_TOOL_READ,
+            AUTONOMOUS_TOOL_READ_MANY,
+            AUTONOMOUS_TOOL_RESULT_PAGE,
+            AUTONOMOUS_TOOL_STAT,
+            AUTONOMOUS_TOOL_LIST_TREE,
+            AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
             AUTONOMOUS_TOOL_HASH,
             AUTONOMOUS_TOOL_TODO,
             AUTONOMOUS_TOOL_PROJECT_CONTEXT_SEARCH,
@@ -1638,6 +2510,11 @@ mod tests {
             AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE,
             AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH,
             AUTONOMOUS_TOOL_MKDIR,
+            AUTONOMOUS_TOOL_COPY,
+            AUTONOMOUS_TOOL_FS_TRANSACTION,
+            AUTONOMOUS_TOOL_JSON_EDIT,
+            AUTONOMOUS_TOOL_TOML_EDIT,
+            AUTONOMOUS_TOOL_YAML_EDIT,
             AUTONOMOUS_TOOL_WRITE,
             AUTONOMOUS_TOOL_EDIT,
             AUTONOMOUS_TOOL_RENAME,
@@ -1649,7 +2526,6 @@ mod tests {
             AUTONOMOUS_TOOL_PROCESS_MANAGER,
             AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
             AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE,
-            AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED,
             AUTONOMOUS_TOOL_BROWSER_OBSERVE,
             AUTONOMOUS_TOOL_BROWSER_CONTROL,
             AUTONOMOUS_TOOL_MCP_LIST,
@@ -1659,16 +2535,34 @@ mod tests {
             AUTONOMOUS_TOOL_SKILL,
             AUTONOMOUS_TOOL_EMULATOR,
             AUTONOMOUS_TOOL_SOLANA_CLUSTER,
-            AUTONOMOUS_TOOL_MACOS_AUTOMATION,
         ] {
             assert!(
                 names.contains(expected),
-                "Test harness registry should expose `{expected}` when active"
+                "Engineer registry should expose `{expected}`"
             );
         }
         assert!(
+            !names.contains(AUTONOMOUS_TOOL_HARNESS_RUNNER),
+            "harness_runner is reserved for the removed Test agent"
+        );
+        assert_eq!(
+            names.contains(AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED),
+            cfg!(target_os = "macos"),
+            "macOS-only privileged diagnostics should match host availability"
+        );
+        assert_eq!(
+            names.contains(AUTONOMOUS_TOOL_MACOS_AUTOMATION),
+            cfg!(target_os = "macos"),
+            "macOS automation should match host availability"
+        );
+        assert_eq!(
+            names.contains(AUTONOMOUS_TOOL_POWERSHELL),
+            cfg!(target_os = "windows"),
+            "PowerShell should match host availability"
+        );
+        assert!(
             !names.contains(AUTONOMOUS_TOOL_AGENT_DEFINITION),
-            "Test must not inherit Agent Create's definition-registry mutation tool"
+            "Engineer must not inherit Agent Create's definition-registry mutation tool"
         );
 
         let agent_create_registry = ToolRegistry::for_tool_names_with_options(
@@ -1732,5 +2626,130 @@ mod tests {
             patch.sandbox_requirement,
             xero_agent_core::ToolSandboxRequirement::WorkspaceWrite
         );
+    }
+
+    #[test]
+    fn tool_application_style_orders_discovery_and_edit_families() {
+        let registry_for_style = |style| {
+            ToolRegistry::for_tool_names_with_options(
+                BTreeSet::from([
+                    AUTONOMOUS_TOOL_READ.to_string(),
+                    AUTONOMOUS_TOOL_SEARCH.to_string(),
+                    AUTONOMOUS_TOOL_CODE_INTEL.to_string(),
+                    AUTONOMOUS_TOOL_EDIT.to_string(),
+                    AUTONOMOUS_TOOL_PATCH.to_string(),
+                ]),
+                ToolRegistryOptions {
+                    runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                    tool_application_policy: ResolvedAgentToolApplicationStyleDto {
+                        style,
+                        ..ResolvedAgentToolApplicationStyleDto::default()
+                    },
+                    ..ToolRegistryOptions::default()
+                },
+            )
+        };
+        let index = |registry: &ToolRegistry, tool_name: &str| {
+            registry
+                .descriptors()
+                .iter()
+                .position(|descriptor| descriptor.name == tool_name)
+                .unwrap_or_else(|| panic!("missing descriptor {tool_name}"))
+        };
+
+        let balanced = registry_for_style(AgentToolApplicationStyleDto::Balanced);
+        assert!(index(&balanced, AUTONOMOUS_TOOL_READ) < index(&balanced, AUTONOMOUS_TOOL_SEARCH));
+        assert!(index(&balanced, AUTONOMOUS_TOOL_EDIT) < index(&balanced, AUTONOMOUS_TOOL_PATCH));
+
+        let conservative = registry_for_style(AgentToolApplicationStyleDto::Conservative);
+        assert!(
+            index(&conservative, AUTONOMOUS_TOOL_READ)
+                < index(&conservative, AUTONOMOUS_TOOL_SEARCH)
+        );
+        assert!(
+            index(&conservative, AUTONOMOUS_TOOL_EDIT)
+                < index(&conservative, AUTONOMOUS_TOOL_PATCH)
+        );
+
+        let declarative = registry_for_style(AgentToolApplicationStyleDto::DeclarativeFirst);
+        assert!(
+            index(&declarative, AUTONOMOUS_TOOL_SEARCH) < index(&declarative, AUTONOMOUS_TOOL_READ)
+        );
+        assert!(
+            index(&declarative, AUTONOMOUS_TOOL_CODE_INTEL)
+                < index(&declarative, AUTONOMOUS_TOOL_READ)
+        );
+        assert!(
+            index(&declarative, AUTONOMOUS_TOOL_PATCH) < index(&declarative, AUTONOMOUS_TOOL_EDIT)
+        );
+    }
+
+    #[test]
+    fn descriptors_v2_mark_discovery_tools_as_bounded_read_only_batches() {
+        let registry = ToolRegistry::for_tool_names_with_options(
+            BTreeSet::from([
+                AUTONOMOUS_TOOL_SEARCH.to_string(),
+                AUTONOMOUS_TOOL_FIND.to_string(),
+                AUTONOMOUS_TOOL_WORKSPACE_INDEX.to_string(),
+                AUTONOMOUS_TOOL_CODE_INTEL.to_string(),
+                AUTONOMOUS_TOOL_LSP.to_string(),
+                AUTONOMOUS_TOOL_PATCH.to_string(),
+            ]),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                ..ToolRegistryOptions::default()
+            },
+        );
+        let descriptors = registry.descriptors_v2();
+        let descriptor = |name: &str| {
+            descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == name)
+                .unwrap_or_else(|| panic!("missing descriptor {name}"))
+        };
+
+        for name in [
+            AUTONOMOUS_TOOL_SEARCH,
+            AUTONOMOUS_TOOL_FIND,
+            AUTONOMOUS_TOOL_WORKSPACE_INDEX,
+            AUTONOMOUS_TOOL_CODE_INTEL,
+            AUTONOMOUS_TOOL_LSP,
+        ] {
+            let descriptor = descriptor(name);
+            assert_eq!(descriptor.application_metadata.family, "discovery");
+            assert_eq!(
+                descriptor.application_metadata.kind,
+                xero_agent_core::ToolApplicationKind::ReadOnlyBatch
+            );
+            assert_eq!(
+                descriptor.application_metadata.dispatch_safety,
+                xero_agent_core::ToolBatchDispatchSafety::ParallelReadOnly
+            );
+            assert_eq!(
+                descriptor.mutability,
+                xero_agent_core::ToolMutability::ReadOnly
+            );
+            assert!(descriptor
+                .application_metadata
+                .safety_requirements
+                .iter()
+                .any(|requirement| requirement == "bounded_results"));
+            assert!(descriptor
+                .application_metadata
+                .safety_requirements
+                .iter()
+                .any(|requirement| requirement == "explicit_failure_modes"));
+        }
+
+        let patch = descriptor(AUTONOMOUS_TOOL_PATCH);
+        assert_eq!(
+            patch.application_metadata.kind,
+            xero_agent_core::ToolApplicationKind::Declarative
+        );
+        assert!(patch
+            .application_metadata
+            .safety_requirements
+            .iter()
+            .any(|requirement| requirement == "supports_preview"));
     }
 }

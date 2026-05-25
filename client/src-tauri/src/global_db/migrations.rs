@@ -2,12 +2,15 @@ use std::sync::LazyLock;
 
 use rusqlite_migration::{Migrations, M};
 
+pub const GLOBAL_DATABASE_SCHEMA_VERSION: i64 = 13;
+
 /// Migrations for the global SQLite database (`xero.db`).
 ///
 /// This is the single source of truth for non-project-scoped state:
 /// credentials, sessions, settings, registries, and the model catalog cache.
-/// The app is still pre-release, so the global database starts from a fresh
-/// baseline instead of carrying compatibility migrations for removed schemas.
+/// Existing app-data databases must be migrated in place. The initial schema is
+/// kept as the fresh-install baseline, and later entries are the upgrade path
+/// for users who already have a database at an older `PRAGMA user_version`.
 pub fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
         Migrations::new(vec![
@@ -17,10 +20,69 @@ pub fn migrations() -> &'static Migrations<'static> {
             M::up(SOUL_SETTINGS_SQL),
             M::up(USER_ADDED_ENVIRONMENT_TOOLS_SQL),
             M::up(PROVIDER_PREFLIGHT_RESULTS_SQL),
+            M::up(AGENT_TOOLING_SETTINGS_SQL),
+            M::up(DEVELOPER_TOOL_SEQUENCES_SQL),
+            M::up(PROJECT_START_TARGETS_SQL),
+            M::up(NOOP_SCHEMA_VERSION_MARKER_SQL),
+            M::up(ADRENALINE_MODE_SETTINGS_SQL),
+            M::up(CLOSED_LID_MODE_SETTINGS_SQL),
+            M::up(BUILTIN_AGENT_DEFAULT_MODELS_SQL),
         ])
     });
     &MIGRATIONS
 }
+
+const BUILTIN_AGENT_DEFAULT_MODELS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS builtin_agent_default_models (
+        runtime_agent_id TEXT PRIMARY KEY CHECK (runtime_agent_id <> ''),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    ) STRICT;
+"#;
+
+const CLOSED_LID_MODE_SETTINGS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS closed_lid_mode_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        updated_at TEXT NOT NULL
+    ) STRICT;
+"#;
+
+const ADRENALINE_MODE_SETTINGS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS adrenaline_mode_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        updated_at TEXT NOT NULL
+    ) STRICT;
+"#;
+
+const PROJECT_START_TARGETS_SQL: &str = r#"
+    ALTER TABLE projects ADD COLUMN start_targets TEXT NOT NULL DEFAULT '[]';
+"#;
+
+const NOOP_SCHEMA_VERSION_MARKER_SQL: &str = "";
+
+const DEVELOPER_TOOL_SEQUENCES_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS developer_tool_sequences (
+        id TEXT PRIMARY KEY CHECK (id <> ''),
+        name TEXT NOT NULL CHECK (name <> ''),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    ) STRICT;
+
+    CREATE INDEX IF NOT EXISTS idx_developer_tool_sequences_name
+        ON developer_tool_sequences(name);
+"#;
+
+const AGENT_TOOLING_SETTINGS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS agent_tooling_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        updated_at TEXT NOT NULL
+    ) STRICT;
+"#;
 
 const PROVIDER_PREFLIGHT_RESULTS_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS provider_preflight_results (
@@ -171,6 +233,18 @@ const INITIAL_SCHEMA_SQL: &str = r#"
         payload TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS adrenaline_mode_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        updated_at TEXT NOT NULL
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS closed_lid_mode_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL CHECK (payload <> '' AND json_valid(payload)),
+        updated_at TEXT NOT NULL
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS soul_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),

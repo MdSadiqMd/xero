@@ -22,7 +22,7 @@ function makeToolItem(overrides: Partial<RuntimeStreamToolItemView> = {}): Runti
 }
 
 describe('AgentCreateDraftSection', () => {
-  it('renders the empty primer when no agent_definition tool calls exist yet', () => {
+  it('renders the empty primer when no definition tool calls exist yet', () => {
     const onOpen = vi.fn()
     render(
       <AgentCreateDraftSection
@@ -32,12 +32,12 @@ describe('AgentCreateDraftSection', () => {
       />,
     )
 
-    expect(screen.getByText(/Describe the agent you want/i)).toBeInTheDocument()
+    expect(screen.getByText(/Describe the agent or Workflow/i)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Manage agents/i }))
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
 
-  it('shows recent agent_definition tool activity and surfaces pending approval count', () => {
+  it('shows recent definition tool activity and surfaces pending approval count', () => {
     render(
       <AgentCreateDraftSection
         runtimeStreamItems={[
@@ -45,8 +45,9 @@ describe('AgentCreateDraftSection', () => {
           makeToolItem({
             id: 'tool-2',
             sequence: 2,
+            toolName: 'workflow_definition',
             toolState: 'failed',
-            detail: 'Agent definition `team_research` failed validation with 2 diagnostic(s).',
+            detail: 'Workflow definition `release_pipeline` failed validation with 2 diagnostic(s).',
           }),
         ]}
         pendingApprovalCount={2}
@@ -55,10 +56,11 @@ describe('AgentCreateDraftSection', () => {
 
     expect(screen.getByText('2 pending approvals')).toBeInTheDocument()
     expect(screen.getByText(/Drafted agent definition/)).toBeInTheDocument()
+    expect(screen.getByText('workflow_definition')).toBeInTheDocument()
     expect(screen.getByText(/failed validation/)).toBeInTheDocument()
   })
 
-  it('ignores non agent_definition tool items', () => {
+  it('ignores non definition tool items', () => {
     render(
       <AgentCreateDraftSection
         runtimeStreamItems={[
@@ -80,7 +82,7 @@ describe('AgentCreateDraftSection', () => {
       />,
     )
 
-    expect(screen.getByText(/Describe the agent you want/i)).toBeInTheDocument()
+    expect(screen.getByText(/Describe the agent or Workflow/i)).toBeInTheDocument()
     expect(screen.queryByText('Saved record')).not.toBeInTheDocument()
   })
 })

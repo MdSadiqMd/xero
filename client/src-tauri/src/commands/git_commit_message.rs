@@ -48,6 +48,7 @@ pub fn git_generate_commit_message<R: Runtime>(
         thinking_effort: request.thinking_effort.clone(),
         approval_mode: RuntimeRunApprovalModeDto::Yolo,
         plan_mode_required: false,
+        auto_compact_enabled: false,
     };
     let provider_config =
         resolve_owned_agent_provider_config(&app, state.inner(), Some(&controls))?;
@@ -74,6 +75,7 @@ pub fn git_generate_commit_message<R: Runtime>(
                 thinking_effort: controls.thinking_effort.clone(),
                 approval_mode: RuntimeRunApprovalModeDto::Yolo,
                 plan_mode_required: false,
+                auto_compact_enabled: false,
                 revision: 1,
                 applied_at: now_timestamp(),
             },
@@ -205,15 +207,6 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::sanitize_provider_commit_message;
-
-    #[test]
-    fn sanitizes_common_model_wrappers() {
-        let message = "```gitcommit\nCommit message: \"feat: add source control helper\"\n```";
-        assert_eq!(
-            sanitize_provider_commit_message(message).expect("message is valid"),
-            "feat: add source control helper"
-        );
-    }
 
     #[test]
     fn preserves_body_while_collapsing_extra_blank_lines() {

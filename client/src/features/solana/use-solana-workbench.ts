@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
+import { createSafeTauriUnlisten } from "@/src/lib/tauri-events"
 
 export type ClusterKind = "localnet" | "mainnet_fork" | "devnet" | "mainnet"
 
@@ -1067,6 +1068,27 @@ export interface LogsRecentResponse {
   entries: LogEntry[]
 }
 
+export type LogFeedFilter = "all" | "errors" | "events"
+export type LogFeedOrder = "newestFirst" | "chronological"
+
+export interface LogsViewCounts {
+  all: number
+  errors: number
+  events: number
+}
+
+export interface LogsViewResponse {
+  cluster: ClusterKind
+  programIds: string[]
+  filter: LogFeedFilter
+  order: LogFeedOrder
+  limit: number
+  totalAvailable: number
+  decodedEventCount: number
+  counts: LogsViewCounts
+  entries: LogEntry[]
+}
+
 export interface LogsActiveSubscription {
   token: string
   filter: LogFilter
@@ -1748,6 +1770,8 @@ export interface UseSolanaWorkbench {
   // Phase 7 — logs + indexer.
   logBusy: boolean
   logEntries: LogEntry[]
+  logFeedView: LogsViewResponse | null
+  logFeedVersion: number
   decodedLogEvents: LogDecodedEventPayload[]
   activeLogSubscriptions: LogsActiveSubscription[]
   lastLogFetch: LogsRecentResponse | null
@@ -1762,6 +1786,13 @@ export interface UseSolanaWorkbench {
     rpcUrl?: string | null
     cachedOnly?: boolean
   }) => Promise<LogsRecentResponse | null>
+  refreshLogView: (args: {
+    cluster: ClusterKind
+    programIds?: string[]
+    filter?: LogFeedFilter
+    order?: LogFeedOrder
+    limit?: number
+  }) => Promise<LogsViewResponse | null>
   indexerBusy: boolean
   lastIndexerScaffold: ScaffoldResult | null
   lastIndexerRun: IndexerRunReport | null
@@ -1961,6 +1992,8 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
   // Phase 7 — logs + indexer.
   const [logBusy, setLogBusy] = useState(false)
   const [logEntries, setLogEntries] = useState<LogEntry[]>([])
+  const [logFeedView, setLogFeedView] = useState<LogsViewResponse | null>(null)
+  const [logFeedVersion, setLogFeedVersion] = useState(0)
   const [decodedLogEvents, setDecodedLogEvents] =
     useState<LogDecodedEventPayload[]>([])
   const [activeLogSubscriptions, setActiveLogSubscriptions] =
@@ -3049,26 +3082,23 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
 
   const mergeLogEntries = useCallback((incoming: LogEntry[]) => {
     if (incoming.length === 0) return
-    const keyOf = (entry: LogEntry) =>
-      `${entry.cluster}:${entry.signature}:${entry.slot ?? "na"}`
-
     setLogEntries((current) => {
-      const map = new Map<string, LogEntry>()
-      for (const entry of current) map.set(keyOf(entry), entry)
-      for (const entry of incoming) map.set(keyOf(entry), entry)
-
-      const next = Array.from(map.values()).sort(
-        (a, b) => (a.receivedMs ?? 0) - (b.receivedMs ?? 0),
-      )
+      const next =
+        incoming.length >= MAX_LOG_FEED_ENTRIES
+          ? incoming.slice(incoming.length - MAX_LOG_FEED_ENTRIES)
+          : [...current, ...incoming]
       if (next.length > MAX_LOG_FEED_ENTRIES) {
         return next.slice(next.length - MAX_LOG_FEED_ENTRIES)
       }
       return next
     })
+    setLogFeedVersion((current) => current + 1)
   }, [])
 
   const clearLogFeed = useCallback(() => {
     setLogEntries([])
+    setLogFeedView(null)
+    setLogFeedVersion((current) => current + 1)
     setDecodedLogEvents([])
     setLastLogFetch(null)
   }, [])
@@ -3155,6 +3185,38 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
       }
     },
     [mergeLogEntries],
+  )
+
+  const refreshLogView = useCallback(
+    async (args: {
+      cluster: ClusterKind
+      programIds?: string[]
+      filter?: LogFeedFilter
+      order?: LogFeedOrder
+      limit?: number
+    }): Promise<LogsViewResponse | null> => {
+      if (!isTauri()) {
+        setLogFeedView(null)
+        return null
+      }
+      try {
+        const response = await invoke<LogsViewResponse>("solana_logs_view", {
+          request: {
+            cluster: args.cluster,
+            programIds: args.programIds ?? [],
+            filter: args.filter ?? "all",
+            order: args.order ?? "newestFirst",
+            limit: args.limit ?? 100,
+          },
+        })
+        setLogFeedView(response)
+        return response
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      }
+    },
+    [],
   )
 
   const scaffoldIndexer = useCallback(
@@ -3544,7 +3606,18 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     let cancelled = false
     const unsubs: UnlistenFn[] = []
 
-    void listen<ToolchainInstallEvent>(
+    const trackUnlisten = (promise: Promise<UnlistenFn>) => {
+      void promise.then((unsub) => {
+        const safeUnsub = createSafeTauriUnlisten(unsub)
+        if (cancelled) {
+          safeUnsub()
+        } else {
+          unsubs.push(safeUnsub)
+        }
+      })
+    }
+
+    trackUnlisten(listen<ToolchainInstallEvent>(
       SOLANA_TOOLCHAIN_INSTALL_EVENT,
       (event) => {
         if (cancelled) return
@@ -3561,15 +3634,9 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
           setError(payload.error)
         }
       },
-    ).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    ))
 
-    void listen<ValidatorStatusPayload>(
+    trackUnlisten(listen<ValidatorStatusPayload>(
       SOLANA_VALIDATOR_STATUS_EVENT,
       (event) => {
         if (cancelled) return
@@ -3595,73 +3662,37 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
           setError(event.payload.message)
         }
       },
-    ).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    ))
 
-    void listen<PersonaEventPayload>(SOLANA_PERSONA_EVENT, (event) => {
+    trackUnlisten(listen<PersonaEventPayload>(SOLANA_PERSONA_EVENT, (event) => {
       if (cancelled) return
       setLastPersonaEvent(event.payload)
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
-    void listen<ScenarioEventPayload>(SOLANA_SCENARIO_EVENT, (event) => {
+    trackUnlisten(listen<ScenarioEventPayload>(SOLANA_SCENARIO_EVENT, (event) => {
       if (cancelled) return
       setLastScenarioEvent(event.payload)
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
-    void listen<TxEventPayload>(SOLANA_TX_EVENT, (event) => {
+    trackUnlisten(listen<TxEventPayload>(SOLANA_TX_EVENT, (event) => {
       if (cancelled) return
       setLastTxEvent(event.payload)
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
-    void listen<IdlChangedEvent>(SOLANA_IDL_CHANGED_EVENT, (event) => {
+    trackUnlisten(listen<IdlChangedEvent>(SOLANA_IDL_CHANGED_EVENT, (event) => {
       if (cancelled) return
       setLastIdlEvent(event.payload)
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
-    void listen<DeployProgressPayload>(
+    trackUnlisten(listen<DeployProgressPayload>(
       SOLANA_DEPLOY_PROGRESS_EVENT,
       (event) => {
         if (cancelled) return
         setLastDeployProgress(event.payload)
       },
-    ).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    ))
 
-    void listen<AuditEventPayload>(SOLANA_AUDIT_EVENT, (event) => {
+    trackUnlisten(listen<AuditEventPayload>(SOLANA_AUDIT_EVENT, (event) => {
       if (cancelled) return
       const payload = event.payload
       setAuditEvents((current) => {
@@ -3680,26 +3711,14 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
             : next
         })
       }
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
-    void listen<LogRawEventPayload>(SOLANA_LOG_EVENT, (event) => {
+    trackUnlisten(listen<LogRawEventPayload>(SOLANA_LOG_EVENT, (event) => {
       if (cancelled) return
       mergeLogEntries([event.payload.entry])
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
-    void listen<LogDecodedEventPayload>(SOLANA_LOG_DECODED_EVENT, (event) => {
+    trackUnlisten(listen<LogDecodedEventPayload>(SOLANA_LOG_DECODED_EVENT, (event) => {
       if (cancelled) return
       const payload = event.payload
       setDecodedLogEvents((current) => {
@@ -3708,13 +3727,7 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
           ? next.slice(next.length - MAX_DECODED_LOG_EVENTS)
           : next
       })
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub()
-      } else {
-        unsubs.push(unsub)
-      }
-    })
+    }))
 
     // Nudge the backend to re-emit the current status so the UI syncs.
     void invoke("solana_subscribe_ready").catch(() => {
@@ -3861,6 +3874,8 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     runReplay,
     logBusy,
     logEntries,
+    logFeedView,
+    logFeedVersion,
     decodedLogEvents,
     activeLogSubscriptions,
     lastLogFetch,
@@ -3869,6 +3884,7 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     subscribeLogs,
     unsubscribeLogs,
     fetchRecentLogs,
+    refreshLogView,
     indexerBusy,
     lastIndexerScaffold,
     lastIndexerRun,
@@ -3955,6 +3971,8 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     lastIndexerRun,
     lastIndexerScaffold,
     lastLogFetch,
+    logFeedVersion,
+    logFeedView,
     lastMetaplexMint,
     lastPersonaEvent,
     lastPublishReport,
@@ -3985,6 +4003,7 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     programBusy,
     publishIdl,
     refreshActiveLogSubscriptions,
+    refreshLogView,
     refreshCostSnapshot,
     refreshDocCatalog,
     refreshExtensionMatrix,

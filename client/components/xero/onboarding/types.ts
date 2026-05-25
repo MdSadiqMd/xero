@@ -1,10 +1,12 @@
 export type OnboardingStepId =
   | "welcome"
+  | "local-environment"
   | "providers"
   | "project"
   | "notifications"
   | "environment-access"
   | "confirm"
+  | "beta"
 
 export type ProviderId =
   | "openai_codex"

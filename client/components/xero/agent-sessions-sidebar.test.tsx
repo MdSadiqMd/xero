@@ -14,9 +14,11 @@ const sessions: AgentSessionView[] = [
     agentSessionId: 'agent-session-main',
     title: 'Main session',
     summary: 'Primary project session',
+    sessionKind: 'standard',
     status: 'active',
     statusLabel: 'Active',
     selected: true,
+    remoteVisible: false,
     createdAt: '2026-04-15T20:00:00Z',
     updatedAt: '2026-04-15T20:00:00Z',
     archivedAt: null,
@@ -24,6 +26,7 @@ const sessions: AgentSessionView[] = [
     lastRuntimeKind: null,
     lastProviderId: null,
     lineage: null,
+    isComputerUse: false,
     isActive: true,
     isArchived: false,
   },
@@ -150,6 +153,29 @@ describe('AgentSessionsSidebar', () => {
     expect(screen.queryByText('Rename')).not.toBeInTheDocument()
   })
 
+  it('uses a faster exit animation when an active session leaves the list', async () => {
+    const props: ComponentProps<typeof AgentSessionsSidebar> = {
+      projectId: 'project-1',
+      sessions,
+      selectedSessionId: 'agent-session-main',
+      onSelectSession: vi.fn(),
+      onCreateSession: vi.fn(),
+      onArchiveSession: vi.fn(),
+    }
+    const { rerender } = render(<AgentSessionsSidebar {...props} />)
+    const row = screen.getByText('Main session').closest('li') as HTMLElement
+
+    rerender(<AgentSessionsSidebar {...props} sessions={[]} />)
+
+    await waitFor(() => expect(row).toHaveClass('animate-out', 'duration-150'))
+    expect(row).not.toHaveClass('duration-300')
+
+    const exitingRow = screen.getByText('Main session').closest('li') as HTMLElement
+    fireEvent.animationEnd(exitingRow)
+
+    await waitFor(() => expect(screen.queryByText('Main session')).not.toBeInTheDocument())
+  })
+
   it('clears archive confirmation when the cursor leaves the archive button', () => {
     const onArchiveSession = vi.fn()
     renderSidebar({ onArchiveSession })
@@ -184,6 +210,28 @@ describe('AgentSessionsSidebar', () => {
     expect(window.localStorage.getItem('xero:pinned-sessions:project-1')).toBe(
       JSON.stringify([]),
     )
+  })
+
+  it('uses project UI state for pinned sessions when app-data storage is available', async () => {
+    const onReadProjectUiState = vi.fn(async () => ['agent-session-main'])
+    const onWriteProjectUiState = vi.fn(async () => undefined)
+
+    renderSidebar({ onReadProjectUiState, onWriteProjectUiState })
+
+    await waitFor(() =>
+      expect(onReadProjectUiState).toHaveBeenCalledWith('agent-sessions.pinned.v1'),
+    )
+    expect(await screen.findByText('Pinned')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Main session' }))
+
+    await waitFor(() =>
+      expect(onWriteProjectUiState).toHaveBeenCalledWith(
+        'agent-sessions.pinned.v1',
+        [],
+      ),
+    )
+    expect(window.localStorage.getItem('xero:pinned-sessions:project-1')).toBeNull()
   })
 
   it('keeps the resize control hidden while collapsed', () => {
@@ -445,6 +493,14 @@ describe('AgentSessionsSidebar', () => {
     await waitFor(() =>
       expect(onDeleteSession).toHaveBeenCalledWith('agent-session-archived'),
     )
+
+    const row = screen.getByText('Old session').closest('li') as HTMLElement
+    await waitFor(() => expect(row).toHaveClass('animate-out', 'duration-150'))
+    expect(row).not.toHaveClass('duration-300')
+
+    const exitingRow = screen.getByText('Old session').closest('li') as HTMLElement
+    fireEvent.animationEnd(exitingRow)
+
     await waitFor(() => expect(screen.queryByText('Old session')).not.toBeInTheDocument())
   })
 

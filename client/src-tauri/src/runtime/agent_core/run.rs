@@ -1,6 +1,7 @@
 use super::*;
+use crate::runtime::AutonomousAgentWorkflowPolicy;
 use sha2::{Digest, Sha256};
-use std::time::Instant;
+use std::collections::BTreeSet;
 use xero_agent_core::{
     production_runtime_trace_metadata, validate_production_runtime_contract,
     ProductionRuntimeContract, RuntimeStoreDescriptor,
@@ -73,7 +74,6 @@ pub fn create_owned_agent_run(
         controls.active.plan_mode_required && controls.active.runtime_agent_id.allows_plan_gate();
     let agent_tool_policy =
         effective_agent_tool_policy(&definition_selection.snapshot, &request.tool_runtime);
-    let tool_registry_started = Instant::now();
     let tool_registry = ToolRegistry::for_prompt_with_options(
         &request.repo_root,
         &request.prompt,
@@ -83,31 +83,31 @@ pub fn create_owned_agent_run(
             browser_control_preference: request.tool_runtime.browser_control_preference(),
             runtime_agent_id: controls.active.runtime_agent_id,
             agent_tool_policy: agent_tool_policy.clone(),
+            tool_application_policy: request.tool_runtime.tool_application_policy().clone(),
         },
     );
-    eprintln!(
-        "[runtime-latency] ToolRegistry::for_prompt_with_options project_id={} run_id={} duration_ms={}",
-        request.project_id,
-        request.run_id,
-        tool_registry_started.elapsed().as_millis()
-    );
-    let system_prompt_started = Instant::now();
-    let system_prompt = assemble_system_prompt_for_session(
+    let attached_skill_snapshot = resolve_attached_skill_snapshot_for_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.run_id,
+        &definition_selection.snapshot,
+        &request.tool_runtime,
+    )?;
+    let attached_skill_contexts =
+        attached_skill_contexts_from_resolution_snapshot(&attached_skill_snapshot);
+    let system_prompt = assemble_system_prompt_for_session_with_attached_and_policy(
         &request.repo_root,
         Some(&request.project_id),
         Some(&request.agent_session_id),
         controls.active.runtime_agent_id,
         request.tool_runtime.browser_control_preference(),
+        request.tool_runtime.tool_application_policy(),
         tool_registry.descriptors(),
         Some(&definition_selection.snapshot),
         Some(request.tool_runtime.soul_settings()),
+        None,
+        attached_skill_contexts,
     )?;
-    eprintln!(
-        "[runtime-latency] compile_system_prompt_for_session project_id={} run_id={} duration_ms={}",
-        request.project_id,
-        request.run_id,
-        system_prompt_started.elapsed().as_millis()
-    );
     let provider = create_provider_adapter(request.provider_config.clone())?;
     let runtime_contract = if matches!(&request.provider_config, AgentProviderConfig::Fake) {
         None
@@ -136,6 +136,10 @@ pub fn create_owned_agent_run(
             now: now.clone(),
         },
     )?;
+    project_store::persist_runtime_attached_skill_snapshot(
+        &request.repo_root,
+        &attached_skill_snapshot,
+    )?;
     if let Some(runtime_contract) = runtime_contract.as_ref() {
         append_event(
             &request.repo_root,
@@ -163,6 +167,16 @@ pub fn create_owned_agent_run(
             }),
         )?;
     }
+    append_event(
+        &request.repo_root,
+        &request.project_id,
+        &request.run_id,
+        AgentRunEventKind::StateTransition,
+        json!({
+            "kind": "tool_application_style_resolution",
+            "toolApplicationPolicy": request.tool_runtime.tool_application_policy(),
+        }),
+    )?;
 
     append_message(
         &request.repo_root,
@@ -281,6 +295,181 @@ fn owned_agent_production_runtime_contract(
     Ok(contract)
 }
 
+pub(crate) fn attached_skill_contexts_from_resolution_snapshot(
+    snapshot: &XeroAttachedSkillResolutionSnapshot,
+) -> Vec<XeroSkillToolContextPayload> {
+    snapshot
+        .attached_skills
+        .iter()
+        .map(|skill| skill.context.clone())
+        .collect()
+}
+
+pub(crate) fn attached_skill_contexts_for_provider_turn(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    definition_snapshot: &JsonValue,
+    tool_runtime: &AutonomousToolRuntime,
+) -> CommandResult<Vec<XeroSkillToolContextPayload>> {
+    if let Some(snapshot) =
+        project_store::load_runtime_attached_skill_snapshot(repo_root, project_id, run_id)?
+    {
+        return Ok(attached_skill_contexts_from_resolution_snapshot(&snapshot));
+    }
+    if !definition_has_attached_skills(definition_snapshot)? {
+        return Ok(Vec::new());
+    }
+    let snapshot = resolve_attached_skill_snapshot_for_run(
+        repo_root,
+        project_id,
+        run_id,
+        definition_snapshot,
+        tool_runtime,
+    )?;
+    Ok(attached_skill_contexts_from_resolution_snapshot(&snapshot))
+}
+
+pub(crate) fn load_persisted_attached_skill_contexts_for_run(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> CommandResult<Vec<XeroSkillToolContextPayload>> {
+    Ok(
+        project_store::load_runtime_attached_skill_snapshot(repo_root, project_id, run_id)?
+            .map(|snapshot| attached_skill_contexts_from_resolution_snapshot(&snapshot))
+            .unwrap_or_default(),
+    )
+}
+
+fn resolve_attached_skill_snapshot_for_run(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    definition_snapshot: &JsonValue,
+    tool_runtime: &AutonomousToolRuntime,
+) -> CommandResult<XeroAttachedSkillResolutionSnapshot> {
+    let attached_skills = attached_skill_refs_from_definition_snapshot(definition_snapshot)?;
+    if attached_skills.is_empty() {
+        return Ok(XeroAttachedSkillResolutionSnapshot {
+            contract_version: crate::runtime::XERO_ATTACHED_SKILL_RESOLUTION_CONTRACT_VERSION,
+            project_id: project_id.into(),
+            run_id: run_id.into(),
+            resolved_at: now_timestamp(),
+            attached_skills: Vec::new(),
+        });
+    }
+    let report = tool_runtime.resolve_attached_skills(XeroAttachedSkillResolutionRequest {
+        project_id: project_id.into(),
+        run_id: run_id.into(),
+        attached_skills,
+    })?;
+    match report.status {
+        XeroAttachedSkillResolutionStatus::Succeeded => {
+            report.snapshot.ok_or_else(|| {
+                CommandError::system_fault(
+                    "attached_skill_resolution_snapshot_missing",
+                    format!(
+                        "Xero resolved attached skills for run `{run_id}` but did not return a run-level snapshot."
+                    ),
+                )
+            })
+        }
+        XeroAttachedSkillResolutionStatus::Failed => {
+            Err(attached_skill_resolution_report_error(repo_root, run_id, report))
+        }
+    }
+}
+
+fn attached_skill_refs_from_definition_snapshot(
+    definition_snapshot: &JsonValue,
+) -> CommandResult<Vec<XeroAttachedSkillRef>> {
+    let Some(value) = definition_snapshot.get("attachedSkills") else {
+        return Err(CommandError::user_fixable(
+            "agent_definition_attached_skills_missing",
+            "Xero cannot start this custom agent because its canonical definition is missing attachedSkills.",
+        ));
+    };
+    serde_json::from_value::<Vec<XeroAttachedSkillRef>>(value.clone()).map_err(|error| {
+        CommandError::user_fixable(
+            "agent_definition_attached_skills_invalid",
+            format!(
+                "Xero cannot start this custom agent because attachedSkills is not canonical: {error}"
+            ),
+        )
+    })
+}
+
+fn definition_has_attached_skills(definition_snapshot: &JsonValue) -> CommandResult<bool> {
+    let Some(value) = definition_snapshot.get("attachedSkills") else {
+        return Err(CommandError::user_fixable(
+            "agent_definition_attached_skills_missing",
+            "Xero cannot continue this custom agent because its canonical definition is missing attachedSkills.",
+        ));
+    };
+    value
+        .as_array()
+        .map(|skills| !skills.is_empty())
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "agent_definition_attached_skills_invalid",
+                "Xero cannot continue this custom agent because attachedSkills is not an array.",
+            )
+        })
+}
+
+fn workflow_policy_for_runtime_agent(
+    runtime_agent_id: RuntimeAgentIdDto,
+    definition_snapshot: &JsonValue,
+) -> Option<AutonomousAgentWorkflowPolicy> {
+    if runtime_agent_id == RuntimeAgentIdDto::Generalist {
+        return None;
+    }
+    AutonomousAgentWorkflowPolicy::from_definition_snapshot(definition_snapshot)
+}
+
+fn attached_skill_resolution_report_error(
+    _repo_root: &Path,
+    run_id: &str,
+    report: XeroAttachedSkillResolutionReport,
+) -> CommandError {
+    let detail = attached_skill_resolution_diagnostic_summary(&report.diagnostics);
+    CommandError::user_fixable(
+        "attached_skill_resolution_failed",
+        format!(
+            "Xero refused to start run `{run_id}` because one or more required attached skills could not be injected. {detail}"
+        ),
+    )
+}
+
+fn attached_skill_resolution_diagnostic_summary(
+    diagnostics: &[XeroAttachedSkillDiagnostic],
+) -> String {
+    if diagnostics.is_empty() {
+        return "No resolver diagnostics were returned.".into();
+    }
+    diagnostics
+        .iter()
+        .take(3)
+        .map(|diagnostic| {
+            let source = diagnostic
+                .source_id
+                .as_deref()
+                .or(diagnostic.skill_id.as_deref())
+                .unwrap_or("unknown source");
+            let repair = diagnostic
+                .repair_hint
+                .map(|hint| format!(" Repair hint: {hint:?}."))
+                .unwrap_or_default();
+            format!(
+                "{} for `{source}`: {}{repair}",
+                diagnostic.code, diagnostic.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn drive_owned_agent_run(
     request: OwnedAgentRunRequest,
     cancellation: AgentRunCancellationToken,
@@ -303,18 +492,26 @@ pub fn drive_owned_agent_run(
     );
     let agent_tool_policy =
         effective_agent_tool_policy(&definition_snapshot, &request.tool_runtime);
+    let agent_workflow_policy =
+        workflow_policy_for_runtime_agent(snapshot.run.runtime_agent_id, &definition_snapshot);
     let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
     let browser_control_preference = request.tool_runtime.browser_control_preference();
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_agent_tool_policy(agent_tool_policy.clone())
+        .with_agent_workflow_policy(agent_workflow_policy)
         .with_agent_run_context(
             &request.project_id,
             &snapshot.run.agent_session_id,
             &request.run_id,
         )
         .with_cancellation_token(cancellation.clone());
+    let base_tool_runtime = base_tool_runtime.with_durable_subagent_tasks_for_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.run_id,
+    )?;
     let tool_registry = tool_registry_for_snapshot(
         &request.repo_root,
         &snapshot,
@@ -562,22 +759,31 @@ pub fn prepare_owned_agent_continuation_for_drive(
         );
         let agent_tool_policy =
             effective_agent_tool_policy(&definition_snapshot, &request.tool_runtime);
+        let agent_workflow_policy =
+            workflow_policy_for_runtime_agent(before.run.runtime_agent_id, &definition_snapshot);
         let tool_registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
             skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
             browser_control_preference: request.tool_runtime.browser_control_preference(),
             runtime_agent_id: controls.active.runtime_agent_id,
             agent_tool_policy: agent_tool_policy.clone(),
+            tool_application_policy: request.tool_runtime.tool_application_policy().clone(),
         });
         let replay_tool_runtime = request
             .tool_runtime
             .clone()
             .with_runtime_run_controls(controls)
             .with_agent_tool_policy(agent_tool_policy)
+            .with_agent_workflow_policy(agent_workflow_policy)
             .with_agent_run_context(
                 &request.project_id,
                 &before.run.agent_session_id,
                 &request.run_id,
-            );
+            )
+            .with_durable_subagent_tasks_for_run(
+                &request.repo_root,
+                &request.project_id,
+                &request.run_id,
+            )?;
         replay_answered_tool_action_requests(
             &request.repo_root,
             &request.project_id,
@@ -876,7 +1082,11 @@ fn prepare_handoff_continuation(
         },
     )?;
 
-    let mut lineage = inserted;
+    let mut lineage = project_store::reconcile_agent_handoff_lineage_record(
+        &request.repo_root,
+        &inserted,
+        &now_timestamp(),
+    )?;
     let handoff_record_id = match lineage.handoff_record_id.clone() {
         Some(record_id) => record_id,
         None => {
@@ -1013,14 +1223,17 @@ fn estimate_continuation_context_tokens(
         &allowed_approval_modes,
         default_approval_mode,
     );
-    let tool_runtime =
-        request
-            .tool_runtime
-            .clone()
-            .with_agent_tool_policy(effective_agent_tool_policy(
-                &definition_snapshot,
-                &request.tool_runtime,
-            ));
+    let tool_runtime = request
+        .tool_runtime
+        .clone()
+        .with_agent_tool_policy(effective_agent_tool_policy(
+            &definition_snapshot,
+            &request.tool_runtime,
+        ))
+        .with_agent_workflow_policy(workflow_policy_for_runtime_agent(
+            snapshot.run.runtime_agent_id,
+            &definition_snapshot,
+        ));
     let tool_registry = tool_registry_for_snapshot(
         &request.repo_root,
         snapshot,
@@ -1029,15 +1242,23 @@ fn estimate_continuation_context_tokens(
         tool_runtime.browser_control_preference(),
         Some(&tool_runtime),
     )?;
-    let system_prompt = assemble_system_prompt_for_session(
+    let attached_skill_contexts = load_persisted_attached_skill_contexts_for_run(
+        &request.repo_root,
+        &snapshot.run.project_id,
+        &snapshot.run.run_id,
+    )?;
+    let system_prompt = assemble_system_prompt_for_session_with_attached_and_policy(
         &request.repo_root,
         Some(&snapshot.run.project_id),
         Some(&snapshot.run.agent_session_id),
         controls.active.runtime_agent_id,
         tool_runtime.browser_control_preference(),
+        tool_runtime.tool_application_policy(),
         tool_registry.descriptors(),
         Some(&definition_snapshot),
         Some(tool_runtime.soul_settings()),
+        None,
+        attached_skill_contexts,
     )?;
     let provider_messages = provider_messages_from_snapshot(&request.repo_root, snapshot)?;
     let message_tokens = provider_messages.iter().try_fold(0_u64, |total, message| {
@@ -1131,7 +1352,7 @@ fn handoff_source_context_hash(
 }
 
 fn build_handoff_bundle(
-    _repo_root: &Path,
+    repo_root: &Path,
     source_snapshot: &AgentRunSnapshotRecord,
     pending_prompt: &str,
     source_context_hash: &str,
@@ -1173,6 +1394,13 @@ fn build_handoff_bundle(
         &mut redaction_count,
     );
     let durable_context = handoff_durable_context_instruction(source_context_hash);
+    let carried_context = handoff_carried_durable_context(
+        repo_root,
+        source_snapshot,
+        pending_prompt,
+        source_context_hash,
+        target_run_id,
+    )?;
     let recent_raw_tail = source_snapshot
         .messages
         .iter()
@@ -1221,6 +1449,46 @@ fn build_handoff_bundle(
             })
         })
         .collect::<Vec<_>>();
+    let working_set_summary = json!({
+        "schema": "xero.agent_handoff.working_set.v1",
+        "sourceRunId": source_snapshot.run.run_id.clone(),
+        "sourceContextHash": source_context_hash,
+        "activeTodoCount": active_todo_items.len(),
+        "recentFileChangeCount": recent_file_changes.len(),
+        "latestChangedPaths": recent_file_changes
+            .iter()
+            .filter_map(|change| change.get("path").and_then(JsonValue::as_str))
+            .take(12)
+            .collect::<Vec<_>>(),
+        "assistantMessageIds": completed_work
+            .iter()
+            .filter_map(|work| work.get("messageId").and_then(JsonValue::as_i64))
+            .take(8)
+            .collect::<Vec<_>>(),
+    });
+    let source_cited_continuity_records = completed_work
+        .iter()
+        .map(|work| {
+            json!({
+                "sourceKind": "agent_message",
+                "sourceId": work.get("messageId").cloned().unwrap_or(JsonValue::Null),
+                "createdAt": work.get("createdAt").cloned().unwrap_or(JsonValue::Null),
+                "summary": work.get("summary").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .chain(recent_file_changes.iter().take(8).map(|change| {
+            json!({
+                "sourceKind": "agent_file_change",
+                "sourceId": change.get("path").cloned().unwrap_or(JsonValue::Null),
+                "createdAt": change.get("createdAt").cloned().unwrap_or(JsonValue::Null),
+                "summary": {
+                    "path": change.get("path").cloned().unwrap_or(JsonValue::Null),
+                    "operation": change.get("operation").cloned().unwrap_or(JsonValue::Null),
+                    "newHash": change.get("newHash").cloned().unwrap_or(JsonValue::Null),
+                },
+            })
+        }))
+        .collect::<Vec<_>>();
     let verification_status = handoff_verification_status(source_snapshot, &mut redaction_count);
     let agent_specific = agent_specific_handoff(
         source_snapshot.run.runtime_agent_id,
@@ -1259,6 +1527,8 @@ fn build_handoff_bundle(
             "text": handoff_preview(pending_prompt, 900, &mut redaction_count),
         })],
         "activeTodoItems": active_todo_items,
+        "workingSetSummary": working_set_summary,
+        "sourceCitedContinuityRecords": source_cited_continuity_records,
         "importantDecisions": important_decisions,
         "constraints": [
             "Continue as the same runtime agent type.",
@@ -1272,8 +1542,9 @@ fn build_handoff_bundle(
         "verificationStatus": verification_status,
         "knownRisks": known_risks,
         "openQuestions": open_questions,
-        "approvedMemories": [],
-        "relevantProjectRecords": [],
+        "approvedMemories": carried_context.approved_memories,
+        "relevantProjectRecords": carried_context.relevant_project_records,
+        "durableContextRetrieval": carried_context.retrieval,
         "recentRawTailMessageReferences": recent_raw_tail,
         "sourceContextHash": source_context_hash,
         "activeCompaction": active_compaction.map(|compaction| json!({
@@ -1286,6 +1557,201 @@ fn build_handoff_bundle(
         "redactionCount": redaction_count,
         "agentSpecific": agent_specific,
     }))
+}
+
+#[derive(Debug, Clone)]
+struct HandoffCarriedDurableContext {
+    approved_memories: Vec<JsonValue>,
+    relevant_project_records: Vec<JsonValue>,
+    retrieval: JsonValue,
+}
+
+fn handoff_carried_durable_context(
+    repo_root: &Path,
+    source_snapshot: &AgentRunSnapshotRecord,
+    pending_prompt: &str,
+    source_context_hash: &str,
+    target_run_id: Option<&str>,
+) -> CommandResult<HandoffCarriedDurableContext> {
+    let response = match project_store::search_agent_context(
+        repo_root,
+        project_store::AgentContextRetrievalRequest {
+            query_id: format!(
+                "handoff-context-{}-{}",
+                sanitize_action_id(&source_snapshot.run.run_id),
+                project_store::generate_project_record_id()
+            ),
+            project_id: source_snapshot.run.project_id.clone(),
+            agent_session_id: Some(source_snapshot.run.agent_session_id.clone()),
+            run_id: Some(source_snapshot.run.run_id.clone()),
+            runtime_agent_id: source_snapshot.run.runtime_agent_id,
+            agent_definition_id: source_snapshot.run.agent_definition_id.clone(),
+            agent_definition_version: source_snapshot.run.agent_definition_version,
+            query_text: handoff_context_retrieval_query(source_snapshot, pending_prompt),
+            search_scope: project_store::AgentRetrievalSearchScope::HybridContext,
+            filters: project_store::AgentContextRetrievalFilters {
+                record_kinds: vec![
+                    project_store::ProjectRecordKind::AgentHandoff,
+                    project_store::ProjectRecordKind::Decision,
+                    project_store::ProjectRecordKind::Constraint,
+                    project_store::ProjectRecordKind::Plan,
+                    project_store::ProjectRecordKind::Finding,
+                    project_store::ProjectRecordKind::Verification,
+                    project_store::ProjectRecordKind::Question,
+                    project_store::ProjectRecordKind::ContextNote,
+                    project_store::ProjectRecordKind::Diagnostic,
+                ],
+                memory_kinds: default_handoff_memory_kinds(),
+                ..project_store::AgentContextRetrievalFilters::default()
+            },
+            limit_count: 8,
+            allow_keyword_fallback: true,
+            created_at: now_timestamp(),
+        },
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(HandoffCarriedDurableContext {
+                approved_memories: Vec::new(),
+                relevant_project_records: Vec::new(),
+                retrieval: json!({
+                    "schema": "xero.agent_handoff.durable_context_retrieval.v1",
+                    "sourceContextHash": source_context_hash,
+                    "targetRunId": target_run_id,
+                    "queryIds": [],
+                    "resultIds": [],
+                    "resultCount": 0,
+                    "selectionPolicy": "focused_hybrid_retrieval_from_goal_pending_work_changed_paths_and_open_questions",
+                    "status": "failed",
+                    "diagnostic": {
+                        "code": error.code,
+                        "message": error.message,
+                    },
+                    "guidance": "Target run should use project_context_search and project_context_get before relying on durable context.",
+                }),
+            });
+        }
+    };
+    let mut approved_memories = Vec::new();
+    let mut relevant_project_records = Vec::new();
+    for result in &response.results {
+        let carried = handoff_carried_result_json(result);
+        match result.source_kind {
+            project_store::AgentRetrievalResultSourceKind::ApprovedMemory => {
+                if approved_memories.len() < 3 {
+                    approved_memories.push(carried);
+                }
+            }
+            project_store::AgentRetrievalResultSourceKind::ProjectRecord
+            | project_store::AgentRetrievalResultSourceKind::Handoff => {
+                if relevant_project_records.len() < 5 {
+                    relevant_project_records.push(carried);
+                }
+            }
+            project_store::AgentRetrievalResultSourceKind::ContextManifest => {}
+        }
+    }
+    let result_ids = response
+        .result_logs
+        .iter()
+        .map(|result| result.result_id.clone())
+        .collect::<Vec<_>>();
+    Ok(HandoffCarriedDurableContext {
+        approved_memories,
+        relevant_project_records,
+        retrieval: json!({
+            "schema": "xero.agent_handoff.durable_context_retrieval.v1",
+            "sourceContextHash": source_context_hash,
+            "targetRunId": target_run_id,
+            "queryIds": [response.query.query_id],
+            "resultIds": result_ids,
+            "resultCount": response.results.len(),
+            "selectionPolicy": "focused_hybrid_retrieval_from_goal_pending_work_changed_paths_and_open_questions",
+            "guidance": "Target run should call project_context_get for carried IDs before relying on exact details.",
+            "diagnostic": response.diagnostic,
+        }),
+    })
+}
+
+fn handoff_context_retrieval_query(
+    source_snapshot: &AgentRunSnapshotRecord,
+    pending_prompt: &str,
+) -> String {
+    let mut parts = vec![
+        source_snapshot.run.prompt.clone(),
+        pending_prompt.to_string(),
+        source_snapshot
+            .messages
+            .iter()
+            .rev()
+            .take(3)
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        handoff_changed_paths(source_snapshot).join(" "),
+    ];
+    parts.extend(source_snapshot.events.iter().rev().take(6).map(|event| {
+        serde_json::from_str::<JsonValue>(&event.payload_json)
+            .ok()
+            .and_then(|payload| {
+                payload
+                    .get("summary")
+                    .and_then(JsonValue::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| event.payload_json.clone())
+    }));
+    parts.join("\n").chars().take(2_000).collect::<String>()
+}
+
+fn handoff_changed_paths(source_snapshot: &AgentRunSnapshotRecord) -> Vec<String> {
+    source_snapshot
+        .file_changes
+        .iter()
+        .rev()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(16)
+        .collect()
+}
+
+fn default_handoff_memory_kinds() -> Vec<project_store::AgentMemoryKind> {
+    vec![
+        project_store::AgentMemoryKind::ProjectFact,
+        project_store::AgentMemoryKind::UserPreference,
+        project_store::AgentMemoryKind::Decision,
+        project_store::AgentMemoryKind::SessionSummary,
+        project_store::AgentMemoryKind::Troubleshooting,
+    ]
+}
+
+fn handoff_carried_result_json(result: &project_store::AgentContextRetrievalResult) -> JsonValue {
+    let citation = result.metadata.get("citation").unwrap_or(&JsonValue::Null);
+    let source_kind = match result.source_kind {
+        project_store::AgentRetrievalResultSourceKind::ProjectRecord => "project_record",
+        project_store::AgentRetrievalResultSourceKind::ApprovedMemory => "approved_memory",
+        project_store::AgentRetrievalResultSourceKind::Handoff => "handoff",
+        project_store::AgentRetrievalResultSourceKind::ContextManifest => "context_manifest",
+    };
+    json!({
+        "resultId": result.result_id,
+        "sourceKind": source_kind,
+        "sourceId": result.source_id,
+        "rank": result.rank,
+        "score": result.score,
+        "title": citation.get("title").cloned().unwrap_or(JsonValue::Null),
+        "snippet": result.snippet,
+        "redactionState": match result.redaction_state {
+            project_store::AgentContextRedactionState::Clean => "clean",
+            project_store::AgentContextRedactionState::Redacted => "redacted",
+            project_store::AgentContextRedactionState::Blocked => "blocked",
+        },
+        "selectionReason": "matched focused handoff retrieval query from goal, pending work, changed paths, latest plan, risks, or open questions",
+        "freshness": result.metadata.get("freshness").cloned().unwrap_or(JsonValue::Null),
+        "trust": result.metadata.get("trust").cloned().unwrap_or(JsonValue::Null),
+        "citation": citation,
+    })
 }
 
 fn handoff_durable_context_instruction(source_context_hash: &str) -> JsonValue {
@@ -1315,6 +1781,8 @@ fn persist_handoff_project_record(
         240,
         &mut summary_redactions,
     );
+    let (content_json, content_redacted) =
+        crate::runtime::redaction::redact_json_for_persistence(bundle);
     let related_paths = source_snapshot
         .file_changes
         .iter()
@@ -1354,7 +1822,7 @@ fn persist_handoff_project_record(
             ),
             summary,
             text,
-            content_json: Some(bundle.clone()),
+            content_json: Some(content_json),
             schema_name: Some("xero.agent_handoff.bundle.v1".into()),
             schema_version: 1,
             importance: project_store::ProjectRecordImportance::High,
@@ -1368,7 +1836,7 @@ fn persist_handoff_project_record(
             source_item_ids,
             related_paths,
             produced_artifact_refs: Vec::new(),
-            redaction_state: if redaction.redacted {
+            redaction_state: if redaction.redacted || summary_redactions > 0 || content_redacted {
                 project_store::ProjectRecordRedactionState::Redacted
             } else {
                 project_store::ProjectRecordRedactionState::Clean
@@ -1412,17 +1880,30 @@ fn create_or_load_handoff_target_run(
             browser_control_preference: request.tool_runtime.browser_control_preference(),
             runtime_agent_id: controls.active.runtime_agent_id,
             agent_tool_policy,
+            tool_application_policy: request.tool_runtime.tool_application_policy().clone(),
         },
     );
-    let system_prompt = assemble_system_prompt_for_session(
+    let attached_skill_snapshot = resolve_attached_skill_snapshot_for_run(
+        &request.repo_root,
+        &request.project_id,
+        target_run_id,
+        &definition_snapshot,
+        &request.tool_runtime,
+    )?;
+    let attached_skill_contexts =
+        attached_skill_contexts_from_resolution_snapshot(&attached_skill_snapshot);
+    let system_prompt = assemble_system_prompt_for_session_with_attached_and_policy(
         &request.repo_root,
         Some(&request.project_id),
         Some(&source_snapshot.run.agent_session_id),
         controls.active.runtime_agent_id,
         request.tool_runtime.browser_control_preference(),
+        request.tool_runtime.tool_application_policy(),
         tool_registry.descriptors(),
         Some(&definition_snapshot),
         Some(request.tool_runtime.soul_settings()),
+        None,
+        attached_skill_contexts,
     )?;
     let now = now_timestamp();
     project_store::insert_agent_run(
@@ -1440,6 +1921,10 @@ fn create_or_load_handoff_target_run(
             system_prompt: system_prompt.clone(),
             now: now.clone(),
         },
+    )?;
+    project_store::persist_runtime_attached_skill_snapshot(
+        &request.repo_root,
+        &attached_skill_snapshot,
     )?;
     append_message(
         &request.repo_root,
@@ -1507,6 +1992,13 @@ fn create_or_load_handoff_target_run(
             "sourceRunId": source_snapshot.run.run_id.clone(),
             "sourceContextHash": bundle.get("sourceContextHash").and_then(JsonValue::as_str),
             "runtimeAgentId": source_snapshot.run.runtime_agent_id.as_str(),
+            "workingSetSummaryIncluded": bundle.get("workingSetSummary").is_some(),
+            "sourceCitedContinuityRecordCount": bundle
+                .get("sourceCitedContinuityRecords")
+                .and_then(JsonValue::as_array)
+                .map(|records| records.len())
+                .unwrap_or(0),
+            "pendingPromptIncluded": true,
         }),
     )?;
     project_store::update_agent_run_status(
@@ -1568,6 +2060,9 @@ fn handoff_control_input_for_source(
             && requested
                 .map(|controls| controls.plan_mode_required)
                 .unwrap_or(false),
+        auto_compact_enabled: requested
+            .map(|controls| controls.auto_compact_enabled)
+            .unwrap_or(true),
     }
 }
 
@@ -1801,6 +2296,21 @@ fn agent_specific_handoff(
             "uncertainties": [],
             "followUpInformationNeeded": [],
         }),
+        RuntimeAgentIdDto::ComputerUse => json!({
+            "computerUseIntent": handoff_preview(pending_prompt, 700, redaction_count),
+            "visibleComputerProgress": completed_work,
+            "operatorDecisions": [],
+            "remainingComputerActions": [],
+        }),
+        RuntimeAgentIdDto::Plan => json!({
+            "planningIntent": handoff_preview(pending_prompt, 700, redaction_count),
+            "planPackState": completed_work,
+            "engineerHandoff": {
+                "targetRuntimeAgentId": RuntimeAgentIdDto::Engineer.as_str(),
+                "planModeSatisfied": false
+            },
+            "openQuestions": [],
+        }),
         RuntimeAgentIdDto::Engineer => json!({
             "implementationPlanState": completed_work,
             "filesChangedOrIntended": recent_file_changes,
@@ -1832,12 +2342,13 @@ fn agent_specific_handoff(
             "validationStatus": "available_through_agent_definition_tool",
             "followUpInformationNeeded": [],
         }),
-        RuntimeAgentIdDto::Test => json!({
-            "harnessTrigger": handoff_preview(pending_prompt, 700, redaction_count),
-            "stepOutcomes": completed_work,
-            "scratchChanges": recent_file_changes,
-            "verificationEvidence": verification_status,
-            "followUpInformationNeeded": [],
+        RuntimeAgentIdDto::Generalist => json!({
+            "userIntent": handoff_preview(pending_prompt, 700, redaction_count),
+            "completedWork": completed_work,
+            "filesChangedOrIntended": recent_file_changes,
+            "buildAndTestStatus": verification_status,
+            "remainingWork": [],
+            "routingSuggestionsMade": [],
         }),
     }
 }
@@ -1882,18 +2393,26 @@ pub fn drive_owned_agent_continuation(
     );
     let agent_tool_policy =
         effective_agent_tool_policy(&definition_snapshot, &request.tool_runtime);
+    let agent_workflow_policy =
+        workflow_policy_for_runtime_agent(snapshot.run.runtime_agent_id, &definition_snapshot);
     let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
     let browser_control_preference = request.tool_runtime.browser_control_preference();
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_agent_tool_policy(agent_tool_policy.clone())
+        .with_agent_workflow_policy(agent_workflow_policy)
         .with_agent_run_context(
             &request.project_id,
             &snapshot.run.agent_session_id,
             &request.run_id,
         )
         .with_cancellation_token(cancellation.clone());
+    let base_tool_runtime = base_tool_runtime.with_durable_subagent_tasks_for_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.run_id,
+    )?;
     let tool_registry = tool_registry_for_snapshot(
         &request.repo_root,
         &snapshot,
@@ -2290,9 +2809,8 @@ fn finish_owned_agent_drive_error(
             Some(diagnostic),
             &now_timestamp(),
         )?;
-        capture_project_record_for_run(repo_root, &snapshot)?;
-        capture_memory_candidates_for_run(repo_root, &snapshot, provider, "pause")?;
-        return Ok(snapshot);
+        capture_pause_artifacts_best_effort(repo_root, &snapshot, provider);
+        return Ok(project_store::load_agent_run(repo_root, project_id, run_id).unwrap_or(snapshot));
     }
 
     let diagnostic = project_store::AgentRunDiagnosticRecord {
@@ -2335,6 +2853,54 @@ fn finish_owned_agent_drive_error(
     capture_project_record_for_run(repo_root, &snapshot)?;
     capture_memory_candidates_for_run(repo_root, &snapshot, provider, "failure")?;
     Ok(snapshot)
+}
+
+fn capture_pause_artifacts_best_effort(
+    repo_root: &Path,
+    snapshot: &AgentRunSnapshotRecord,
+    provider: &dyn ProviderAdapter,
+) {
+    if let Err(error) = capture_project_record_for_run(repo_root, snapshot) {
+        record_nonfatal_artifact_capture_error(
+            repo_root,
+            snapshot,
+            "pause",
+            "project_record_capture",
+            &error,
+        );
+    }
+    if let Err(error) = capture_memory_candidates_for_run(repo_root, snapshot, provider, "pause") {
+        record_nonfatal_artifact_capture_error(
+            repo_root,
+            snapshot,
+            "pause",
+            "memory_candidate_capture",
+            &error,
+        );
+    }
+}
+
+fn record_nonfatal_artifact_capture_error(
+    repo_root: &Path,
+    snapshot: &AgentRunSnapshotRecord,
+    trigger: &str,
+    phase: &str,
+    error: &CommandError,
+) {
+    let _ = append_event(
+        repo_root,
+        &snapshot.run.project_id,
+        &snapshot.run.run_id,
+        AgentRunEventKind::ValidationCompleted,
+        json!({
+            "label": "run_artifact_capture",
+            "outcome": "failed",
+            "trigger": trigger,
+            "phase": phase,
+            "code": &error.code,
+            "message": &error.message,
+        }),
+    );
 }
 
 fn mark_owned_agent_run_cancelled(
@@ -2460,12 +3026,19 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
                 thinking_effort: self.controls.active.thinking_effort.clone(),
                 approval_mode: self.controls.active.approval_mode.clone(),
                 plan_mode_required: false,
+                auto_compact_enabled: self.controls.active.auto_compact_enabled,
             }),
             tool_runtime: self
                 .tool_runtime
                 .clone()
                 .with_agent_tool_policy(Some(role_policy))
+                .with_agent_workflow_policy(None)
                 .with_delegated_tool_call_budget(task.subagent_id.clone(), task.max_tool_calls)
+                .with_delegated_provider_usage_budget(
+                    task.subagent_id.clone(),
+                    task.max_tokens,
+                    task.max_cost_micros,
+                )
                 .with_subagent_write_scope(task.role, task.write_set.clone()),
             provider_config,
             provider_preflight: None,
@@ -2488,7 +3061,20 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
             tokens.insert(task.subagent_id.clone(), child_token.clone());
         }
         let started_task = task.clone();
-        update_subagent_task(&task_store, started_task.clone())?;
+        update_subagent_task(
+            &self.repo_root,
+            &self.project_id,
+            &self.parent_run_id,
+            &task_store,
+            started_task.clone(),
+        )?;
+        emit_subagent_lifecycle(
+            &self.repo_root,
+            &self.project_id,
+            &self.parent_run_id,
+            &started_task,
+            "spawned",
+        );
         let executor = self.clone();
         std::thread::Builder::new()
             .name(format!("xero-subagent-{}", started_task.subagent_id))
@@ -2523,6 +3109,13 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
         let mut task = task.clone();
         task.status = "cancelled".into();
         task.cancelled_at = Some(now_timestamp());
+        emit_subagent_lifecycle(
+            &self.repo_root,
+            &self.project_id,
+            &self.parent_run_id,
+            &task,
+            "cancelled",
+        );
         Ok(task)
     }
 
@@ -2532,23 +3125,151 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
         text: &str,
     ) -> CommandResult<AutonomousSubagentTask> {
         let Some(child_run_id) = task.run_id.as_deref() else {
-            return Ok(task.clone());
+            return Err(CommandError::user_fixable(
+                "autonomous_tool_subagent_continue_required",
+                format!(
+                    "Xero cannot continue subagent task `{}` because it has no child run yet.",
+                    task.subagent_id
+                ),
+            ));
         };
-        append_user_message(&self.repo_root, &self.project_id, child_run_id, text.into())?;
-        let _ = append_event(
+        let child_snapshot =
+            project_store::load_agent_run(&self.repo_root, &self.project_id, child_run_id)?;
+        match child_snapshot.run.status {
+            AgentRunStatus::Paused => {}
+            AgentRunStatus::Starting | AgentRunStatus::Running | AgentRunStatus::Cancelling => {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_subagent_not_accepting_input",
+                    format!(
+                        "Xero cannot continue subagent task `{}` because child run `{child_run_id}` is {:?}; wait for it to pause or finish before sending more input.",
+                        task.subagent_id, child_snapshot.run.status
+                    ),
+                ));
+            }
+            AgentRunStatus::Cancelled
+            | AgentRunStatus::HandedOff
+            | AgentRunStatus::Completed
+            | AgentRunStatus::Failed => {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_subagent_not_accepting_input",
+                    format!(
+                        "Xero cannot continue subagent task `{}` because child run `{child_run_id}` is terminal ({:?}). Spawn a new subagent if more work is needed.",
+                        task.subagent_id, child_snapshot.run.status
+                    ),
+                ));
+            }
+        }
+        let model_id = task
+            .model_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(child_snapshot.run.model_id.as_str())
+            .to_owned();
+        let provider_config = route_provider_config_model(self.provider_config.clone(), &model_id);
+        let role_policy = AutonomousAgentToolPolicy::for_subagent_role(
+            task.role,
+            self.tool_runtime.agent_tool_policy(),
+            self.tool_runtime.skill_tool_enabled(),
+        );
+        let request = ContinueOwnedAgentRunRequest {
+            repo_root: self.repo_root.clone(),
+            project_id: self.project_id.clone(),
+            run_id: child_run_id.to_owned(),
+            prompt: text.into(),
+            attachments: Vec::new(),
+            controls: Some(RuntimeRunControlInputDto {
+                runtime_agent_id: child_snapshot.run.runtime_agent_id,
+                agent_definition_id: Some(child_snapshot.run.agent_definition_id.clone()),
+                provider_profile_id: self.controls.active.provider_profile_id.clone(),
+                model_id: model_id.clone(),
+                thinking_effort: self.controls.active.thinking_effort.clone(),
+                approval_mode: self.controls.active.approval_mode.clone(),
+                plan_mode_required: false,
+                auto_compact_enabled: self.controls.active.auto_compact_enabled,
+            }),
+            tool_runtime: self
+                .tool_runtime
+                .clone()
+                .with_agent_tool_policy(Some(role_policy))
+                .with_agent_workflow_policy(None)
+                .with_delegated_tool_call_budget(
+                    task.subagent_id.clone(),
+                    task.max_tool_calls.saturating_sub(task.used_tool_calls),
+                )
+                .with_delegated_provider_usage_budget(
+                    task.subagent_id.clone(),
+                    task.max_tokens.saturating_sub(task.used_tokens),
+                    task.max_cost_micros.saturating_sub(task.used_cost_micros),
+                )
+                .with_subagent_write_scope(task.role, task.write_set.clone()),
+            provider_config,
+            provider_preflight: None,
+            answer_pending_actions: false,
+            auto_compact: None,
+        };
+        let prepared = prepare_owned_agent_continuation_for_drive(&request)?;
+        let mut updated_task = task.clone();
+        let snapshot = if prepared.drive_required {
+            let child_token = self.cancellation.linked_child();
+            {
+                let mut tokens = self.subagent_tokens.lock().map_err(|_| {
+                    CommandError::system_fault(
+                        "agent_subagent_token_lock_failed",
+                        "Xero could not lock the owned-agent subagent token store.",
+                    )
+                })?;
+                tokens.insert(task.subagent_id.clone(), child_token.clone());
+            }
+            let result = drive_owned_agent_continuation(prepared.drive_request, child_token);
+            if let Ok(mut tokens) = self.subagent_tokens.lock() {
+                tokens.remove(&task.subagent_id);
+            }
+            match result {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) => {
+                    apply_subagent_error_to_task(&mut updated_task, &error);
+                    refresh_subagent_task_usage(
+                        &self.repo_root,
+                        &self.project_id,
+                        &mut updated_task,
+                    );
+                    emit_subagent_lifecycle(
+                        &self.repo_root,
+                        &self.project_id,
+                        &self.parent_run_id,
+                        &updated_task,
+                        &updated_task.status.clone(),
+                    );
+                    return Ok(updated_task);
+                }
+            }
+        } else {
+            Some(prepared.snapshot)
+        };
+        if let Some(snapshot) = snapshot.as_ref() {
+            apply_subagent_snapshot_to_task(
+                &self.repo_root,
+                &self.project_id,
+                &mut updated_task,
+                snapshot,
+            )?;
+            forward_child_events_to_parent(
+                &self.repo_root,
+                &self.project_id,
+                &self.parent_run_id,
+                &updated_task,
+                snapshot,
+            );
+        }
+        emit_subagent_lifecycle(
             &self.repo_root,
             &self.project_id,
             &self.parent_run_id,
-            AgentRunEventKind::ReasoningSummary,
-            json!({
-                "summary": format!("Input was sent to subagent task `{}`.", task.subagent_id),
-                "subagentId": task.subagent_id.clone(),
-                "childRunId": child_run_id,
-                "role": task.role.as_str(),
-                "status": task.status.clone(),
-            }),
+            &updated_task,
+            &updated_task.status.clone(),
         );
-        Ok(task.clone())
+        Ok(updated_task)
     }
 
     fn export_subagent_trace(&self, task: &AutonomousSubagentTask) -> CommandResult<JsonValue> {
@@ -2622,100 +3343,281 @@ impl OwnedAgentSubagentExecutor {
                     task.parent_trace_id = snapshot.run.parent_trace_id;
                 });
             }
-            let _ = append_event(
+            emit_subagent_lifecycle(
                 &self.repo_root,
                 &self.project_id,
                 &self.parent_run_id,
-                AgentRunEventKind::ReasoningSummary,
-                json!({
-                    "summary": format!(
-                        "Subagent task `{}` started as {:?} in child run `{}`.",
-                        task.subagent_id, task.role, run_id
-                    ),
-                    "subagentId": task.subagent_id.clone(),
-                    "childRunId": run_id.clone(),
-                    "traceId": task.trace_id.clone(),
-                    "parentRunId": task.parent_run_id.clone(),
-                    "parentTraceId": task.parent_trace_id.clone(),
-                    "role": task.role.as_str(),
-                    "status": "running",
-                }),
+                &task,
+                "running",
             );
             drive_owned_agent_run(request, cancellation)
         });
 
-        let mut child_file_changes = Vec::new();
+        let mut child_snapshot: Option<AgentRunSnapshotRecord> = None;
         match result {
             Ok(snapshot) => {
-                task.status = match snapshot.run.status {
-                    AgentRunStatus::Completed => "completed".into(),
-                    AgentRunStatus::Cancelled => "cancelled".into(),
-                    AgentRunStatus::HandedOff => "handed_off".into(),
-                    AgentRunStatus::Failed => "failed".into(),
-                    _ => format!("{:?}", snapshot.run.status).to_ascii_lowercase(),
-                };
-                task.result_summary = Some(subagent_result_summary(&snapshot));
-                task.trace_id = Some(snapshot.run.trace_id.clone());
-                task.parent_trace_id = snapshot.run.parent_trace_id.clone();
-                child_file_changes = snapshot
-                    .file_changes
-                    .iter()
-                    .map(|change| {
-                        json!({
-                            "path": change.path.clone(),
-                            "operation": change.operation.clone(),
-                            "traceId": change.trace_id.clone(),
-                            "topLevelRunId": change.top_level_run_id.clone(),
-                            "subagentId": change.subagent_id.clone(),
-                            "subagentRole": change.subagent_role.clone(),
-                            "createdAt": change.created_at.clone(),
-                        })
-                    })
-                    .collect();
+                let _ = apply_subagent_snapshot_to_task(
+                    &self.repo_root,
+                    &self.project_id,
+                    &mut task,
+                    &snapshot,
+                );
+                child_snapshot = Some(snapshot);
             }
             Err(error) => {
-                task.status = if error.code == AGENT_RUN_CANCELLED_CODE {
-                    "cancelled".into()
-                } else {
-                    "failed".into()
-                };
-                task.result_summary = Some(format!("Subagent execution failed: {}", error.message));
+                apply_subagent_error_to_task(&mut task, &error);
+                refresh_subagent_task_usage(&self.repo_root, &self.project_id, &mut task);
             }
         }
-        task.completed_at = Some(now_timestamp());
-        if task.status == "cancelled" && task.cancelled_at.is_none() {
-            task.cancelled_at = task.completed_at.clone();
+        if subagent_status_is_terminal(&task.status) {
+            task.completed_at.get_or_insert_with(now_timestamp);
+            if task.status == "cancelled" && task.cancelled_at.is_none() {
+                task.cancelled_at = task.completed_at.clone();
+            }
         }
-        let _ = update_subagent_task(&task_store, task.clone());
-        if let Ok(mut tokens) = self.subagent_tokens.lock() {
-            tokens.remove(&task.subagent_id);
+        if let Some(snapshot) = child_snapshot.as_ref() {
+            forward_child_events_to_parent(
+                &self.repo_root,
+                &self.project_id,
+                &self.parent_run_id,
+                &task,
+                snapshot,
+            );
         }
-        let _ = append_event(
+        let _ = update_subagent_task(
             &self.repo_root,
             &self.project_id,
             &self.parent_run_id,
-            AgentRunEventKind::ReasoningSummary,
-            json!({
-                "summary": format!(
-                    "Subagent task `{}` finished with status {}.",
-                    task.subagent_id, task.status
-                ),
-                "subagentId": task.subagent_id.clone(),
-                "childRunId": task.run_id.clone(),
-                "traceId": task.trace_id.clone(),
-                "parentRunId": task.parent_run_id.clone(),
-                "parentTraceId": task.parent_trace_id.clone(),
-                "role": task.role.as_str(),
-                "status": task.status.clone(),
-                "resultSummary": task.result_summary.clone(),
-                "resultArtifact": task.result_artifact.clone(),
-                "fileChanges": child_file_changes,
-            }),
+            &task_store,
+            task.clone(),
+        );
+        if let Ok(mut tokens) = self.subagent_tokens.lock() {
+            tokens.remove(&task.subagent_id);
+        }
+        emit_subagent_lifecycle(
+            &self.repo_root,
+            &self.project_id,
+            &self.parent_run_id,
+            &task,
+            &task.status.clone(),
         );
     }
 }
 
+fn emit_subagent_lifecycle(
+    repo_root: &Path,
+    project_id: &str,
+    parent_run_id: &str,
+    task: &AutonomousSubagentTask,
+    status_override: &str,
+) {
+    let _ = append_event(
+        repo_root,
+        project_id,
+        parent_run_id,
+        AgentRunEventKind::SubagentLifecycle,
+        json!({
+            "subagentId": task.subagent_id.clone(),
+            "subagentRole": task.role.as_str(),
+            "subagentRoleLabel": task.role_label.clone(),
+            "subagentRunId": task.run_id.clone(),
+            "subagentStatus": status_override,
+            "subagentUsedToolCalls": task.used_tool_calls,
+            "subagentMaxToolCalls": task.max_tool_calls,
+            "subagentUsedTokens": task.used_tokens,
+            "subagentMaxTokens": task.max_tokens,
+            "subagentUsedCostMicros": task.used_cost_micros,
+            "subagentMaxCostMicros": task.max_cost_micros,
+            "subagentResultSummary": task.result_summary.clone(),
+            "subagentPrompt": if status_override == "spawned" { Some(task.prompt.clone()) } else { None },
+            "summary": format!(
+                "Subagent `{}` ({}) is now {status_override}.",
+                task.subagent_id,
+                task.role.as_str(),
+            ),
+        }),
+    );
+}
+
+fn forward_child_events_to_parent(
+    repo_root: &Path,
+    project_id: &str,
+    parent_run_id: &str,
+    task: &AutonomousSubagentTask,
+    snapshot: &AgentRunSnapshotRecord,
+) {
+    for event in &snapshot.events {
+        if matches!(
+            event.event_kind,
+            AgentRunEventKind::RunStarted
+                | AgentRunEventKind::RunPaused
+                | AgentRunEventKind::RunCompleted
+                | AgentRunEventKind::RunFailed
+                | AgentRunEventKind::SubagentLifecycle
+                | AgentRunEventKind::ToolRegistrySnapshot
+                | AgentRunEventKind::PolicyDecision
+                | AgentRunEventKind::StateTransition
+                | AgentRunEventKind::ToolPermissionGrant
+                | AgentRunEventKind::ProviderModelChanged
+                | AgentRunEventKind::RuntimeSettingsChanged
+                | AgentRunEventKind::ContextManifestRecorded
+                | AgentRunEventKind::RetrievalPerformed
+                | AgentRunEventKind::MemoryCandidateCaptured
+                | AgentRunEventKind::SandboxLifecycleUpdate
+                | AgentRunEventKind::EnvironmentLifecycleUpdate
+        ) {
+            continue;
+        }
+        let mut payload =
+            serde_json::from_str::<JsonValue>(&event.payload_json).unwrap_or(JsonValue::Null);
+        if let JsonValue::Object(map) = &mut payload {
+            map.insert(
+                "subagentId".into(),
+                JsonValue::String(task.subagent_id.clone()),
+            );
+            map.insert(
+                "subagentRole".into(),
+                JsonValue::String(task.role.as_str().into()),
+            );
+            map.insert(
+                "subagentRoleLabel".into(),
+                JsonValue::String(task.role_label.clone()),
+            );
+        }
+        let _ = append_event(
+            repo_root,
+            project_id,
+            parent_run_id,
+            event.event_kind.clone(),
+            payload,
+        );
+    }
+}
+
+fn apply_subagent_snapshot_to_task(
+    repo_root: &Path,
+    project_id: &str,
+    task: &mut AutonomousSubagentTask,
+    snapshot: &AgentRunSnapshotRecord,
+) -> CommandResult<()> {
+    task.status = match snapshot.run.status {
+        AgentRunStatus::Completed => "completed".into(),
+        AgentRunStatus::Cancelled => "cancelled".into(),
+        AgentRunStatus::HandedOff => "handed_off".into(),
+        AgentRunStatus::Failed => "failed".into(),
+        AgentRunStatus::Starting => "starting".into(),
+        AgentRunStatus::Running => "running".into(),
+        AgentRunStatus::Paused => "paused".into(),
+        AgentRunStatus::Cancelling => "cancelling".into(),
+    };
+    task.result_summary = Some(subagent_result_summary(snapshot));
+    task.run_id = Some(snapshot.run.run_id.clone());
+    task.result_artifact = Some(format!("owned-agent-run:{}", snapshot.run.run_id));
+    task.trace_id = Some(snapshot.run.trace_id.clone());
+    task.parent_trace_id = snapshot.run.parent_trace_id.clone();
+    task.used_tool_calls = snapshot.tool_calls.len();
+    if let Some(usage) =
+        project_store::load_agent_usage(repo_root, project_id, &snapshot.run.run_id)?
+    {
+        task.used_tokens = usage.total_tokens;
+        task.used_cost_micros = usage.estimated_cost_micros;
+    }
+    apply_subagent_usage_budget_status(task);
+    if subagent_status_is_terminal(&task.status) {
+        task.completed_at.get_or_insert_with(now_timestamp);
+        if task.status == "cancelled" && task.cancelled_at.is_none() {
+            task.cancelled_at = task.completed_at.clone();
+        }
+    }
+    Ok(())
+}
+
+fn refresh_subagent_task_usage(
+    repo_root: &Path,
+    project_id: &str,
+    task: &mut AutonomousSubagentTask,
+) {
+    let Some(child_run_id) = task.run_id.as_deref() else {
+        return;
+    };
+    if let Ok((snapshot, usage)) =
+        project_store::load_agent_run_with_usage(repo_root, project_id, child_run_id)
+    {
+        if let Some(usage) = usage {
+            task.used_tokens = usage.total_tokens;
+            task.used_cost_micros = usage.estimated_cost_micros;
+        }
+        task.used_tool_calls = snapshot.tool_calls.len();
+    }
+    apply_subagent_usage_budget_status(task);
+}
+
+fn apply_subagent_error_to_task(task: &mut AutonomousSubagentTask, error: &CommandError) {
+    task.status = match error.code.as_str() {
+        AGENT_RUN_CANCELLED_CODE => "cancelled".into(),
+        "autonomous_tool_subagent_tool_budget_exhausted"
+        | "autonomous_tool_subagent_token_budget_exhausted"
+        | "autonomous_tool_subagent_cost_budget_exhausted" => "budget_exhausted".into(),
+        _ => "failed".into(),
+    };
+    if task.status == "budget_exhausted" {
+        task.budget_status = match error.code.as_str() {
+            "autonomous_tool_subagent_tool_budget_exhausted" => "tool_calls_exhausted".into(),
+            "autonomous_tool_subagent_token_budget_exhausted" => "tokens_exhausted".into(),
+            "autonomous_tool_subagent_cost_budget_exhausted" => "cost_exhausted".into(),
+            _ => "budget_exhausted".into(),
+        };
+        task.budget_diagnostic = Some(json!({
+            "code": error.code.clone(),
+            "message": error.message.clone(),
+            "usedToolCalls": task.used_tool_calls,
+            "maxToolCalls": task.max_tool_calls,
+            "usedTokens": task.used_tokens,
+            "maxTokens": task.max_tokens,
+            "usedCostMicros": task.used_cost_micros,
+            "maxCostMicros": task.max_cost_micros,
+        }));
+    }
+    task.result_summary = Some(format!("Subagent execution failed: {}", error.message));
+}
+
+fn apply_subagent_usage_budget_status(task: &mut AutonomousSubagentTask) {
+    if task.used_tokens > task.max_tokens {
+        task.status = "budget_exhausted".into();
+        task.budget_status = "tokens_exhausted".into();
+        task.budget_diagnostic = Some(json!({
+            "usedTokens": task.used_tokens,
+            "maxTokens": task.max_tokens,
+        }));
+    } else if task.used_cost_micros > task.max_cost_micros {
+        task.status = "budget_exhausted".into();
+        task.budget_status = "cost_exhausted".into();
+        task.budget_diagnostic = Some(json!({
+            "usedCostMicros": task.used_cost_micros,
+            "maxCostMicros": task.max_cost_micros,
+        }));
+    } else if task.budget_status.trim().is_empty() {
+        task.budget_status = "within_budget".into();
+    }
+}
+
+fn subagent_status_is_terminal(status: &str) -> bool {
+    matches!(
+        status,
+        "completed"
+            | "failed"
+            | "cancelled"
+            | "interrupted"
+            | "closed"
+            | "handed_off"
+            | "budget_exhausted"
+    )
+}
+
 fn update_subagent_task(
+    repo_root: &Path,
+    project_id: &str,
+    parent_run_id: &str,
     task_store: &Arc<std::sync::Mutex<BTreeMap<String, AutonomousSubagentTask>>>,
     task: AutonomousSubagentTask,
 ) -> CommandResult<()> {
@@ -2725,8 +3627,13 @@ fn update_subagent_task(
             "Xero could not lock the owned-agent subagent task store.",
         )
     })?;
-    tasks.insert(task.subagent_id.clone(), task);
-    Ok(())
+    tasks.insert(task.subagent_id.clone(), task.clone());
+    crate::runtime::autonomous_tool_runtime::persist_subagent_task_for_parent(
+        repo_root,
+        project_id,
+        parent_run_id,
+        &task,
+    )
 }
 
 fn route_provider_config_model(
@@ -2740,7 +3647,9 @@ fn route_provider_config_model(
         AgentProviderConfig::Fake => {}
         AgentProviderConfig::OpenAiResponses(config) => config.model_id = model_id.into(),
         AgentProviderConfig::OpenAiCodexResponses(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::XaiResponses(config) => config.model_id = model_id.into(),
         AgentProviderConfig::OpenAiCompatible(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::DeepSeek(config) => config.model_id = model_id.into(),
         AgentProviderConfig::Anthropic(config) => config.model_id = model_id.into(),
         AgentProviderConfig::Bedrock(config) => config.model_id = model_id.into(),
         AgentProviderConfig::Vertex(config) => config.model_id = model_id.into(),
@@ -2865,6 +3774,15 @@ mod tests {
     }
 
     fn save_custom_definition(repo_root: &Path, definition_id: &str, profile: &str) {
+        save_custom_definition_with_attached(repo_root, definition_id, profile, json!([]));
+    }
+
+    fn save_custom_definition_with_attached(
+        repo_root: &Path,
+        definition_id: &str,
+        profile: &str,
+        attached_skills: JsonValue,
+    ) {
         let (display_name, short_label, description, default_mode, allowed_modes, tool_policy) =
             match profile {
                 "engineering" => (
@@ -2918,6 +3836,8 @@ mod tests {
                 lifecycle_state: "active".into(),
                 base_capability_profile: profile.into(),
                 snapshot: json!({
+                    "schema": "xero.agent_definition.v1",
+                    "schemaVersion": 3,
                     "id": definition_id,
                     "version": 1,
                     "displayName": display_name,
@@ -2938,8 +3858,42 @@ mod tests {
                     ],
                     "workflowContract": "Phase 4 custom workflow marker.",
                     "finalResponseContract": "Return a concise completion summary.",
-                    "retrievalDefaults": { "enabled": true, "limit": 4 },
-                    "memoryCandidatePolicy": { "reviewRequired": true },
+                    "attachedSkills": attached_skills,
+                    "output": {
+                        "contract": "engineering_summary",
+                        "label": "Completion summary",
+                        "description": "Concise completion summary.",
+                        "sections": [
+                            {
+                                "id": "summary",
+                                "label": "Summary",
+                                "description": "What the custom runtime completed.",
+                                "emphasis": "core",
+                                "producedByTools": []
+                            }
+                        ]
+                    },
+                    "dbTouchpoints": {
+                        "reads": [],
+                        "writes": [],
+                        "encouraged": []
+                    },
+                    "consumes": [],
+                    "projectDataPolicy": {
+                        "recordKinds": ["artifact", "context_note"],
+                        "structuredSchemas": [],
+                        "unstructuredScopes": ["project"]
+                    },
+                    "retrievalDefaults": {
+                        "enabled": true,
+                        "limit": 4,
+                        "recordKinds": ["artifact", "context_note"],
+                        "memoryKinds": ["project_fact"]
+                    },
+                    "memoryCandidatePolicy": {
+                        "memoryKinds": ["project_fact"],
+                        "reviewRequired": true
+                    },
                     "handoffPolicy": { "enabled": true, "preserveDefinitionVersion": true }
                 }),
                 validation_report: Some(json!({ "status": "valid" })),
@@ -2948,6 +3902,82 @@ mod tests {
             },
         )
         .expect("insert custom definition");
+    }
+
+    fn seed_attached_project_skill(
+        repo_root: &Path,
+        project_id: &str,
+        skill_id: &str,
+        markdown: &str,
+    ) -> project_store::InstalledSkillRecord {
+        let skill_dir = crate::db::project_app_data_dir_for_repo(repo_root)
+            .join("skills")
+            .join(skill_id);
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), markdown).expect("write skill markdown");
+        let version_hash = crate::runtime::compute_skill_directory_version_hash(&skill_dir)
+            .expect("hash skill dir");
+        let source = crate::runtime::XeroSkillSourceRecord::new(
+            crate::runtime::XeroSkillSourceScope::project(project_id.to_owned())
+                .expect("project scope"),
+            crate::runtime::XeroSkillSourceLocator::Project {
+                relative_path: format!("skills/{skill_id}"),
+                skill_id: skill_id.into(),
+            },
+            crate::runtime::XeroSkillSourceState::Enabled,
+            crate::runtime::XeroSkillTrustState::Trusted,
+        )
+        .expect("source record");
+        project_store::upsert_installed_skill(
+            repo_root,
+            project_store::InstalledSkillRecord {
+                source,
+                skill_id: skill_id.into(),
+                name: "Attached Rust Skill".into(),
+                description: "Rust-specific attached guidance.".into(),
+                user_invocable: Some(false),
+                cache_key: None,
+                local_location: Some(skill_dir.display().to_string()),
+                version_hash: Some(version_hash),
+                installed_at: "2026-05-01T12:02:00Z".into(),
+                updated_at: "2026-05-01T12:02:00Z".into(),
+                last_used_at: None,
+                last_diagnostic: None,
+            },
+        )
+        .expect("persist skill")
+    }
+
+    fn attached_skill_json(skill: &project_store::InstalledSkillRecord) -> JsonValue {
+        json!({
+            "id": skill.skill_id,
+            "sourceId": skill.source.source_id,
+            "skillId": skill.skill_id,
+            "name": skill.name,
+            "description": skill.description,
+            "sourceKind": "project",
+            "scope": "project",
+            "versionHash": skill.version_hash.as_ref().expect("version hash"),
+            "includeSupportingAssets": false,
+            "required": true
+        })
+    }
+
+    fn tool_runtime_with_skill_registry(
+        repo_root: &Path,
+        project_id: &str,
+    ) -> AutonomousToolRuntime {
+        crate::runtime::AutonomousToolRuntime::new(repo_root)
+            .expect("runtime")
+            .with_skill_tool(
+                project_id.to_owned(),
+                crate::runtime::AutonomousSkillRuntime::new(
+                    crate::runtime::AutonomousSkillRuntimeConfig::for_platform(),
+                    repo_root.parent().expect("repo parent").join("skill-cache"),
+                ),
+                Vec::new(),
+                Vec::new(),
+            )
     }
 
     fn custom_controls(
@@ -2963,7 +3993,308 @@ mod tests {
             thinking_effort: None,
             approval_mode,
             plan_mode_required: false,
+            auto_compact_enabled: true,
         }
+    }
+
+    #[test]
+    fn s54_handoff_bundle_redacts_secret_like_values_across_context_surfaces() {
+        let secret = "api_key=sk-s54-handoff-secret-value";
+        let snapshot = project_store::AgentRunSnapshotRecord {
+            run: project_store::AgentRunRecord {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: project_store::BUILTIN_AGENT_DEFINITION_VERSION,
+                project_id: "project-s54-handoff-redaction".into(),
+                agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+                run_id: "run-s54-handoff-source".into(),
+                trace_id: "trace-s54-handoff-source".into(),
+                lineage_kind: "top_level".into(),
+                parent_run_id: None,
+                parent_trace_id: None,
+                parent_subagent_id: None,
+                subagent_role: None,
+                provider_id: "test-provider".into(),
+                model_id: "test-model".into(),
+                status: AgentRunStatus::Running,
+                prompt: format!("Continue the task using {secret}."),
+                system_prompt: "system".into(),
+                started_at: "2026-05-09T00:00:00Z".into(),
+                last_heartbeat_at: None,
+                completed_at: None,
+                cancelled_at: None,
+                last_error: None,
+                updated_at: "2026-05-09T00:01:00Z".into(),
+            },
+            messages: vec![
+                project_store::AgentMessageRecord {
+                    id: 1,
+                    project_id: "project-s54-handoff-redaction".into(),
+                    run_id: "run-s54-handoff-source".into(),
+                    role: AgentMessageRole::User,
+                    content: format!("Raw tail contains {secret}."),
+                    provider_metadata_json: None,
+                    created_at: "2026-05-09T00:00:10Z".into(),
+                    attachments: Vec::new(),
+                },
+                project_store::AgentMessageRecord {
+                    id: 2,
+                    project_id: "project-s54-handoff-redaction".into(),
+                    run_id: "run-s54-handoff-source".into(),
+                    role: AgentMessageRole::Assistant,
+                    content: format!(
+                        "Completed setup with {secret}. Verification passed. Remaining risk: rotate the token."
+                    ),
+                    provider_metadata_json: None,
+                    created_at: "2026-05-09T00:00:20Z".into(),
+                    attachments: Vec::new(),
+                },
+            ],
+            events: vec![
+                project_store::AgentEventRecord {
+                    id: 1,
+                    project_id: "project-s54-handoff-redaction".into(),
+                    run_id: "run-s54-handoff-source".into(),
+                    event_kind: AgentRunEventKind::PlanUpdated,
+                    payload_json: json!({
+                        "items": [
+                            {
+                                "id": "todo-secret",
+                                "status": "pending",
+                                "text": format!("Question: confirm {secret}")
+                            }
+                        ]
+                    })
+                    .to_string(),
+                    created_at: "2026-05-09T00:00:30Z".into(),
+                },
+                project_store::AgentEventRecord {
+                    id: 2,
+                    project_id: "project-s54-handoff-redaction".into(),
+                    run_id: "run-s54-handoff-source".into(),
+                    event_kind: AgentRunEventKind::ValidationCompleted,
+                    payload_json: json!({
+                        "label": "verification",
+                        "outcome": "passed",
+                        "summary": format!("Verified without exposing {secret}")
+                    })
+                    .to_string(),
+                    created_at: "2026-05-09T00:00:40Z".into(),
+                },
+            ],
+            tool_calls: vec![project_store::AgentToolCallRecord {
+                project_id: "project-s54-handoff-redaction".into(),
+                run_id: "run-s54-handoff-source".into(),
+                tool_call_id: "tool-s54-secret".into(),
+                tool_name: "command".into(),
+                input_json: json!({ "cmd": format!("echo {secret}") }).to_string(),
+                state: AgentToolCallState::Failed,
+                result_json: None,
+                error: Some(project_store::AgentRunDiagnosticRecord {
+                    code: "secret_probe_failed".into(),
+                    message: format!("Tool diagnostic referenced {secret}."),
+                }),
+                started_at: "2026-05-09T00:00:50Z".into(),
+                completed_at: Some("2026-05-09T00:01:00Z".into()),
+            }],
+            file_changes: vec![project_store::AgentFileChangeRecord {
+                id: 1,
+                project_id: "project-s54-handoff-redaction".into(),
+                run_id: "run-s54-handoff-source".into(),
+                trace_id: "trace-s54-handoff-source".into(),
+                top_level_run_id: "run-s54-handoff-source".into(),
+                subagent_id: None,
+                subagent_role: None,
+                change_group_id: None,
+                path: "client/src-tauri/src/runtime/agent_core/run.rs".into(),
+                operation: "edit".into(),
+                old_hash: None,
+                new_hash: Some("b".repeat(64)),
+                created_at: "2026-05-09T00:01:10Z".into(),
+            }],
+            checkpoints: Vec::new(),
+            action_requests: Vec::new(),
+        };
+
+        let bundle = build_handoff_bundle(
+            Path::new("/tmp"),
+            &snapshot,
+            &format!("Continue pending task with {secret}."),
+            "s54-source-context-hash",
+            None,
+            Some("run-s54-handoff-target"),
+        )
+        .expect("build redacted handoff bundle");
+        let serialized = serde_json::to_string(&bundle).expect("serialize bundle");
+
+        assert_eq!(bundle["redactionState"], json!("redacted"));
+        assert!(bundle["redactionCount"].as_u64().unwrap_or_default() >= 6);
+        assert!(!serialized.contains("sk-s54-handoff-secret-value"));
+        let redacted = json!("Xero redacted sensitive session-context text.");
+        assert_eq!(bundle["userGoal"], redacted);
+        assert_eq!(bundle["currentTask"], redacted);
+        assert_eq!(bundle["completedWork"][0]["summary"], redacted);
+        assert_eq!(bundle["pendingWork"][0]["text"], redacted);
+        assert_eq!(bundle["activeTodoItems"][0]["text"], redacted);
+        assert_eq!(
+            bundle["recentRawTailMessageReferences"][0]["preview"],
+            redacted
+        );
+        assert_eq!(
+            bundle["toolAndCommandEvidence"][0]["inputPreview"],
+            redacted
+        );
+        assert_eq!(
+            bundle["toolAndCommandEvidence"][0]["error"]["message"],
+            redacted
+        );
+        assert_eq!(
+            bundle["verificationStatus"]["evidence"][0]["summary"],
+            redacted
+        );
+    }
+
+    #[test]
+    fn handoff_bundle_carries_matching_approved_memory_and_project_records() {
+        project_store::agent_memory_lance::reset_connection_cache_for_tests();
+        project_store::project_record_lance::reset_connection_cache_for_tests();
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let repo_root = tempdir.path().join("repo");
+        fs::create_dir_all(repo_root.join("src")).expect("repo src dir");
+        fs::write(repo_root.join("src/parser.rs"), "pub fn parse() {}\n").expect("source file");
+        let project_id = "project-handoff-carryover";
+        create_project_database(&repo_root, project_id);
+        let mut snapshot = project_store::insert_agent_run(
+            &repo_root,
+            &project_store::NewAgentRunRecord {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                agent_definition_id: None,
+                agent_definition_version: None,
+                project_id: project_id.into(),
+                agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+                run_id: "run-handoff-carryover-source".into(),
+                provider_id: "test-provider".into(),
+                model_id: "test-model".into(),
+                prompt: "Continue the parser release normalization work.".into(),
+                system_prompt: "system".into(),
+                now: "2026-05-09T00:00:00Z".into(),
+            },
+        )
+        .expect("insert source run");
+        snapshot.run.status = AgentRunStatus::Running;
+        snapshot.messages.push(project_store::AgentMessageRecord {
+            id: 1,
+            project_id: project_id.into(),
+            run_id: "run-handoff-carryover-source".into(),
+            role: AgentMessageRole::Assistant,
+            content: "Decision: parser release uses zero-copy token normalization. Next: continue parser verification.".into(),
+            provider_metadata_json: None,
+            created_at: "2026-05-09T00:01:00Z".into(),
+            attachments: Vec::new(),
+        });
+        snapshot
+            .file_changes
+            .push(project_store::AgentFileChangeRecord {
+                id: 1,
+                project_id: project_id.into(),
+                run_id: "run-handoff-carryover-source".into(),
+                trace_id: "trace-handoff-carryover-source".into(),
+                top_level_run_id: "run-handoff-carryover-source".into(),
+                subagent_id: None,
+                subagent_role: None,
+                change_group_id: None,
+                path: "src/parser.rs".into(),
+                operation: "edit".into(),
+                old_hash: None,
+                new_hash: Some("c".repeat(64)),
+                created_at: "2026-05-09T00:01:10Z".into(),
+            });
+
+        project_store::insert_agent_memory(
+            &repo_root,
+            &project_store::NewAgentMemoryRecord {
+                memory_id: "memory-handoff-carryover".into(),
+                project_id: project_id.into(),
+                agent_session_id: None,
+                scope: project_store::AgentMemoryScope::Project,
+                kind: project_store::AgentMemoryKind::ProjectFact,
+                text: "Parser release uses zero-copy token normalization.".into(),
+                review_state: project_store::AgentMemoryReviewState::Approved,
+                enabled: true,
+                confidence: Some(92),
+                source_run_id: Some("run-handoff-carryover-source".into()),
+                source_item_ids: vec!["agent_messages:1".into()],
+                diagnostic: Some(project_store::AgentRunDiagnosticRecord {
+                    code: "memory_promotion_gate_promoted".into(),
+                    message: "{\"decision\":\"promoted\"}".into(),
+                }),
+                created_at: "2026-05-09T00:01:30Z".into(),
+            },
+        )
+        .expect("insert approved memory");
+        project_store::insert_project_record(
+            &repo_root,
+            &project_store::NewProjectRecordRecord {
+                record_id: "record-handoff-carryover".into(),
+                project_id: project_id.into(),
+                record_kind: project_store::ProjectRecordKind::Decision,
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: project_store::BUILTIN_AGENT_DEFINITION_VERSION,
+                agent_session_id: Some(project_store::DEFAULT_AGENT_SESSION_ID.into()),
+                run_id: "run-handoff-carryover-source".into(),
+                workflow_run_id: None,
+                workflow_step_id: None,
+                title: "Parser normalization decision".into(),
+                summary: "Parser release uses zero-copy token normalization.".into(),
+                text: "Decision: parser release uses zero-copy token normalization before the verification handoff.".into(),
+                content_json: Some(json!({
+                    "schema": "test.handoff_carryover.decision.v1",
+                    "decision": "zero-copy token normalization",
+                })),
+                schema_name: Some("test.handoff_carryover.decision.v1".into()),
+                schema_version: 1,
+                importance: project_store::ProjectRecordImportance::High,
+                confidence: Some(0.92),
+                tags: vec!["handoff-carryover".into()],
+                source_item_ids: vec!["agent_messages:1".into()],
+                related_paths: vec!["src/parser.rs".into()],
+                produced_artifact_refs: Vec::new(),
+                redaction_state: project_store::ProjectRecordRedactionState::Clean,
+                visibility: project_store::ProjectRecordVisibility::Retrieval,
+                created_at: "2026-05-09T00:01:40Z".into(),
+            },
+        )
+        .expect("insert project record");
+
+        let bundle = build_handoff_bundle(
+            &repo_root,
+            &snapshot,
+            "Continue parser release zero-copy normalization verification.",
+            "handoff-carryover-context-hash",
+            None,
+            Some("run-handoff-carryover-target"),
+        )
+        .expect("build handoff bundle");
+
+        assert!(bundle["approvedMemories"]
+            .as_array()
+            .expect("approved memories")
+            .iter()
+            .any(|item| item["sourceId"] == json!("memory-handoff-carryover")));
+        assert!(bundle["relevantProjectRecords"]
+            .as_array()
+            .expect("project records")
+            .iter()
+            .any(|item| item["sourceId"] == json!("record-handoff-carryover")));
+        assert!(!bundle["durableContextRetrieval"]["queryIds"]
+            .as_array()
+            .expect("query ids")
+            .is_empty());
+        assert!(!bundle["durableContextRetrieval"]["resultIds"]
+            .as_array()
+            .expect("result ids")
+            .is_empty());
     }
 
     #[test]
@@ -3019,6 +4350,210 @@ mod tests {
             call.tool_name == AUTONOMOUS_TOOL_COMMAND_PROBE
                 && call.state == AgentToolCallState::Succeeded
         }));
+    }
+
+    #[test]
+    fn s3_custom_agent_run_injects_attached_skill_without_skill_tool_access() {
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let repo_root = tempdir.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo root");
+        let project_id = "s3-attached-skill-runtime";
+        create_project_database(&repo_root, project_id);
+        let skill = seed_attached_project_skill(
+            &repo_root,
+            project_id,
+            "rust-attached",
+            "---\nname: rust-attached\ndescription: Rust attached guidance.\nuser-invocable: false\n---\n\n# Rust Attached\nUse rust-specific attached guidance.\n",
+        );
+        save_custom_definition_with_attached(
+            &repo_root,
+            "phase4_attached_observer",
+            "observe_only",
+            json!([attached_skill_json(&skill)]),
+        );
+
+        let snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+            repo_root: repo_root.clone(),
+            project_id: project_id.into(),
+            agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: "s3-attached-skill-run".into(),
+            prompt: "Summarize the configured guidance.".into(),
+            attachments: Vec::new(),
+            controls: Some(custom_controls(
+                RuntimeAgentIdDto::Engineer,
+                "phase4_attached_observer",
+                RuntimeRunApprovalModeDto::Suggest,
+            )),
+            tool_runtime: tool_runtime_with_skill_registry(&repo_root, project_id),
+            provider_config: AgentProviderConfig::Fake,
+            provider_preflight: None,
+        })
+        .expect("run custom attached-skill agent");
+
+        assert_eq!(snapshot.run.status, AgentRunStatus::Completed);
+        assert!(snapshot
+            .run
+            .system_prompt
+            .contains("Attached skill `rust-attached`"));
+        assert!(snapshot
+            .run
+            .system_prompt
+            .contains("Use rust-specific attached guidance."));
+        assert!(snapshot
+            .run
+            .system_prompt
+            .contains("always-injected lower-priority context"));
+        assert!(!snapshot
+            .run
+            .system_prompt
+            .contains("Invoke model-visible Xero skills"));
+    }
+
+    #[test]
+    fn s8_attached_skill_resolver_succeeds_and_fails_closed_on_hash_mismatch() {
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let repo_root = tempdir.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo root");
+        let project_id = "s8-attached-skill-resolver";
+        create_project_database(&repo_root, project_id);
+        let skill = seed_attached_project_skill(
+            &repo_root,
+            project_id,
+            "resolver-attached",
+            "---\nname: resolver-attached\ndescription: Resolver attached guidance.\nuser-invocable: false\n---\n\n# Resolver Attached\nUse resolver-specific guidance.\n",
+        );
+        let runtime = tool_runtime_with_skill_registry(&repo_root, project_id);
+        let attachment =
+            serde_json::from_value(attached_skill_json(&skill)).expect("attached skill ref");
+
+        let report = runtime
+            .resolve_attached_skills(XeroAttachedSkillResolutionRequest {
+                project_id: project_id.into(),
+                run_id: "s8-resolver-run".into(),
+                attached_skills: vec![attachment],
+            })
+            .expect("resolve attached skills");
+
+        assert_eq!(report.status, XeroAttachedSkillResolutionStatus::Succeeded);
+        let snapshot = report.snapshot.expect("resolution snapshot");
+        assert_eq!(snapshot.attached_skills.len(), 1);
+        assert_eq!(
+            snapshot.attached_skills[0].source_id,
+            skill.source.source_id
+        );
+        assert!(snapshot.attached_skills[0]
+            .context
+            .markdown
+            .content
+            .contains("Use resolver-specific guidance."));
+
+        let mut stale_attachment = attached_skill_json(&skill);
+        stale_attachment["versionHash"] = json!("stale-version-hash");
+        let stale_attachment =
+            serde_json::from_value(stale_attachment).expect("stale attached skill ref");
+        let failure = runtime
+            .resolve_attached_skills(XeroAttachedSkillResolutionRequest {
+                project_id: project_id.into(),
+                run_id: "s8-resolver-stale-run".into(),
+                attached_skills: vec![stale_attachment],
+            })
+            .expect("resolve stale attached skills");
+
+        assert_eq!(failure.status, XeroAttachedSkillResolutionStatus::Failed);
+        assert!(failure.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "attached_skill_version_hash_mismatch"
+                && diagnostic.repair_hint
+                    == Some(crate::runtime::XeroAttachedSkillRepairHint::RefreshPin)
+        }));
+    }
+
+    #[test]
+    fn s8_run_creation_persists_attached_skill_context_for_resume_and_provider_turns() {
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let repo_root = tempdir.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo root");
+        let project_id = "s8-attached-skill-persistence";
+        create_project_database(&repo_root, project_id);
+        let skill = seed_attached_project_skill(
+            &repo_root,
+            project_id,
+            "persisted-attached",
+            "---\nname: persisted-attached\ndescription: Persisted attached guidance.\nuser-invocable: false\n---\n\n# Persisted Attached\nUse ORIGINAL persisted guidance.\n",
+        );
+        save_custom_definition_with_attached(
+            &repo_root,
+            "phase4_persisted_observer",
+            "observe_only",
+            json!([attached_skill_json(&skill)]),
+        );
+        let request = OwnedAgentRunRequest {
+            repo_root: repo_root.clone(),
+            project_id: project_id.into(),
+            agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: "s8-persisted-attached-run".into(),
+            prompt: "Summarize the persisted guidance.".into(),
+            attachments: Vec::new(),
+            controls: Some(custom_controls(
+                RuntimeAgentIdDto::Engineer,
+                "phase4_persisted_observer",
+                RuntimeRunApprovalModeDto::Suggest,
+            )),
+            tool_runtime: tool_runtime_with_skill_registry(&repo_root, project_id),
+            provider_config: AgentProviderConfig::Fake,
+            provider_preflight: None,
+        };
+
+        create_owned_agent_run(&request).expect("create attached-skill run");
+        let persisted = project_store::load_runtime_attached_skill_snapshot(
+            &repo_root,
+            project_id,
+            "s8-persisted-attached-run",
+        )
+        .expect("load persisted attached snapshot")
+        .expect("attached snapshot persisted at run creation");
+        assert_eq!(persisted.attached_skills.len(), 1);
+        assert!(persisted.attached_skills[0]
+            .context
+            .markdown
+            .content
+            .contains("Use ORIGINAL persisted guidance."));
+
+        let skill_dir = std::path::PathBuf::from(
+            skill
+                .local_location
+                .as_ref()
+                .expect("attached skill local location"),
+        );
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: persisted-attached\ndescription: Changed guidance.\nuser-invocable: false\n---\n\n# Persisted Attached\nUse CHANGED guidance that must not appear in this run.\n",
+        )
+        .expect("mutate attached skill after run creation");
+
+        let snapshot = drive_owned_agent_run(request, AgentRunCancellationToken::default())
+            .expect("drive run from persisted attached snapshot");
+
+        assert_eq!(snapshot.run.status, AgentRunStatus::Completed);
+        let manifests = project_store::list_agent_context_manifests_for_run(
+            &repo_root,
+            project_id,
+            "s8-persisted-attached-run",
+        )
+        .expect("list context manifests");
+        let manifest = manifests.first().expect("provider context manifest");
+        assert_eq!(
+            manifest.manifest["attachedSkills"]["injectedCount"],
+            json!(1)
+        );
+        let attached_fragment = manifest.manifest["promptFragments"]
+            .as_array()
+            .expect("prompt fragments")
+            .iter()
+            .find(|fragment| fragment["inclusionReason"] == json!("attached_agent_skill"))
+            .expect("attached skill prompt fragment");
+        let attached_body = attached_fragment["body"].as_str().expect("fragment body");
+        assert!(attached_body.contains("Use ORIGINAL persisted guidance."));
+        assert!(!attached_body.contains("Use CHANGED guidance"));
     }
 
     #[test]

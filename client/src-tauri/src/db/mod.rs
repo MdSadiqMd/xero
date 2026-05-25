@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     commands::{CommandError, ProjectOriginDto, ProjectSummaryDto, RepositorySummaryDto},
-    db::migrations::migrations,
+    db::migrations::{migrations, PROJECT_DATABASE_SCHEMA_VERSION},
     git::repository::CanonicalRepository,
     state::ImportFailpoints,
 };
@@ -167,23 +167,40 @@ pub fn import_project_with_origin(
             ));
         }
 
-        let connection = match migrations().to_latest(&mut connection) {
-            Ok(()) => connection,
-            Err(error) if database_existed && is_database_too_far_ahead(&error) => {
-                let observed_user_version = read_user_version(&connection);
-                let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-                drop(connection);
+        let observed_user_version = read_user_version(&connection);
+        let connection = if database_existed
+            && observed_user_version != PROJECT_DATABASE_SCHEMA_VERSION
+        {
+            let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            drop(connection);
 
-                quarantine_incompatible_database(&database_path, observed_user_version)?;
+            quarantine_incompatible_database(&database_path, observed_user_version)?;
 
-                let mut reset_connection = open_database_connection(&database_path)?;
-                configure_connection(&reset_connection)?;
-                migrations()
-                    .to_latest(&mut reset_connection)
-                    .map_err(|error| state_database_migration_error(&database_path, error))?;
-                reset_connection
+            let mut reset_connection = open_database_connection(&database_path)?;
+            configure_connection(&reset_connection)?;
+            migrations()
+                .to_latest(&mut reset_connection)
+                .map_err(|error| state_database_migration_error(&database_path, error))?;
+            reset_connection
+        } else {
+            match migrations().to_latest(&mut connection) {
+                Ok(()) => connection,
+                Err(error) if database_existed && is_database_too_far_ahead(&error) => {
+                    let observed_user_version = read_user_version(&connection);
+                    let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                    drop(connection);
+
+                    quarantine_incompatible_database(&database_path, observed_user_version)?;
+
+                    let mut reset_connection = open_database_connection(&database_path)?;
+                    configure_connection(&reset_connection)?;
+                    migrations()
+                        .to_latest(&mut reset_connection)
+                        .map_err(|error| state_database_migration_error(&database_path, error))?;
+                    reset_connection
+                }
+                Err(error) => return Err(state_database_migration_error(&database_path, error)),
             }
-            Err(error) => return Err(state_database_migration_error(&database_path, error)),
         };
 
         persist_import_rows(&connection, repository, project_origin)?;
@@ -200,6 +217,7 @@ pub fn import_project_with_origin(
                 active_phase: 0,
                 branch: repository.branch_name.clone(),
                 runtime: None,
+                start_targets: Vec::new(),
             },
             repository: RepositorySummaryDto {
                 id: repository.repository_id.clone(),
@@ -239,7 +257,9 @@ pub(crate) fn configure_connection(connection: &Connection) -> Result<(), Comman
         })?;
 
     connection
-        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
+        .execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 1000;",
+        )
         .map_err(|error| {
             CommandError::system_fault(
                 "state_database_configuration_failed",
@@ -277,7 +297,7 @@ pub(crate) fn is_database_too_far_ahead(error: &MigrationError) -> bool {
     )
 }
 
-fn read_user_version(connection: &Connection) -> i64 {
+pub(crate) fn read_user_version(connection: &Connection) -> i64 {
     connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap_or(0)
@@ -489,7 +509,7 @@ fn persist_import_rows(
                 selected,
                 updated_at
             )
-            VALUES (?1, 'agent-session-main', 'Main', '', 'active', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            VALUES (?1, ?2, ?3, '', 'active', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             ON CONFLICT(project_id, agent_session_id) DO UPDATE SET
                 selected = CASE
                     WHEN agent_sessions.status = 'active' THEN 1
@@ -500,7 +520,11 @@ fn persist_import_rows(
                     ELSE agent_sessions.updated_at
                 END
             "#,
-            params![repository.project_id],
+            params![
+                repository.project_id,
+                project_store::DEFAULT_AGENT_SESSION_ID,
+                project_store::DEFAULT_AGENT_SESSION_TITLE
+            ],
         )
         .map_err(|error| {
             CommandError::system_fault(
@@ -621,7 +645,7 @@ fn database_path_for_registered_repo(repo_root: &Path) -> Option<PathBuf> {
     Some(database_path)
 }
 
-fn register_project_database_path(repo_root: &Path, database_path: &Path) {
+pub(crate) fn register_project_database_path(repo_root: &Path, database_path: &Path) {
     let normalized_repo_root = normalize_repo_root(repo_root);
     THREAD_PROJECT_DATABASE_PATH_CONFIG.with(|thread_config| {
         thread_config
@@ -701,6 +725,37 @@ mod tests {
     }
 
     #[test]
+    fn s39_configure_connection_applies_project_database_pragmas() {
+        let tempdir = tempdir().expect("tempdir");
+        let database_path = tempdir.path().join("state.db");
+        let connection = Connection::open(database_path).expect("open database");
+
+        configure_connection(&connection).expect("configure connection");
+
+        let foreign_keys: i64 = connection
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("foreign keys pragma");
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("journal mode pragma");
+        let synchronous: i64 = connection
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("synchronous pragma");
+        let busy_timeout_ms: i64 = connection
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("busy timeout pragma");
+        let wal_autocheckpoint: i64 = connection
+            .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))
+            .expect("wal autocheckpoint pragma");
+
+        assert_eq!(foreign_keys, 1);
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(synchronous, 1);
+        assert_eq!(busy_timeout_ms, 5_000);
+        assert_eq!(wal_autocheckpoint, 1_000);
+    }
+
+    #[test]
     fn import_project_marks_existing_repository_brownfield_and_allows_crawl() {
         let tempdir = tempdir().expect("tempdir");
         let repo_root = tempdir.path().join("brownfield-repo");
@@ -723,6 +778,31 @@ mod tests {
             RuntimeAgentIdDto::Crawl,
         )
         .expect("crawl allowed for brownfield");
+    }
+
+    #[test]
+    fn import_project_seeds_default_agent_session_as_new_chat() {
+        let tempdir = tempdir().expect("tempdir");
+        let repo_root = tempdir.path().join("default-session-repo");
+        fs::create_dir_all(&repo_root).expect("repo root");
+        configure_project_database_paths(&tempdir.path().join("global").join("state.db"));
+
+        let repository = canonical_repository(&repo_root, "project_default_session");
+        let record =
+            import_project(&repository, &ImportFailpoints::default()).expect("import project");
+
+        let sessions = project_store::list_agent_sessions(&repo_root, &record.project.id, false)
+            .expect("list agent sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].agent_session_id,
+            project_store::DEFAULT_AGENT_SESSION_ID
+        );
+        assert_eq!(
+            sessions[0].title,
+            project_store::DEFAULT_AGENT_SESSION_TITLE
+        );
+        assert!(sessions[0].selected);
     }
 
     #[test]

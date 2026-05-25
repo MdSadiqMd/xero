@@ -157,6 +157,17 @@ function registerDefaultSolanaResponses() {
   ])
   registerInvoke("solana_replay_list", () => [])
   registerInvoke("solana_logs_active", () => [])
+  registerInvoke("solana_logs_view", () => ({
+    cluster: "localnet",
+    programIds: [],
+    filter: "all",
+    order: "newestFirst",
+    limit: 100,
+    totalAvailable: 0,
+    decodedEventCount: 0,
+    counts: { all: 0, errors: 0, events: 0 },
+    entries: [],
+  }))
   registerInvoke("solana_token_extension_matrix", () => ({
     manifestVersion: "1",
     generatedAt: "2026-04-24",
@@ -231,6 +242,15 @@ describe("SolanaWorkbenchSidebar", () => {
     expect(Array.from(eventListeners.keys())).toEqual([])
   })
 
+  it("does not activate backend probes while deferred active but still closed", async () => {
+    render(<SolanaWorkbenchSidebar active open={false} prewarm />)
+
+    await Promise.resolve()
+
+    expect(invokedCommands).toEqual([])
+    expect(Array.from(eventListeners.keys())).toEqual([])
+  })
+
   it("does not badge static tab inventory counts", async () => {
     render(<SolanaWorkbenchSidebar open />)
 
@@ -252,6 +272,23 @@ describe("SolanaWorkbenchSidebar", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("keeps the width transition enabled when closing", () => {
+    const { rerender } = render(
+      <SolanaWorkbenchSidebar active={false} open openImmediately />,
+    )
+    const aside = screen.getByLabelText("Solana workbench")
+
+    expect(aside.style.width).not.toBe("0px")
+
+    rerender(
+      <SolanaWorkbenchSidebar active={false} open={false} openImmediately />,
+    )
+
+    expect(aside.style.width).toBe("0px")
+    expect(aside.style.transition).toContain("width")
+    expect(aside).toHaveClass("sidebar-motion-island")
+  })
+
   it("mounts non-active workbench panels only after the user opens their tab", async () => {
     render(<SolanaWorkbenchSidebar open />)
 
@@ -260,5 +297,37 @@ describe("SolanaWorkbenchSidebar", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Personas" }))
 
     expect(await screen.findByText("New persona")).toBeVisible()
+  })
+
+  it("refreshes personas once when the Personas tab mounts", async () => {
+    let personaListCalls = 0
+    registerInvoke("solana_persona_list", () => {
+      personaListCalls += 1
+      return [
+        {
+          name: "alice",
+          role: "whale",
+          cluster: "localnet",
+          pubkey: "Alice1111111111111111111111111111111111111",
+          keypairPath: "/tmp/alice.json",
+          createdAtMs: 1,
+          seed: {},
+        },
+      ]
+    })
+
+    render(<SolanaWorkbenchSidebar open />)
+
+    fireEvent.click(screen.getByRole("tab", { name: "Personas" }))
+
+    expect(await screen.findByText("New persona")).toBeVisible()
+
+    await waitFor(() => {
+      expect(personaListCalls).toBe(1)
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+
+    expect(personaListCalls).toBe(1)
   })
 })

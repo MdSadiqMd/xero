@@ -607,6 +607,10 @@ fn core_snapshot_from_desktop(
 ) -> CoreRunSnapshot {
     CoreRunSnapshot {
         trace_id: runtime_trace_id_for_run(&snapshot.run.project_id, &snapshot.run.run_id),
+        runtime_agent_id: snapshot.run.runtime_agent_id.as_str().to_string(),
+        agent_definition_id: snapshot.run.agent_definition_id.clone(),
+        agent_definition_version: i64::from(snapshot.run.agent_definition_version),
+        system_prompt: snapshot.run.system_prompt.clone(),
         project_id: snapshot.run.project_id.clone(),
         agent_session_id: snapshot.run.agent_session_id.clone(),
         run_id: snapshot.run.run_id.clone(),
@@ -638,7 +642,10 @@ fn core_message_from_desktop(message: AgentMessageRecord) -> CoreRuntimeMessage 
         run_id: message.run_id,
         role: core_message_role_from_desktop(&message.role),
         content: message.content,
-        provider_metadata: None,
+        provider_metadata: message
+            .provider_metadata_json
+            .as_deref()
+            .and_then(|metadata| serde_json::from_str(metadata).ok()),
         created_at: message.created_at,
     }
 }
@@ -746,5 +753,6 @@ fn core_event_kind_from_desktop(kind: &AgentRunEventKind) -> CoreRuntimeEventKin
         AgentRunEventKind::RunPaused => CoreRuntimeEventKind::RunPaused,
         AgentRunEventKind::RunCompleted => CoreRuntimeEventKind::RunCompleted,
         AgentRunEventKind::RunFailed => CoreRuntimeEventKind::RunFailed,
+        AgentRunEventKind::SubagentLifecycle => CoreRuntimeEventKind::SubagentLifecycle,
     }
 }

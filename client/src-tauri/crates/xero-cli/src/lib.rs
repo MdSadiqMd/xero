@@ -1,37 +1,57 @@
+#![recursion_limit = "256"]
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use xero_agent_core::{
     domain_tool_pack_health_report, domain_tool_pack_manifest, domain_tool_pack_manifests,
     provider_capability_catalog, provider_preflight_blockers, provider_preflight_snapshot,
     provider_preflight_snapshot_as_cached_probe, run_openai_compatible_provider_preflight_probe,
-    AgentCoreStore, AgentRuntimeFacade, ContextManifest, DomainToolPackHealthInput,
-    DomainToolPackHealthReport, DomainToolPackHealthStatus, DomainToolPackManifest,
-    EnvironmentSemanticIndexState, FileAgentCoreStore, HeadlessProviderExecutionConfig,
+    AgentCoreStore, AgentRuntimeFacade, ApprovalDecisionRequest, CancelRunRequest, ContextManifest,
+    ContinueRunRequest, DomainToolPackHealthInput, DomainToolPackHealthReport,
+    DomainToolPackHealthStatus, DomainToolPackManifest, EnvironmentSemanticIndexState,
+    FileAgentCoreStore, HeadlessProductionToolRuntime, HeadlessProviderExecutionConfig,
     HeadlessProviderRuntime, HeadlessRuntimeOptions, MessageRole, NewContextManifest,
-    NewMessageRecord, NewRunRecord, NewRuntimeEvent, OpenAiCompatibleHeadlessConfig,
-    OpenAiCompatibleProviderPreflightProbeRequest, PermissionProfileSandbox,
-    ProductionRuntimeContract, ProjectTrustState, ProviderCapabilityCatalog,
-    ProviderCapabilityCatalogInput, ProviderPreflightInput, ProviderPreflightRequiredFeatures,
-    ProviderPreflightSnapshot, ProviderPreflightSource, ProviderSelection, RunControls,
-    RunSnapshot, RunStatus, RunSummary, RuntimeEvent, RuntimeEventKind, RuntimeMessage,
-    RuntimeMessageProviderMetadata, RuntimeStoreDescriptor, RuntimeTrace, RuntimeTraceContext,
-    SandboxApprovalSource, SandboxExecutionContext, SandboxExecutionMetadata, SandboxPlatform,
-    SandboxedProcessRequest, SandboxedProcessRunner, StartRunRequest, ToolApprovalRequirement,
-    ToolCallInput, ToolDescriptorV2, ToolEffectClass, ToolExecutionContext, ToolMutability,
-    ToolSandbox, ToolSandboxRequirement, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
+    NewMessageRecord, NewRunRecord, NewRuntimeEvent, OpenAiCodexHeadlessConfig,
+    OpenAiCompatibleHeadlessConfig, OpenAiCompatibleProviderPreflightProbeRequest,
+    PermissionProfileSandbox, ProductionRuntimeContract, ProjectTrustState,
+    ProviderCapabilityCatalog, ProviderCapabilityCatalogInput, ProviderPreflightInput,
+    ProviderPreflightRequiredFeatures, ProviderPreflightSnapshot, ProviderPreflightSource,
+    ProviderSelection, ResumeRunRequest, RunControls, RunSnapshot, RunStatus, RunSummary,
+    RuntimeEvent, RuntimeEventKind, RuntimeMessage, RuntimeMessageProviderMetadata,
+    RuntimeStoreDescriptor, RuntimeTrace, RuntimeTraceContext, SandboxApprovalSource,
+    SandboxExecutionContext, SandboxExecutionMetadata, SandboxPlatform, SandboxedProcessRequest,
+    SandboxedProcessRunner, StartRunRequest, ToolApprovalRequirement, ToolBatchDispatchReport,
+    ToolCallInput, ToolDescriptorV2, ToolDispatchFailure, ToolDispatchOutcome, ToolDispatchSuccess,
+    ToolEffectClass, ToolErrorCategory, ToolExecutionContext, ToolExecutionError, ToolMutability,
+    ToolSandbox, ToolSandboxRequirement, UserInputRequest, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
     DOMAIN_TOOL_PACK_CONTRACT_VERSION,
 };
+
+mod agent_definition_cli;
+mod file_cli;
+mod notification_cli;
+mod process_cli;
+mod project_cli;
+mod project_state_cli;
+mod remote_cli;
+mod settings_cli;
+mod skills_cli;
+mod tui;
+pub(crate) mod update_cli;
+mod usage_cli;
 
 const APP_DATA_DIRECTORY_NAME: &str = "dev.sn0w.xero";
 const HEADLESS_DIRECTORY_NAME: &str = "headless";
@@ -46,6 +66,33 @@ const DEFAULT_MODEL_ID: &str = "fake-model";
 const DEFAULT_PROJECT_ID: &str = "headless-local";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const MCP_SERVER_NAME: &str = "xero-local-harness";
+const MCP_TOOLS_SERVER_NAME: &str = "xero-tool-registry-v2";
+const CURSOR_PROVIDER_ID: &str = "external_cursor_sdk";
+const CURSOR_DEFAULT_MODEL_ID: &str = "composer-latest";
+const CURSOR_BRIDGE_VERSION: &str = "xero-cursor-sdk-bridge.v1";
+const CURSOR_BRIDGE_SCRIPT_RELATIVE: &str = "../../../scripts/cursor-sdk-bridge.mjs";
+const TOOL_REGISTRY_MCP_RUNTIME: &str = "cursor_sdk_xero_mcp";
+const TOOL_NAME_WRITE: &str = "write";
+const TOOL_NAME_PATCH: &str = "patch";
+const TOOL_NAME_DELETE: &str = "delete";
+const TOOL_NAME_MOVE: &str = "move";
+const TOOL_NAME_REPLACE: &str = "replace";
+const TOOL_NAME_COMMAND: &str = "command";
+const CURSOR_NATIVE_TOOL_NAMES: &[&str] = &[
+    "read",
+    "write",
+    "edit",
+    "delete",
+    "shell",
+    "grep",
+    "glob",
+    "ls",
+    "run_terminal_cmd",
+    "terminal",
+    "apply_patch",
+    "create_file",
+    "update_file",
+];
 const WORKSPACE_INDEX_VERSION: u32 = 1;
 const DEFAULT_INDEX_FILE_LIMIT: usize = 5_000;
 const HARD_INDEX_FILE_LIMIT: usize = 20_000;
@@ -61,6 +108,179 @@ const WORKSPACE_EMBEDDING_DIM: usize = 768;
 const WORKSPACE_EMBEDDING_MODEL: &str = "xero-local-hash-embedding";
 const WORKSPACE_EMBEDDING_VERSION: &str = "xero-local-hash-embedding.v1";
 const EXTERNAL_AGENT_DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+const XERO_BENCHMARK_ADAPTER_VERSION: &str = "xero-terminal-bench-harbor-adapter.v1";
+const XERO_BENCHMARK_PROMPT_VERSION: &str = "xero-terminal-bench-prompt.v2";
+const XERO_BENCHMARK_TOOL_POLICY_VERSION: &str = "owned-agent-core-tool-registry-v2";
+const OPENAI_CODEX_PROVIDER_ID: &str = "openai_codex";
+const OPENAI_CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+const OPENAI_CODEX_OAUTH_REFRESH_SKEW_SECONDS: i64 = 60;
+
+const BENCHMARK_PROJECT_SCHEMA: &str = r#"
+    PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        milestone TEXT NOT NULL DEFAULT '',
+        total_phases INTEGER NOT NULL DEFAULT 0 CHECK (total_phases >= 0),
+        completed_phases INTEGER NOT NULL DEFAULT 0 CHECK (completed_phases >= 0),
+        active_phase INTEGER NOT NULL DEFAULT 0 CHECK (active_phase >= 0),
+        branch TEXT,
+        runtime TEXT,
+        start_targets TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS repositories (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        root_path TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        branch TEXT,
+        head_sha TEXT,
+        is_git_repo INTEGER NOT NULL DEFAULT 1 CHECK (is_git_repo IN (0, 1)),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS agent_definitions (
+        definition_id TEXT PRIMARY KEY,
+        current_version INTEGER NOT NULL,
+        display_name TEXT NOT NULL,
+        short_label TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        lifecycle_state TEXT NOT NULL,
+        base_capability_profile TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS agent_definition_versions (
+        definition_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        validation_report_json TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (definition_id, version),
+        FOREIGN KEY (definition_id) REFERENCES agent_definitions(definition_id)
+    );
+    INSERT OR IGNORE INTO agent_definitions (
+        definition_id,
+        current_version,
+        display_name,
+        short_label,
+        scope,
+        lifecycle_state,
+        base_capability_profile,
+        updated_at
+    )
+    VALUES ('engineer', 1, 'Engineer', 'Build', 'built_in', 'active', 'engineering', '2026-05-01T00:00:00Z');
+    INSERT OR IGNORE INTO agent_definition_versions (
+        definition_id,
+        version,
+        snapshot_json,
+        validation_report_json,
+        created_at
+    )
+    VALUES ('engineer', 1, '{"id":"engineer","version":1}', '{"status":"valid","source":"benchmark_seed"}', '2026-05-01T00:00:00Z');
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        agent_session_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        session_kind TEXT NOT NULL DEFAULT 'standard',
+        status TEXT NOT NULL,
+        selected INTEGER NOT NULL DEFAULT 0,
+        remote_visible INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        archived_at TEXT,
+        last_run_id TEXT,
+        last_runtime_kind TEXT,
+        last_provider_id TEXT,
+        PRIMARY KEY (project_id, agent_session_id)
+    );
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        runtime_agent_id TEXT NOT NULL,
+        agent_definition_id TEXT NOT NULL,
+        agent_definition_version INTEGER NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        agent_session_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        lineage_kind TEXT NOT NULL DEFAULT 'top_level',
+        parent_run_id TEXT,
+        parent_trace_id TEXT,
+        parent_subagent_id TEXT,
+        subagent_role TEXT,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        last_heartbeat_at TEXT,
+        completed_at TEXT,
+        cancelled_at TEXT,
+        last_error_code TEXT,
+        last_error_message TEXT,
+        updated_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (project_id, run_id),
+        FOREIGN KEY (project_id, agent_session_id) REFERENCES agent_sessions(project_id, agent_session_id) ON DELETE CASCADE,
+        FOREIGN KEY (agent_definition_id, agent_definition_version) REFERENCES agent_definition_versions(definition_id, version)
+    );
+    CREATE TABLE IF NOT EXISTS agent_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        provider_metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id) REFERENCES agent_runs(project_id, run_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_messages_project_run_id
+        ON agent_messages(project_id, run_id, id ASC);
+    CREATE TABLE IF NOT EXISTS agent_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        event_kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id) REFERENCES agent_runs(project_id, run_id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS agent_context_manifests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        manifest_id TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL,
+        agent_session_id TEXT NOT NULL,
+        run_id TEXT,
+        runtime_agent_id TEXT NOT NULL,
+        agent_definition_id TEXT NOT NULL,
+        agent_definition_version INTEGER NOT NULL,
+        provider_id TEXT,
+        model_id TEXT,
+        request_kind TEXT NOT NULL,
+        policy_action TEXT NOT NULL,
+        policy_reason_code TEXT NOT NULL,
+        budget_tokens INTEGER,
+        estimated_tokens INTEGER NOT NULL DEFAULT 0,
+        pressure TEXT NOT NULL,
+        context_hash TEXT NOT NULL,
+        included_contributors_json TEXT NOT NULL,
+        excluded_contributors_json TEXT NOT NULL,
+        retrieval_query_ids_json TEXT NOT NULL,
+        retrieval_result_ids_json TEXT NOT NULL,
+        compaction_id TEXT,
+        handoff_id TEXT,
+        redaction_state TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, agent_session_id) REFERENCES agent_sessions(project_id, agent_session_id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, run_id) REFERENCES agent_runs(project_id, run_id) ON DELETE CASCADE,
+        FOREIGN KEY (agent_definition_id, agent_definition_version) REFERENCES agent_definition_versions(definition_id, version)
+    );
+"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -107,13 +327,42 @@ impl CliError {
             exit_code: 1,
         }
     }
+
+    fn benchmark(code: impl Into<String>, message: impl Into<String>, exit_code: i32) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            exit_code,
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+pub trait TuiCommandAdapter: Send + Sync {
+    fn invoke_json(&self, state_dir: &Path, args: &[String])
+        -> Option<Result<JsonValue, CliError>>;
+}
+
+#[derive(Clone)]
 struct GlobalOptions {
     output_mode: OutputMode,
     ci: bool,
     state_dir: PathBuf,
+    tui_adapter: Option<Arc<dyn TuiCommandAdapter>>,
+}
+
+impl std::fmt::Debug for GlobalOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GlobalOptions")
+            .field("output_mode", &self.output_mode)
+            .field("ci", &self.ci)
+            .field("state_dir", &self.state_dir)
+            .field(
+                "tui_adapter",
+                &self.tui_adapter.as_ref().map(|_| "attached"),
+            )
+            .finish()
+    }
 }
 
 pub fn run_from_env() -> i32 {
@@ -133,13 +382,51 @@ pub fn run_from_env() -> i32 {
     }
 }
 
+pub fn run_tui_from_env() -> i32 {
+    run_tui_from_env_with_optional_adapter(None)
+}
+
+pub fn run_tui_from_env_with_adapter(adapter: Arc<dyn TuiCommandAdapter>) -> i32 {
+    run_tui_from_env_with_optional_adapter(Some(adapter))
+}
+
+fn run_tui_from_env_with_optional_adapter(adapter: Option<Arc<dyn TuiCommandAdapter>>) -> i32 {
+    let mut args = env::args().collect::<Vec<_>>();
+    let output_mode = requested_output_mode(&args);
+    args.insert(1, "tui".into());
+    match run_with_args_and_adapter(args, adapter) {
+        Ok(response) => {
+            if response.emit {
+                emit_response(&response);
+            }
+            0
+        }
+        Err(error) => {
+            emit_error(&error, output_mode);
+            error.exit_code
+        }
+    }
+}
+
 pub fn run_with_args<I, S>(args: I) -> Result<CliResponse, CliError>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    run_with_args_and_adapter(args, None)
+}
+
+fn run_with_args_and_adapter<I, S>(
+    args: I,
+    adapter: Option<Arc<dyn TuiCommandAdapter>>,
+) -> Result<CliResponse, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     let raw_args = args.into_iter().map(Into::into).collect::<Vec<_>>();
-    let (globals, command_args) = parse_global_options(raw_args)?;
+    let (mut globals, command_args) = parse_global_options(raw_args)?;
+    globals.tui_adapter = adapter;
     dispatch(globals, command_args)
 }
 
@@ -153,15 +440,57 @@ fn dispatch(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, Cl
     }
 
     match args.first().map(String::as_str) {
+        Some("--version") | Some("version") => Ok(response(
+            &globals,
+            format!("xero {}", env!("CARGO_PKG_VERSION")),
+            json!({
+                "kind": "version",
+                "name": "xero",
+                "version": env!("CARGO_PKG_VERSION"),
+            }),
+        )),
         Some("agent") => dispatch_agent(globals, args[1..].to_vec()),
+        Some("benchmark") => dispatch_benchmark(globals, args[1..].to_vec()),
         Some("conversation") => dispatch_conversation(globals, args[1..].to_vec()),
+        Some("project") => project_cli::dispatch_project(globals, args[1..].to_vec()),
+        Some("project-state") | Some("state") => {
+            project_state_cli::dispatch_project_state(globals, args[1..].to_vec())
+        }
+        Some("process") | Some("runner") => {
+            process_cli::dispatch_process(globals, args[1..].to_vec())
+        }
+        Some("session") => project_cli::dispatch_session(globals, args[1..].to_vec()),
         Some("provider") => dispatch_provider(globals, args[1..].to_vec()),
         Some("mcp") => dispatch_mcp(globals, args[1..].to_vec()),
         Some("workspace") => dispatch_workspace(globals, args[1..].to_vec()),
+        Some("file") => file_cli::dispatch_file(globals, args[1..].to_vec()),
+        Some("git") => project_cli::dispatch_git(globals, args[1..].to_vec()),
+        Some("agent-definition") | Some("agent-definitions") => {
+            agent_definition_cli::dispatch_agent_definition(globals, args[1..].to_vec())
+        }
+        Some("skill") | Some("skills") => skills_cli::dispatch_skill(globals, args[1..].to_vec()),
+        Some("plugin") | Some("plugins") => {
+            skills_cli::dispatch_plugin(globals, args[1..].to_vec())
+        }
+        Some("notification") | Some("notifications") => {
+            notification_cli::dispatch_notification(globals, args[1..].to_vec())
+        }
+        Some("remote") => remote_cli::dispatch_remote(globals, args[1..].to_vec()),
+        Some("mock-web") => remote_cli::dispatch_mock_web(globals, args[1..].to_vec()),
+        Some("environment") | Some("env") => {
+            settings_cli::dispatch_environment(globals, args[1..].to_vec())
+        }
+        Some("settings") => settings_cli::dispatch_settings(globals, args[1..].to_vec()),
+        Some("update") | Some("updates") => {
+            update_cli::dispatch_update(globals, args[1..].to_vec())
+        }
+        Some("wipe") => project_state_cli::dispatch_wipe(globals, args[1..].to_vec()),
+        Some("usage") => usage_cli::dispatch_usage(globals, args[1..].to_vec()),
         Some("tool-pack") => dispatch_tool_pack(globals, args[1..].to_vec()),
         Some("commit-message") => command_commit_message(globals, args[1..].to_vec()),
         Some("suggest-command") => command_suggest_command(globals, args[1..].to_vec()),
         Some("daemon") => command_daemon(globals, args[1..].to_vec()),
+        Some("tui") => tui::command_tui(globals, args[1..].to_vec()),
         Some(other) => Err(CliError::usage(format!(
             "Unknown xero command `{other}`. Run `xero --help`."
         ))),
@@ -169,15 +498,30 @@ fn dispatch(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, Cl
     }
 }
 
+fn dispatch_benchmark(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, CliError> {
+    match args.first().map(String::as_str) {
+        Some("terminal-bench") | Some("run") => {
+            command_benchmark_terminal_bench(globals, args[1..].to_vec())
+        }
+        Some(other) => Err(CliError::usage(format!(
+            "Unknown benchmark command `{other}`. Use `xero benchmark terminal-bench`."
+        ))),
+        None => Err(CliError::usage(
+            "Missing benchmark command. Use `xero benchmark terminal-bench`.",
+        )),
+    }
+}
+
 fn dispatch_agent(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, CliError> {
     match args.first().map(String::as_str) {
         Some("exec") => command_agent_exec(globals, args[1..].to_vec()),
         Some("host") => command_agent_host(globals, args[1..].to_vec()),
+        Some("cursor") => command_agent_cursor(globals, args[1..].to_vec()),
         Some(other) => Err(CliError::usage(format!(
-            "Unknown agent command `{other}`. Run `xero agent exec --help` or `xero agent host --help`."
+            "Unknown agent command `{other}`. Run `xero agent exec --help`, `xero agent host --help`, or `xero agent cursor --help`."
         ))),
         None => Err(CliError::usage(
-            "Missing agent command. Use `xero agent exec` or `xero agent host`.",
+            "Missing agent command. Use `xero agent exec`, `xero agent host`, or `xero agent cursor`.",
         )),
     }
 }
@@ -192,14 +536,24 @@ fn dispatch_conversation(
         Some("dump") => command_conversation_dump(globals, args[1..].to_vec()),
         Some("support-bundle") => command_conversation_support_bundle(globals, args[1..].to_vec()),
         Some("compact") => command_conversation_compact(globals, args[1..].to_vec()),
+        Some("continue") => command_conversation_continue(globals, args[1..].to_vec()),
+        Some("answer") => command_conversation_answer(globals, args[1..].to_vec()),
+        Some("approve") => command_conversation_approval(globals, args[1..].to_vec(), true),
+        Some("deny") | Some("reject") => {
+            command_conversation_approval(globals, args[1..].to_vec(), false)
+        }
+        Some("cancel") | Some("stop") => command_conversation_cancel(globals, args[1..].to_vec()),
+        Some("resume") => command_conversation_resume(globals, args[1..].to_vec()),
+        Some("search") => command_conversation_search(globals, args[1..].to_vec()),
+        Some("export") => command_conversation_export(globals, args[1..].to_vec()),
         Some("retry") => command_conversation_retry(globals, args[1..].to_vec()),
-        Some("clone") => command_conversation_clone(globals, args[1..].to_vec()),
+        Some("clone") | Some("branch") => command_conversation_clone(globals, args[1..].to_vec()),
         Some("stats") => command_conversation_stats(globals, args[1..].to_vec()),
         Some(other) => Err(CliError::usage(format!(
             "Unknown conversation command `{other}`."
         ))),
         None => Err(CliError::usage(
-            "Missing conversation command. Use list, show, dump, support-bundle, compact, retry, clone, or stats.",
+            "Missing conversation command. Use list, show, dump, support-bundle, compact, retry, clone, branch, or stats.",
         )),
     }
 }
@@ -208,13 +562,16 @@ fn dispatch_provider(globals: GlobalOptions, args: Vec<String>) -> Result<CliRes
     match args.first().map(String::as_str) {
         Some("list") => command_provider_list(globals, args[1..].to_vec()),
         Some("login") => command_provider_login(globals, args[1..].to_vec()),
+        Some("remove") | Some("logout") | Some("delete") => {
+            command_provider_remove(globals, args[1..].to_vec())
+        }
         Some("doctor") => command_provider_doctor(globals, args[1..].to_vec()),
         Some("preflight") => command_provider_preflight(globals, args[1..].to_vec()),
         Some(other) => Err(CliError::usage(format!(
             "Unknown provider command `{other}`."
         ))),
         None => Err(CliError::usage(
-            "Missing provider command. Use list, login, doctor, or preflight.",
+            "Missing provider command. Use list, login, remove, doctor, or preflight.",
         )),
     }
 }
@@ -224,10 +581,13 @@ fn dispatch_mcp(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse
         Some("list") => command_mcp_list(globals, args[1..].to_vec()),
         Some("add") => command_mcp_add(globals, args[1..].to_vec()),
         Some("login") => command_mcp_login(globals, args[1..].to_vec()),
+        Some("remove") | Some("delete") => command_mcp_remove(globals, args[1..].to_vec()),
+        Some("status") => command_mcp_status(globals, args[1..].to_vec()),
         Some("serve") => command_mcp_serve(globals, args[1..].to_vec()),
+        Some("serve-tools") => command_mcp_serve_tools(globals, args[1..].to_vec()),
         Some(other) => Err(CliError::usage(format!("Unknown MCP command `{other}`."))),
         None => Err(CliError::usage(
-            "Missing MCP command. Use list, add, login, or serve.",
+            "Missing MCP command. Use list, add, login, remove, status, serve, or serve-tools.",
         )),
     }
 }
@@ -268,7 +628,7 @@ fn command_agent_exec(
     if take_help(&args) {
         return Ok(response(
             &globals,
-            "Usage: xero agent exec [PROMPT] [--project-id ID] [--session-id ID] [--run-id ID] --provider ID [--model ID]\nRuns a headless owned-agent turn through the shared Xero runtime. Use --provider fake_provider only for harness tests.",
+            "Usage: xero agent exec [PROMPT] [--project-id ID] [--session-id ID] [--run-id ID] [--runtime-agent-id ID] [--agent-definition-id ID] [--thinking-effort minimal|low|medium|high|x_high] [--attachments-json JSON] --provider ID [--model ID]\nRuns a headless owned-agent turn through the shared Xero runtime. Attachments require the desktop-backed TUI runtime. Use --provider fake_provider only for harness tests.",
             json!({ "command": "agent exec" }),
         ));
     }
@@ -280,6 +640,17 @@ fn command_agent_exec(
     let run_id = take_option(&mut args, "--run-id")?.unwrap_or_else(|| generate_id("run"));
     let provider_id = take_option(&mut args, "--provider")?;
     let model_id = take_option(&mut args, "--model")?;
+    let runtime_agent_id =
+        take_option(&mut args, "--runtime-agent-id")?.unwrap_or_else(|| "engineer".into());
+    let agent_definition_id = take_option(&mut args, "--agent-definition-id")?;
+    let thinking_effort = take_option(&mut args, "--thinking-effort")?
+        .map(|effort| normalize_cli_thinking_effort(&effort))
+        .transpose()?;
+    if take_option(&mut args, "--attachments-json")?.is_some() {
+        return Err(CliError::usage(
+            "Attachments require the desktop-backed Xero TUI runtime.",
+        ));
+    }
     reject_unknown_options(&args)?;
 
     let prompt = prompt_flag
@@ -291,7 +662,11 @@ fn command_agent_exec(
 
     let provider = resolve_cli_provider_execution(&globals, provider_id, model_id)?;
     let (project_id, store) = open_run_store_for_provider(&globals, project_id, &provider)?;
-    let provider = provider.with_project_workspace(&store);
+    let agent_definition = store
+        .resolve_agent_definition_for_run(agent_definition_id.as_deref(), &runtime_agent_id)?;
+    let provider = provider
+        .with_project_workspace(&store)
+        .with_workspace_writes(headless_runtime_agent_allows_writes(&runtime_agent_id));
     if provider.execution_mode == "real_provider" {
         ensure_cli_real_provider_runtime_contract(&project_id, &provider, &store)?;
     }
@@ -316,8 +691,18 @@ fn command_agent_exec(
                 model_id: provider.model_id.clone(),
             },
             controls: Some(RunControls {
-                runtime_agent_id: "engineer".into(),
-                approval_mode: if globals.ci { "strict" } else { "on_request" }.into(),
+                runtime_agent_id: runtime_agent_id.clone(),
+                agent_definition_id: Some(agent_definition.definition_id),
+                agent_definition_version: Some(agent_definition.version),
+                thinking_effort,
+                approval_mode: if globals.ci {
+                    "strict"
+                } else if headless_runtime_agent_allows_writes(&runtime_agent_id) {
+                    "on_request"
+                } else {
+                    "suggest"
+                }
+                .into(),
                 plan_mode_required: globals.ci,
             }),
         })
@@ -347,6 +732,1772 @@ fn command_agent_exec(
             "snapshot": snapshot,
         }),
     ))
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarkRunConfig {
+    instruction: String,
+    workspace_root: PathBuf,
+    trial_app_data_root: PathBuf,
+    output_dir: PathBuf,
+    project_id: String,
+    agent_session_id: String,
+    run_id: String,
+    benchmark_name: String,
+    dataset_id: String,
+    dataset_digest: Option<String>,
+    task_id: String,
+    attempt_index: u64,
+    provider_id: String,
+    model_id: String,
+    profile_id: Option<String>,
+    credential_mode: Option<String>,
+    oauth_app_data_root: Option<PathBuf>,
+    oauth_account_id: Option<String>,
+    api_key_env: Option<String>,
+    base_url: Option<String>,
+    temperature: Option<String>,
+    reasoning_effort: Option<String>,
+    max_output_tokens: Option<u64>,
+    context_budget: Option<u64>,
+    wall_time_seconds: Option<u64>,
+    max_turns: Option<usize>,
+    max_tool_calls: Option<u64>,
+    max_command_calls: Option<u64>,
+    max_cost_usd: Option<f64>,
+    approval_mode: String,
+    sandbox_policy: String,
+    network_policy: String,
+    sandbox_provider: String,
+    environment_id: Option<String>,
+    image_digest: Option<String>,
+    prompt_version: String,
+    tool_policy_version: String,
+    adapter_version: String,
+    harness_version: String,
+    xero_source_revision: Option<String>,
+    comparison_mode: String,
+    provider_account_class: String,
+    endpoint_class: String,
+    allow_fake_provider_fixture: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BenchmarkArtifactSummary {
+    output_dir: String,
+    manifest: String,
+    trajectory: String,
+    xero_trace: String,
+    final_diff: String,
+    support_bundle: String,
+    stdout: String,
+    stderr: String,
+}
+
+fn command_benchmark_terminal_bench(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    if take_help(&args) {
+        return Ok(response(
+            &globals,
+            [
+                "Usage: xero benchmark terminal-bench --instruction-file PATH --workspace-root PATH --trial-app-data-root PATH --output-dir PATH --task-id ID --dataset-id ID --provider ID --model ID [options]",
+                "",
+                "Runs one Harbor/Terminal-Bench trial through Xero's headless owned-agent runtime and writes manifest.json, trajectory.json, xero-trace.json, final.diff, support-bundle.zip, stdout.txt, and stderr.txt.",
+                "Use --allow-fake-provider-fixture with --provider fake_provider only for adapter fixture tests.",
+            ]
+            .join("\n"),
+            json!({ "command": "benchmark terminal-bench" }),
+        ));
+    }
+
+    let config = parse_benchmark_terminal_bench_config(&globals, &mut args)?;
+    reject_unknown_options(&args)?;
+    ensure_not_legacy_xero_state(&config.trial_app_data_root, "trial app-data root")?;
+    ensure_not_legacy_xero_state(&config.output_dir, "benchmark output directory")?;
+    fs::create_dir_all(&config.output_dir).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_output_prepare_failed",
+            format!(
+                "Could not create benchmark output directory `{}`: {error}",
+                config.output_dir.display()
+            ),
+            1,
+        )
+    })?;
+
+    let benchmark_globals = GlobalOptions {
+        output_mode: globals.output_mode,
+        ci: false,
+        state_dir: config.trial_app_data_root.clone(),
+        tui_adapter: None,
+    };
+    let registered_project = ensure_benchmark_project_registered(
+        &benchmark_globals,
+        &config.project_id,
+        &config.workspace_root,
+    )?;
+    let app_data_store = AppDataProjectAgentStore::open(registered_project)?;
+    let store = if config.provider_id == FAKE_PROVIDER_ID {
+        CliAgentStore::Harness(open_harness_agent_store(&benchmark_globals)?)
+    } else {
+        CliAgentStore::AppData(app_data_store)
+    };
+    let provider = resolve_benchmark_provider_execution(&benchmark_globals, &config)?;
+    let provider = provider.with_project_workspace(&store);
+    if provider.execution_mode == "real_provider" {
+        ensure_cli_real_provider_runtime_contract(&config.project_id, &provider, &store)?;
+    }
+    let provider_preflight = ensure_cli_provider_preflight_for_run(&benchmark_globals, &provider)?;
+    let runtime = HeadlessProviderRuntime::new(
+        store.clone(),
+        provider.execution.clone(),
+        HeadlessRuntimeOptions {
+            ci_mode: false,
+            max_provider_turns: config
+                .max_turns
+                .unwrap_or_else(|| HeadlessRuntimeOptions::default().max_provider_turns),
+            max_wall_time_ms: config
+                .wall_time_seconds
+                .map(|seconds| seconds.saturating_mul(1_000)),
+            max_tool_calls: config.max_tool_calls,
+            max_command_calls: config.max_command_calls,
+            provider_preflight: Some(provider_preflight.clone()),
+        },
+    );
+
+    let started = Instant::now();
+    let run_result = runtime.start_run(StartRunRequest {
+        project_id: config.project_id.clone(),
+        agent_session_id: config.agent_session_id.clone(),
+        run_id: config.run_id.clone(),
+        prompt: config.instruction.clone(),
+        provider: ProviderSelection {
+            provider_id: provider.provider_id.clone(),
+            model_id: provider.model_id.clone(),
+        },
+        controls: Some(RunControls {
+            runtime_agent_id: "engineer".into(),
+            agent_definition_id: Some("engineer".into()),
+            agent_definition_version: Some(1),
+            thinking_effort: None,
+            approval_mode: config.approval_mode.clone(),
+            plan_mode_required: config.approval_mode == "strict",
+        }),
+    });
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    let (snapshot, run_error) = match run_result {
+        Ok(snapshot) => (Some(snapshot), None),
+        Err(error) => {
+            let snapshot = store.load_run(&config.project_id, &config.run_id).ok();
+            (snapshot, Some(error))
+        }
+    };
+    let run_error_cli = run_error.as_ref().map(benchmark_runtime_error_to_cli);
+    let artifacts = write_benchmark_trial_artifacts(
+        &config,
+        &store,
+        snapshot.as_ref(),
+        run_error_cli.as_ref(),
+        elapsed_ms,
+    )?;
+
+    if let Some(error) = run_error_cli {
+        return Err(error);
+    }
+    let snapshot = snapshot.ok_or_else(|| {
+        CliError::benchmark(
+            "xero_benchmark_run_missing",
+            "The benchmark run finished without a runtime snapshot.",
+            4,
+        )
+    })?;
+    if snapshot.status != RunStatus::Completed {
+        return Err(CliError::benchmark(
+            "xero_benchmark_agent_incomplete",
+            format!(
+                "Benchmark run `{}` ended with status {:?}. Artifacts were written to `{}`.",
+                snapshot.run_id,
+                snapshot.status,
+                config.output_dir.display()
+            ),
+            4,
+        ));
+    }
+
+    let text = format!(
+        "Benchmark trial {} completed for task {}. Artifacts: {}",
+        config.run_id,
+        config.task_id,
+        config.output_dir.display()
+    );
+    Ok(response(
+        &globals,
+        text.clone(),
+        json!({
+            "kind": "benchmarkTerminalBench",
+            "status": "completed",
+            "runId": config.run_id,
+            "taskId": config.task_id,
+            "stdout": text,
+            "artifacts": artifacts,
+            "providerPreflight": provider_preflight,
+        }),
+    ))
+}
+
+fn parse_benchmark_terminal_bench_config(
+    globals: &GlobalOptions,
+    args: &mut Vec<String>,
+) -> Result<BenchmarkRunConfig, CliError> {
+    let instruction = read_benchmark_instruction(args)?;
+    let workspace_root = required_existing_path_option(args, "--workspace-root")?;
+    let output_dir = required_path_option(args, "--output-dir")?;
+    let trial_app_data_root = match take_option(args, "--trial-app-data-root")? {
+        Some(value) => Some(value),
+        None => take_option(args, "--app-data-root")?,
+    }
+    .map(PathBuf::from)
+    .unwrap_or_else(|| globals.state_dir.clone());
+    let project_id = take_option(args, "--project-id")?
+        .unwrap_or_else(|| stable_project_id_for_repo_root(&workspace_root));
+    let agent_session_id =
+        take_option(args, "--session-id")?.unwrap_or_else(|| generate_id("benchmark-session"));
+    let run_id = take_option(args, "--run-id")?.unwrap_or_else(|| generate_id("benchmark-run"));
+    let benchmark_name =
+        take_option(args, "--benchmark")?.unwrap_or_else(|| "terminal-bench".into());
+    let dataset_id = take_option(args, "--dataset-id")?
+        .or_else(|| env::var("TERMINAL_BENCH_DATASET").ok())
+        .ok_or_else(|| CliError::usage("Missing `--dataset-id`."))?;
+    let dataset_digest = take_option(args, "--dataset-digest")?;
+    let task_id =
+        take_option(args, "--task-id")?.ok_or_else(|| CliError::usage("Missing `--task-id`."))?;
+    let attempt_index = take_option(args, "--attempt-index")?
+        .map(|value| parse_nonnegative_u64(&value, "--attempt-index"))
+        .transpose()?
+        .unwrap_or(0);
+    let provider_id = normalize_benchmark_provider_id(
+        &take_option(args, "--provider")?
+            .ok_or_else(|| CliError::usage("Missing `--provider`."))?,
+    );
+    let model_id = take_option(args, "--model")?
+        .or_else(|| provider_catalog_entry(&provider_id).map(|entry| entry.default_model.into()))
+        .ok_or_else(|| CliError::usage("Missing `--model`."))?;
+    let model_id = if provider_id == OPENAI_CODEX_PROVIDER_ID {
+        normalize_openai_codex_model_id(&model_id)
+    } else {
+        model_id
+    };
+    let profile_id = take_option(args, "--profile-id")?;
+    let credential_mode = take_option(args, "--credential-mode")?
+        .or_else(|| (provider_id == OPENAI_CODEX_PROVIDER_ID).then(|| "app_openai_oauth".into()));
+    let oauth_app_data_root = take_option(args, "--oauth-app-data-root")?
+        .or_else(|| env::var("XERO_OPENAI_OAUTH_APP_DATA_ROOT").ok())
+        .map(PathBuf::from);
+    let oauth_account_id = take_option(args, "--oauth-account-id")?
+        .or_else(|| env::var("XERO_OPENAI_OAUTH_ACCOUNT_ID").ok());
+    let base_url = take_option(args, "--base-url")?;
+    let api_key_env = take_option(args, "--api-key-env")?.or_else(|| {
+        let local_endpoint = base_url.as_deref().is_some_and(is_local_provider_base_url);
+        (provider_id != OPENAI_CODEX_PROVIDER_ID && !local_endpoint)
+            .then(|| default_benchmark_api_key_env(&provider_id).map(str::to_owned))
+            .flatten()
+    });
+    let temperature = take_option(args, "--temperature")?;
+    let reasoning_effort = take_option(args, "--reasoning-effort")?;
+    let max_output_tokens = take_option(args, "--max-output-tokens")?
+        .map(|value| parse_positive_u64(&value, "--max-output-tokens"))
+        .transpose()?;
+    let context_budget = take_option(args, "--context-budget")?
+        .map(|value| parse_positive_u64(&value, "--context-budget"))
+        .transpose()?;
+    let wall_time_seconds = match take_option(args, "--wall-time-seconds")? {
+        Some(value) => Some(value),
+        None => take_option(args, "--timeout-seconds")?,
+    }
+    .map(|value| parse_positive_u64(&value, "--wall-time-seconds"))
+    .transpose()?;
+    let max_turns = take_option(args, "--max-turns")?
+        .map(|value| parse_positive_usize(&value, "--max-turns"))
+        .transpose()?;
+    let max_tool_calls = take_option(args, "--max-tool-calls")?
+        .map(|value| parse_positive_u64(&value, "--max-tool-calls"))
+        .transpose()?;
+    let max_command_calls = take_option(args, "--max-command-calls")?
+        .map(|value| parse_positive_u64(&value, "--max-command-calls"))
+        .transpose()?;
+    let max_cost_usd = take_option(args, "--max-cost-usd")?
+        .map(|value| parse_nonnegative_f64(&value, "--max-cost-usd"))
+        .transpose()?;
+    let approval_mode = take_option(args, "--approval-mode")?.unwrap_or_else(|| "strict".into());
+    let sandbox_policy =
+        take_option(args, "--sandbox-policy")?.unwrap_or_else(|| "harbor_task_sandbox".into());
+    let network_policy =
+        take_option(args, "--network-policy")?.unwrap_or_else(|| "harbor_controlled".into());
+    let sandbox_provider =
+        take_option(args, "--sandbox-provider")?.unwrap_or_else(|| "harbor".into());
+    let environment_id = take_option(args, "--environment-id")?;
+    let image_digest = take_option(args, "--image-digest")?;
+    let prompt_version = take_option(args, "--prompt-version")?
+        .unwrap_or_else(|| XERO_BENCHMARK_PROMPT_VERSION.into());
+    let tool_policy_version = take_option(args, "--tool-policy-version")?
+        .unwrap_or_else(|| XERO_BENCHMARK_TOOL_POLICY_VERSION.into());
+    let adapter_version = take_option(args, "--adapter-version")?
+        .unwrap_or_else(|| XERO_BENCHMARK_ADAPTER_VERSION.into());
+    let harness_version =
+        take_option(args, "--harness-version")?.unwrap_or_else(|| "harbor".into());
+    let xero_source_revision = take_option(args, "--xero-source-revision")?
+        .or_else(|| env::var("XERO_SOURCE_REVISION").ok());
+    let comparison_mode =
+        take_option(args, "--comparison-mode")?.unwrap_or_else(|| "fixed-model".into());
+    let provider_account_class =
+        take_option(args, "--provider-account-class")?.unwrap_or_else(|| "unspecified".into());
+    let endpoint_class = take_option(args, "--endpoint-class")?.unwrap_or_else(|| {
+        if provider_id == OPENAI_CODEX_PROVIDER_ID {
+            "chatgpt-codex-oauth".into()
+        } else {
+            "openai-compatible".into()
+        }
+    });
+    let allow_fake_provider_fixture = take_bool_flag(args, "--allow-fake-provider-fixture");
+    if provider_id == FAKE_PROVIDER_ID && !allow_fake_provider_fixture {
+        return Err(CliError::usage(
+            "`--provider fake_provider` is fixture-only for benchmarks. Add `--allow-fake-provider-fixture` for adapter smoke tests.",
+        ));
+    }
+    if instruction.trim().is_empty() {
+        return Err(CliError::usage("Benchmark instruction cannot be empty."));
+    }
+
+    Ok(BenchmarkRunConfig {
+        instruction,
+        workspace_root,
+        trial_app_data_root,
+        output_dir,
+        project_id,
+        agent_session_id,
+        run_id,
+        benchmark_name,
+        dataset_id,
+        dataset_digest,
+        task_id,
+        attempt_index,
+        provider_id,
+        model_id,
+        profile_id,
+        credential_mode,
+        oauth_app_data_root,
+        oauth_account_id,
+        api_key_env,
+        base_url,
+        temperature,
+        reasoning_effort,
+        max_output_tokens,
+        context_budget,
+        wall_time_seconds,
+        max_turns,
+        max_tool_calls,
+        max_command_calls,
+        max_cost_usd,
+        approval_mode,
+        sandbox_policy,
+        network_policy,
+        sandbox_provider,
+        environment_id,
+        image_digest,
+        prompt_version,
+        tool_policy_version,
+        adapter_version,
+        harness_version,
+        xero_source_revision,
+        comparison_mode,
+        provider_account_class,
+        endpoint_class,
+        allow_fake_provider_fixture,
+    })
+}
+
+fn read_benchmark_instruction(args: &mut Vec<String>) -> Result<String, CliError> {
+    let instruction = take_option(args, "--instruction")?;
+    let instruction_file = take_option(args, "--instruction-file")?;
+    match (instruction, instruction_file) {
+        (Some(_), Some(_)) => Err(CliError::usage(
+            "Use either `--instruction` or `--instruction-file`, not both.",
+        )),
+        (Some(value), None) => Ok(value),
+        (None, Some(path)) if path == "-" => {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input).map_err(|error| {
+                CliError::benchmark(
+                    "xero_benchmark_instruction_read_failed",
+                    format!("Could not read benchmark instruction from stdin: {error}"),
+                    2,
+                )
+            })?;
+            Ok(input)
+        }
+        (None, Some(path)) => fs::read_to_string(&path).map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_instruction_read_failed",
+                format!("Could not read benchmark instruction file `{path}`: {error}"),
+                2,
+            )
+        }),
+        (None, None) if !args.is_empty() && !args[0].starts_with('-') => Ok(args.remove(0)),
+        (None, None) => Err(CliError::usage(
+            "Missing benchmark instruction. Use `--instruction`, `--instruction-file`, or stdin with `--instruction-file -`.",
+        )),
+    }
+}
+
+fn required_path_option(args: &mut Vec<String>, name: &str) -> Result<PathBuf, CliError> {
+    let value =
+        take_option(args, name)?.ok_or_else(|| CliError::usage(format!("Missing `{name}`.")))?;
+    Ok(PathBuf::from(value))
+}
+
+fn required_existing_path_option(args: &mut Vec<String>, name: &str) -> Result<PathBuf, CliError> {
+    let value =
+        take_option(args, name)?.ok_or_else(|| CliError::usage(format!("Missing `{name}`.")))?;
+    canonicalize_existing_path(&value)
+}
+
+fn parse_positive_usize(value: &str, name: &str) -> Result<usize, CliError> {
+    let parsed = parse_positive_u64(value, name)?;
+    usize::try_from(parsed).map_err(|_| CliError::usage(format!("`{name}` is too large.")))
+}
+
+fn parse_nonnegative_u64(value: &str, name: &str) -> Result<u64, CliError> {
+    value
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| CliError::usage(format!("`{name}` must be a non-negative integer.")))
+}
+
+fn parse_nonnegative_f64(value: &str, name: &str) -> Result<f64, CliError> {
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| CliError::usage(format!("`{name}` must be a number.")))?;
+    if parsed < 0.0 || !parsed.is_finite() {
+        return Err(CliError::usage(format!(
+            "`{name}` must be a finite non-negative number."
+        )));
+    }
+    Ok(parsed)
+}
+
+fn normalize_benchmark_provider_id(provider_id: &str) -> String {
+    match provider_id.trim() {
+        "openai" => "openai_api".into(),
+        "google" | "gemini" => "gemini_ai_studio".into(),
+        "github" => "github_models".into(),
+        other => other.into(),
+    }
+}
+
+fn default_benchmark_api_key_env(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "openai_api" => Some("OPENAI_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "github_models" => Some("GITHUB_TOKEN"),
+        "gemini_ai_studio" => Some("GEMINI_API_KEY"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarkOpenAiCodexSession {
+    account_id: String,
+    session_id: String,
+    access_token: String,
+    expires_at: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OpenAiCodexOAuthReadContext {
+    Cli,
+    Benchmark,
+}
+
+impl OpenAiCodexOAuthReadContext {
+    fn store_open_failed(self, database_path: &Path, error: rusqlite::Error) -> CliError {
+        let message = format!(
+            "Could not open OpenAI OAuth credential store `{}`: {error}",
+            database_path.display()
+        );
+        match self {
+            Self::Cli => CliError::system_fault("xero_cli_openai_oauth_store_open_failed", message),
+            Self::Benchmark => {
+                CliError::benchmark("xero_benchmark_openai_oauth_store_open_failed", message, 1)
+            }
+        }
+    }
+
+    fn store_read_failed(self, message: String) -> CliError {
+        match self {
+            Self::Cli => CliError::system_fault("xero_cli_openai_oauth_store_read_failed", message),
+            Self::Benchmark => {
+                CliError::benchmark("xero_benchmark_openai_oauth_store_read_failed", message, 1)
+            }
+        }
+    }
+
+    fn store_decode_failed(self, message: String) -> CliError {
+        match self {
+            Self::Cli => {
+                CliError::system_fault("xero_cli_openai_oauth_store_decode_failed", message)
+            }
+            Self::Benchmark => CliError::benchmark(
+                "xero_benchmark_openai_oauth_store_decode_failed",
+                message,
+                1,
+            ),
+        }
+    }
+}
+
+fn load_benchmark_openai_codex_oauth_session(
+    config: &BenchmarkRunConfig,
+) -> Result<BenchmarkOpenAiCodexSession, CliError> {
+    let app_data_root = config
+        .oauth_app_data_root
+        .clone()
+        .or_else(|| default_app_data_root().ok())
+        .ok_or_else(|| {
+            CliError::benchmark(
+                "xero_benchmark_openai_oauth_root_missing",
+                "OpenAI OAuth benchmark runs need `--oauth-app-data-root` or `XERO_OPENAI_OAUTH_APP_DATA_ROOT` pointing at the app-data directory that contains your logged-in Xero OAuth session.",
+                2,
+            )
+        })?;
+    ensure_not_legacy_xero_state(&app_data_root, "OpenAI OAuth app-data root")?;
+    let database_path = app_data_root.join(GLOBAL_DATABASE_FILE);
+    if !database_path.is_file() {
+        return Err(CliError::benchmark(
+            "xero_benchmark_openai_oauth_store_missing",
+            format!(
+                "Could not find OpenAI OAuth credential store `{}`.",
+                database_path.display()
+            ),
+            2,
+        ));
+    }
+    let connection = open_immutable_read_only_sqlite(&database_path).map_err(|error| {
+        OpenAiCodexOAuthReadContext::Benchmark.store_open_failed(&database_path, error)
+    })?;
+    let mut session = load_openai_codex_session_from_provider_credentials(
+        &connection,
+        config.oauth_account_id.as_deref(),
+        OpenAiCodexOAuthReadContext::Benchmark,
+    )?;
+    if session.is_none() {
+        session = load_openai_codex_session_from_legacy_sessions(
+            &connection,
+            config.oauth_account_id.as_deref(),
+            OpenAiCodexOAuthReadContext::Benchmark,
+        )?;
+    }
+    let session = session.ok_or_else(|| {
+        CliError::benchmark(
+            "xero_benchmark_openai_oauth_session_missing",
+            "No app-local OpenAI OAuth session was found. Log into OpenAI in Xero, then rerun the benchmark with the matching app-data root.",
+            2,
+        )
+    })?;
+
+    if session.expires_at
+        <= current_unix_timestamp().saturating_add(OPENAI_CODEX_OAUTH_REFRESH_SKEW_SECONDS)
+    {
+        return Err(CliError::benchmark(
+            "xero_benchmark_openai_oauth_session_expired",
+            "The app-local OpenAI OAuth session is expired or too close to expiry. Refresh OpenAI login in Xero before starting a benchmark run.",
+            3,
+        ));
+    }
+    Ok(session)
+}
+
+fn load_cli_openai_codex_oauth_session(
+    globals: &GlobalOptions,
+) -> Result<BenchmarkOpenAiCodexSession, CliError> {
+    let app_data_root = cli_app_data_root(globals);
+    if app_data_root
+        .components()
+        .any(|component| component.as_os_str().to_string_lossy() == ".xero")
+    {
+        return Err(CliError::user_fixable(
+            "xero_cli_legacy_state_rejected",
+            format!(
+                "OpenAI Codex runs must use OS app-data state, not legacy repo-local `.xero` state (`{}`).",
+                app_data_root.display()
+            ),
+        ));
+    }
+
+    let database_path = app_data_root.join(GLOBAL_DATABASE_FILE);
+    if !database_path.is_file() {
+        return Err(CliError::user_fixable(
+            "xero_cli_openai_oauth_store_missing",
+            format!(
+                "Could not find the app-local OpenAI OAuth credential store `{}`. Sign in to OpenAI Codex in the Xero Tauri app, then retry.",
+                database_path.display()
+            ),
+        ));
+    }
+
+    let connection = open_read_only_sqlite(&database_path).map_err(|error| {
+        OpenAiCodexOAuthReadContext::Cli.store_open_failed(&database_path, error)
+    })?;
+    let mut session = load_openai_codex_session_from_provider_credentials(
+        &connection,
+        None,
+        OpenAiCodexOAuthReadContext::Cli,
+    )?;
+    if session.is_none() {
+        session = load_openai_codex_session_from_legacy_sessions(
+            &connection,
+            None,
+            OpenAiCodexOAuthReadContext::Cli,
+        )?;
+    }
+    let session = session.ok_or_else(|| {
+        CliError::user_fixable(
+            "xero_cli_openai_oauth_session_missing",
+            "No app-local OpenAI OAuth session was found. Sign in to OpenAI Codex in the Xero Tauri app, then retry.",
+        )
+    })?;
+
+    if session.expires_at
+        <= current_unix_timestamp().saturating_add(OPENAI_CODEX_OAUTH_REFRESH_SKEW_SECONDS)
+    {
+        return Err(CliError::user_fixable(
+            "xero_cli_openai_oauth_session_expired",
+            "The app-local OpenAI OAuth session is expired or too close to expiry. Refresh OpenAI Codex login in Xero, then retry.",
+        ));
+    }
+
+    Ok(session)
+}
+
+fn open_immutable_read_only_sqlite(database_path: &Path) -> rusqlite::Result<Connection> {
+    Connection::open_with_flags(
+        sqlite_immutable_read_only_uri(database_path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+}
+
+fn open_read_only_sqlite(database_path: &Path) -> rusqlite::Result<Connection> {
+    Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+}
+
+fn sqlite_immutable_read_only_uri(database_path: &Path) -> String {
+    format!(
+        "file:{}?mode=ro&immutable=1",
+        percent_encode_sqlite_uri_path(database_path)
+    )
+}
+
+fn percent_encode_sqlite_uri_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'-' | b'_' | b'~' => {
+                encoded.push(char::from(*byte))
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
+fn load_openai_codex_session_from_provider_credentials(
+    connection: &Connection,
+    account_id: Option<&str>,
+    context: OpenAiCodexOAuthReadContext,
+) -> Result<Option<BenchmarkOpenAiCodexSession>, CliError> {
+    let sql = if account_id.is_some() {
+        "SELECT oauth_account_id, oauth_session_id, oauth_access_token, oauth_expires_at
+         FROM provider_credentials
+         WHERE provider_id = ?1 AND kind = 'oauth_session' AND oauth_account_id = ?2
+         LIMIT 1"
+    } else {
+        "SELECT oauth_account_id, oauth_session_id, oauth_access_token, oauth_expires_at
+         FROM provider_credentials
+         WHERE provider_id = ?1 AND kind = 'oauth_session'
+         ORDER BY updated_at DESC
+         LIMIT 1"
+    };
+    let mut statement = match connection.prepare(sql) {
+        Ok(statement) => statement,
+        Err(error) if is_missing_table_error(&error) => return Ok(None),
+        Err(error) => {
+            return Err(context.store_read_failed(format!(
+                "Could not prepare provider_credentials OAuth read: {error}"
+            )));
+        }
+    };
+    let mut query = if let Some(account_id) = account_id {
+        statement.query(params![OPENAI_CODEX_PROVIDER_ID, account_id])
+    } else {
+        statement.query(params![OPENAI_CODEX_PROVIDER_ID])
+    }
+    .map_err(|error| {
+        context.store_read_failed(format!(
+            "Could not query provider_credentials OAuth row: {error}"
+        ))
+    })?;
+    let Some(row) = query.next().map_err(|error| {
+        context.store_read_failed(format!(
+            "Could not read provider_credentials OAuth row: {error}"
+        ))
+    })?
+    else {
+        return Ok(None);
+    };
+    oauth_session_from_row(row, "provider_credentials", context)
+}
+
+fn load_openai_codex_session_from_legacy_sessions(
+    connection: &Connection,
+    account_id: Option<&str>,
+    context: OpenAiCodexOAuthReadContext,
+) -> Result<Option<BenchmarkOpenAiCodexSession>, CliError> {
+    let sql = if account_id.is_some() {
+        "SELECT account_id, session_id, access_token, expires_at
+         FROM openai_codex_sessions
+         WHERE account_id = ?1
+         LIMIT 1"
+    } else {
+        "SELECT account_id, session_id, access_token, expires_at
+         FROM openai_codex_sessions
+         ORDER BY updated_at DESC
+         LIMIT 1"
+    };
+    let mut statement = match connection.prepare(sql) {
+        Ok(statement) => statement,
+        Err(error) if is_missing_table_error(&error) => return Ok(None),
+        Err(error) => {
+            return Err(context.store_read_failed(format!(
+                "Could not prepare openai_codex_sessions read: {error}"
+            )));
+        }
+    };
+    let mut query = match account_id {
+        Some(account_id) => statement.query(params![account_id]),
+        None => statement.query([]),
+    }
+    .map_err(|error| {
+        context.store_read_failed(format!(
+            "Could not query openai_codex_sessions row: {error}"
+        ))
+    })?;
+    let Some(row) = query.next().map_err(|error| {
+        context.store_read_failed(format!("Could not read openai_codex_sessions row: {error}"))
+    })?
+    else {
+        return Ok(None);
+    };
+    oauth_session_from_row(row, "openai_codex_sessions", context)
+}
+
+fn oauth_session_from_row(
+    row: &rusqlite::Row<'_>,
+    source: &str,
+    context: OpenAiCodexOAuthReadContext,
+) -> Result<Option<BenchmarkOpenAiCodexSession>, CliError> {
+    let account_id = row.get::<_, Option<String>>(0).map_err(|error| {
+        context.store_decode_failed(format!("Could not decode `{source}` account id: {error}"))
+    })?;
+    let session_id = row.get::<_, Option<String>>(1).map_err(|error| {
+        context.store_decode_failed(format!("Could not decode `{source}` session id: {error}"))
+    })?;
+    let access_token = row.get::<_, Option<String>>(2).map_err(|error| {
+        context.store_decode_failed(format!("Could not decode `{source}` access token: {error}"))
+    })?;
+    let expires_at = row.get::<_, Option<i64>>(3).map_err(|error| {
+        context.store_decode_failed(format!("Could not decode `{source}` expiry: {error}"))
+    })?;
+    let Some(account_id) = account_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let Some(access_token) = access_token.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(BenchmarkOpenAiCodexSession {
+        account_id,
+        session_id,
+        access_token,
+        expires_at: expires_at.unwrap_or_default(),
+    }))
+}
+
+fn is_missing_table_error(error: &rusqlite::Error) -> bool {
+    error.to_string().contains("no such table")
+}
+
+fn normalize_openai_codex_model_id(model_id: &str) -> String {
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() {
+        provider_catalog_entry(OPENAI_CODEX_PROVIDER_ID)
+            .map(|entry| entry.default_model)
+            .unwrap_or("gpt-5.5")
+            .into()
+    } else if let Some(model) = trimmed.strip_prefix("openai_codex/") {
+        model.into()
+    } else if let Some(model) = trimmed.strip_prefix("openai/") {
+        model.into()
+    } else {
+        trimmed.into()
+    }
+}
+
+fn default_app_data_root() -> Result<PathBuf, CliError> {
+    if let Some(path) = env::var_os("XERO_APP_DATA_DIR") {
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        home_dir()
+            .map(|home| {
+                home.join("Library")
+                    .join("Application Support")
+                    .join(APP_DATA_DIRECTORY_NAME)
+            })
+            .ok_or_else(|| {
+                CliError::system_fault(
+                    "xero_cli_home_missing",
+                    "Could not determine the default Xero app-data directory.",
+                )
+            })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        default_headless_state_dir()
+            .map(|path| path.parent().map(Path::to_path_buf).unwrap_or(path))
+    }
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn resolve_benchmark_provider_execution(
+    globals: &GlobalOptions,
+    config: &BenchmarkRunConfig,
+) -> Result<CliProviderExecution, CliError> {
+    if config.provider_id == FAKE_PROVIDER_ID {
+        return Ok(CliProviderExecution {
+            profile_id: FAKE_PROVIDER_ID.into(),
+            provider_id: FAKE_PROVIDER_ID.into(),
+            model_id: config.model_id.clone(),
+            execution_mode: "fake_provider_harness",
+            execution: HeadlessProviderExecutionConfig::Fake,
+            credential_proof: Some("fixture_only_none_required".into()),
+        });
+    }
+    if config.provider_id == OPENAI_CODEX_PROVIDER_ID {
+        let session = load_benchmark_openai_codex_oauth_session(config)?;
+        let execution =
+            HeadlessProviderExecutionConfig::OpenAiCodexResponses(OpenAiCodexHeadlessConfig {
+                provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+                model_id: normalize_openai_codex_model_id(&config.model_id),
+                base_url: config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| OPENAI_CODEX_DEFAULT_BASE_URL.into()),
+                access_token: session.access_token,
+                account_id: session.account_id,
+                session_id: Some(session.session_id),
+                timeout_ms: 0,
+                workspace_root: Some(config.workspace_root.clone()),
+                allow_workspace_writes: true,
+            });
+        return Ok(CliProviderExecution {
+            profile_id: config
+                .profile_id
+                .clone()
+                .unwrap_or_else(|| "benchmark-openai-codex-oauth".into()),
+            provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+            model_id: normalize_openai_codex_model_id(&config.model_id),
+            execution_mode: "real_provider",
+            execution,
+            credential_proof: Some("app_data_openai_codex_session".into()),
+        });
+    }
+
+    ensure_owned_agent_provider(&config.provider_id)?;
+    let entry = provider_catalog_entry(&config.provider_id).ok_or_else(|| {
+        CliError::benchmark(
+            "xero_benchmark_provider_unknown",
+            format!(
+                "Provider `{}` is not in Xero's headless provider catalog.",
+                config.provider_id
+            ),
+            2,
+        )
+    })?;
+    let profile = ProviderProfile {
+        profile_id: config
+            .profile_id
+            .clone()
+            .unwrap_or_else(|| format!("benchmark-{}", config.provider_id)),
+        provider_id: config.provider_id.clone(),
+        api_key_env: config.api_key_env.clone(),
+        base_url: config.base_url.clone(),
+        recorded_at: now_timestamp(),
+    };
+    let mut execution = openai_compatible_execution_config(globals, &profile, &config.model_id)?;
+    if let HeadlessProviderExecutionConfig::OpenAiCompatible(execution_config) = &mut execution {
+        execution_config.workspace_root = Some(config.workspace_root.clone());
+    }
+    Ok(CliProviderExecution {
+        profile_id: profile.profile_id.clone(),
+        provider_id: profile.provider_id.clone(),
+        model_id: config.model_id.clone(),
+        execution_mode: "real_provider",
+        execution,
+        credential_proof: provider_credential_proof_for_entry(entry, Some(&profile)),
+    })
+}
+
+fn ensure_benchmark_project_registered(
+    globals: &GlobalOptions,
+    project_id: &str,
+    repo_root: &Path,
+) -> Result<RegisteredProject, CliError> {
+    validate_required_cli(project_id, "projectId")?;
+    ensure_not_legacy_xero_state(&cli_app_data_root(globals), "trial app-data root")?;
+    let app_data_root = cli_app_data_root(globals);
+    fs::create_dir_all(&app_data_root).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_app_data_prepare_failed",
+            format!(
+                "Could not create benchmark app-data root `{}`: {error}",
+                app_data_root.display()
+            ),
+            1,
+        )
+    })?;
+
+    let global_database = global_database_path(globals);
+    let global = Connection::open(&global_database).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_registry_open_failed",
+            format!(
+                "Could not open benchmark app-data registry `{}`: {error}",
+                global_database.display()
+            ),
+            1,
+        )
+    })?;
+    global
+        .execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS repositories (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                root_path TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_registry_schema_failed",
+                format!("Could not prepare benchmark app-data registry schema: {error}"),
+                1,
+            )
+        })?;
+    let now = now_timestamp();
+    let display_name = repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(project_id);
+    global
+        .execute(
+            "INSERT INTO projects (id, name, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at",
+            params![project_id, display_name, now],
+        )
+        .map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_registry_project_write_failed",
+                format!("Could not register benchmark project `{project_id}`: {error}"),
+                1,
+            )
+        })?;
+    global
+        .execute(
+            "INSERT INTO repositories (id, project_id, root_path, display_name, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(root_path) DO UPDATE SET
+                project_id = excluded.project_id,
+                display_name = excluded.display_name,
+                updated_at = excluded.updated_at",
+            params![
+                format!("repo-{project_id}"),
+                project_id,
+                repo_root.display().to_string(),
+                display_name,
+                now_timestamp(),
+            ],
+        )
+        .map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_registry_repository_write_failed",
+                format!(
+                    "Could not register benchmark workspace `{}`: {error}",
+                    repo_root.display()
+                ),
+                1,
+            )
+        })?;
+
+    let database_path = workspace_project_database_path(globals, project_id);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_project_state_prepare_failed",
+                format!(
+                    "Could not create project state directory `{}`: {error}",
+                    parent.display()
+                ),
+                1,
+            )
+        })?;
+    }
+    let project = Connection::open(&database_path).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_project_state_open_failed",
+            format!(
+                "Could not open benchmark project database `{}`: {error}",
+                database_path.display()
+            ),
+            1,
+        )
+    })?;
+    project
+        .execute_batch(BENCHMARK_PROJECT_SCHEMA)
+        .map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_project_schema_failed",
+                format!("Could not prepare benchmark project schema: {error}"),
+                1,
+            )
+        })?;
+    project
+        .execute(
+            "INSERT INTO projects (id, name, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at",
+            params![project_id, display_name, now_timestamp()],
+        )
+        .map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_project_write_failed",
+                format!("Could not seed benchmark project `{project_id}`: {error}"),
+                1,
+            )
+        })?;
+    drop(project);
+    let _ = open_workspace_index_database(globals, repo_root, project_id)?;
+
+    Ok(RegisteredProject {
+        project_id: project_id.into(),
+        repo_root: repo_root.to_path_buf(),
+        database_path,
+    })
+}
+
+fn ensure_not_legacy_xero_state(path: &Path, label: &str) -> Result<(), CliError> {
+    if path
+        .components()
+        .any(|component| component.as_os_str().to_string_lossy() == ".xero")
+    {
+        return Err(CliError::benchmark(
+            "xero_benchmark_legacy_state_rejected",
+            format!(
+                "The {label} `{}` is inside legacy repo-local `.xero` state.",
+                path.display()
+            ),
+            2,
+        ));
+    }
+    Ok(())
+}
+
+fn benchmark_runtime_error_to_cli(error: &xero_agent_core::CoreError) -> CliError {
+    let exit_code = if is_provider_or_auth_error(&error.code) {
+        3
+    } else {
+        4
+    };
+    CliError::benchmark(error.code.clone(), error.message.clone(), exit_code)
+}
+
+fn is_provider_or_auth_error(code: &str) -> bool {
+    let lower = code.to_ascii_lowercase();
+    lower.contains("provider") || lower.contains("credential") || lower.contains("api_key")
+}
+
+fn write_benchmark_trial_artifacts(
+    config: &BenchmarkRunConfig,
+    store: &CliAgentStore,
+    snapshot: Option<&RunSnapshot>,
+    run_error: Option<&CliError>,
+    elapsed_ms: u64,
+) -> Result<BenchmarkArtifactSummary, CliError> {
+    fs::create_dir_all(&config.output_dir).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_artifact_dir_failed",
+            format!(
+                "Could not create benchmark artifact directory `{}`: {error}",
+                config.output_dir.display()
+            ),
+            1,
+        )
+    })?;
+    let manifest_path = config.output_dir.join("manifest.json");
+    let trajectory_path = config.output_dir.join("trajectory.json");
+    let trace_path = config.output_dir.join("xero-trace.json");
+    let diff_path = config.output_dir.join("final.diff");
+    let support_bundle_path = config.output_dir.join("support-bundle.zip");
+    let stdout_path = config.output_dir.join("stdout.txt");
+    let stderr_path = config.output_dir.join("stderr.txt");
+
+    let diff = final_workspace_diff(&config.workspace_root).unwrap_or_else(|error| {
+        format!(
+            "Xero could not collect final diff for `{}`: {}\n",
+            config.workspace_root.display(),
+            error.message
+        )
+    });
+    fs::write(&diff_path, &diff).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_diff_write_failed",
+            format!("Could not write `{}`: {error}", diff_path.display()),
+            1,
+        )
+    })?;
+
+    if let Some(snapshot) = snapshot {
+        let trace = store
+            .export_trace(&snapshot.project_id, &snapshot.run_id)
+            .map_err(core_error)?;
+        write_json_file(&trace_path, &trace)?;
+        let trajectory = benchmark_trajectory_json(snapshot, &config.adapter_version);
+        write_json_file(&trajectory_path, &trajectory)?;
+    } else {
+        write_json_file(
+            &trace_path,
+            &json!({
+                "schema": "xero.benchmark.trace.v1",
+                "status": "unavailable",
+                "reason": run_error.map(|error| error.code.as_str()).unwrap_or("run_not_started"),
+            }),
+        )?;
+        write_json_file(
+            &trajectory_path,
+            &json!({
+                "schema_version": "ATIF-v1.4",
+                "session_id": config.run_id,
+                "agent": {
+                    "name": "xero",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "model_name": config.model_id,
+                },
+                "steps": [],
+                "extra": {
+                    "conversion_status": "unavailable",
+                    "xero_trace_path": "xero-trace.json",
+                },
+            }),
+        )?;
+    }
+
+    let stdout_text = benchmark_stdout_text(config, snapshot, elapsed_ms);
+    let stderr_text = run_error
+        .map(|error| format!("{}: {}\n", error.code, error.message))
+        .unwrap_or_default();
+    fs::write(&stdout_path, stdout_text).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_stdout_write_failed",
+            format!("Could not write `{}`: {error}", stdout_path.display()),
+            1,
+        )
+    })?;
+    fs::write(&stderr_path, stderr_text).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_stderr_write_failed",
+            format!("Could not write `{}`: {error}", stderr_path.display()),
+            1,
+        )
+    })?;
+
+    let manifest = benchmark_manifest_json(
+        config,
+        snapshot,
+        run_error,
+        elapsed_ms,
+        &diff,
+        &BenchmarkArtifactSummary {
+            output_dir: config.output_dir.display().to_string(),
+            manifest: "manifest.json".into(),
+            trajectory: "trajectory.json".into(),
+            xero_trace: "xero-trace.json".into(),
+            final_diff: "final.diff".into(),
+            support_bundle: "support-bundle.zip".into(),
+            stdout: "stdout.txt".into(),
+            stderr: "stderr.txt".into(),
+        },
+    );
+    write_json_file(&manifest_path, &manifest)?;
+    write_support_bundle(
+        &support_bundle_path,
+        &[
+            ("manifest.json", manifest_path.as_path()),
+            ("trajectory.json", trajectory_path.as_path()),
+            ("xero-trace.json", trace_path.as_path()),
+            ("final.diff", diff_path.as_path()),
+            ("stdout.txt", stdout_path.as_path()),
+            ("stderr.txt", stderr_path.as_path()),
+        ],
+    )?;
+
+    Ok(BenchmarkArtifactSummary {
+        output_dir: config.output_dir.display().to_string(),
+        manifest: manifest_path.display().to_string(),
+        trajectory: trajectory_path.display().to_string(),
+        xero_trace: trace_path.display().to_string(),
+        final_diff: diff_path.display().to_string(),
+        support_bundle: support_bundle_path.display().to_string(),
+        stdout: stdout_path.display().to_string(),
+        stderr: stderr_path.display().to_string(),
+    })
+}
+
+fn benchmark_manifest_json(
+    config: &BenchmarkRunConfig,
+    snapshot: Option<&RunSnapshot>,
+    run_error: Option<&CliError>,
+    elapsed_ms: u64,
+    diff: &str,
+    artifacts: &BenchmarkArtifactSummary,
+) -> JsonValue {
+    let status = if let Some(error) = run_error {
+        if is_provider_or_auth_error(&error.code) {
+            "provider_failure"
+        } else {
+            "agent_failure"
+        }
+    } else if snapshot
+        .map(|snapshot| snapshot.status == RunStatus::Completed)
+        .unwrap_or(false)
+    {
+        "completed"
+    } else {
+        "incomplete"
+    };
+    let metrics = snapshot
+        .map(|snapshot| benchmark_metrics_json(snapshot, diff, elapsed_ms, &config.workspace_root))
+        .unwrap_or_else(|| {
+            json!({
+                "wallTimeMs": elapsed_ms,
+                "costUsd": null,
+                "inputTokens": null,
+                "outputTokens": null,
+                "toolCalls": 0,
+                "commandCalls": 0,
+                "editedFiles": 0,
+                "diffBytes": diff.len(),
+                "diffLines": diff.lines().count(),
+            })
+        });
+    json!({
+        "schema": "xero.benchmark.terminal_bench_manifest.v1",
+        "benchmark": {
+            "name": config.benchmark_name,
+            "datasetId": config.dataset_id,
+            "datasetDigest": config.dataset_digest,
+            "taskId": config.task_id,
+            "attemptIndex": config.attempt_index,
+            "runDate": now_timestamp(),
+        },
+        "harness": {
+            "name": "xero",
+            "harnessVersion": config.harness_version,
+            "adapterVersion": config.adapter_version,
+            "xeroCliVersion": env!("CARGO_PKG_VERSION"),
+            "xeroSourceRevision": config.xero_source_revision.clone(),
+            "promptVersion": config.prompt_version,
+            "toolPolicyVersion": config.tool_policy_version,
+            "comparisonMode": config.comparison_mode,
+            "fakeProviderFixture": config.allow_fake_provider_fixture,
+        },
+        "runtime": {
+            "scoringPath": if config.allow_fake_provider_fixture {
+                "fixture_fake_provider_harness"
+            } else {
+                "owned_agent_core_tool_registry_v2"
+            },
+            "productionRuntimeRequired": !config.allow_fake_provider_fixture,
+            "legacyMiniHeadlessToolsAvailable": false,
+            "requiredCoreCapabilities": [
+                "provider_profile_model_resolution",
+                "app_data_project_store_access",
+                "context_package_assembly",
+                "preflight_admission",
+                "provider_loop_execution",
+                "tool_registry_v2_dispatch",
+                "command_execution",
+                "patch_editing",
+                "trace_support_bundle_export"
+            ],
+            "uiBoundDisabledCapabilities": [
+                "desktop_window_events",
+                "browser_control_requiring_ui_process",
+                "emulator_control_requiring_ui_process"
+            ],
+        },
+        "run": {
+            "projectId": config.project_id,
+            "sessionId": config.agent_session_id,
+            "runId": config.run_id,
+            "traceId": snapshot.map(|snapshot| snapshot.trace_id.as_str()),
+            "status": status,
+            "xeroRunStatus": snapshot.map(|snapshot| format!("{:?}", snapshot.status)),
+            "failureCategory": run_error.map(|error| benchmark_failure_category(&error.code)),
+            "failureCode": run_error.map(|error| error.code.as_str()),
+            "failureMessage": run_error.map(|error| error.message.as_str()),
+        },
+        "model": {
+            "provider": config.provider_id,
+            "modelId": config.model_id,
+            "endpointClass": config.endpoint_class,
+            "temperature": config.temperature,
+            "reasoningEffort": config.reasoning_effort,
+            "maxOutputTokens": config.max_output_tokens,
+            "contextBudget": config.context_budget,
+            "providerAccountClass": config.provider_account_class,
+            "credentialMode": config.credential_mode.clone().unwrap_or_else(|| {
+                if config.provider_id == OPENAI_CODEX_PROVIDER_ID {
+                    "app_openai_oauth".into()
+                } else if config.api_key_env.is_some() {
+                    "api_key_env".into()
+                } else {
+                    "none_or_local".into()
+                }
+            }),
+            "credentialEnv": config.api_key_env,
+            "oauthAppDataRootConfigured": config.oauth_app_data_root.is_some(),
+            "oauthAccountSelected": config.oauth_account_id.is_some(),
+            "baseUrlConfigured": config.base_url.is_some(),
+        },
+        "limits": {
+            "wallTimeSeconds": config.wall_time_seconds,
+            "maxTurns": config.max_turns,
+            "maxToolCalls": config.max_tool_calls,
+            "maxCommandCalls": config.max_command_calls,
+            "maxCostUsd": config.max_cost_usd,
+            "approvalMode": config.approval_mode,
+            "sandboxPolicy": config.sandbox_policy,
+            "networkPolicy": config.network_policy,
+            "enforcement": {
+                "maxTurns": "xero_runtime",
+                "wallTime": "xero_runtime_and_harbor_timeout",
+                "maxToolCalls": "xero_runtime",
+                "maxCommandCalls": "xero_runtime",
+                "maxCostUsd": "recorded_not_enforced_in_this_adapter",
+            },
+        },
+        "environment": {
+            "sandboxProvider": config.sandbox_provider,
+            "environmentId": config.environment_id,
+            "imageDigest": config.image_digest,
+            "os": std::env::consts::OS,
+            "architecture": std::env::consts::ARCH,
+            "workspaceRoot": config.workspace_root,
+            "trialAppDataRoot": config.trial_app_data_root,
+            "installedCliVersions": installed_cli_versions_json(),
+            "secretValuesRedacted": true,
+        },
+        "metrics": metrics,
+        "artifacts": artifacts,
+    })
+}
+
+fn benchmark_failure_category(code: &str) -> &'static str {
+    let lower = code.to_ascii_lowercase();
+    if lower.contains("provider") || lower.contains("credential") || lower.contains("api_key") {
+        "provider_auth_failure"
+    } else if lower.contains("timeout") || lower.contains("limit") {
+        "timeout_or_limit"
+    } else if lower.contains("sandbox") || lower.contains("policy") {
+        "policy_blocked"
+    } else {
+        "agent_or_infrastructure_failure"
+    }
+}
+
+fn benchmark_metrics_json(
+    snapshot: &RunSnapshot,
+    diff: &str,
+    elapsed_ms: u64,
+    repo_root: &Path,
+) -> JsonValue {
+    let tool_calls = snapshot
+        .messages
+        .iter()
+        .filter_map(|message| message.provider_metadata.as_ref())
+        .map(|metadata| metadata.assistant_tool_calls.len())
+        .sum::<usize>();
+    let command_calls = snapshot
+        .events
+        .iter()
+        .filter(|event| {
+            event.event_kind == RuntimeEventKind::ToolStarted
+                && event
+                    .payload
+                    .get("toolName")
+                    .and_then(JsonValue::as_str)
+                    .is_some_and(|tool| tool.contains("command"))
+        })
+        .count();
+    let mut edited_files = BTreeSet::<String>::new();
+    for event in &snapshot.events {
+        if event.event_kind == RuntimeEventKind::FileChanged {
+            if let Some(path) = event.payload.get("path").and_then(JsonValue::as_str) {
+                edited_files.insert(path.into());
+            }
+        }
+    }
+    for change in git_name_status(repo_root, false).unwrap_or_default() {
+        edited_files.insert(change.path);
+    }
+    json!({
+        "wallTimeMs": elapsed_ms,
+        "costUsd": null,
+        "inputTokens": null,
+        "outputTokens": null,
+        "toolCalls": tool_calls,
+        "commandCalls": command_calls,
+        "editedFiles": edited_files.len(),
+        "editedFilePaths": edited_files,
+        "diffBytes": diff.len(),
+        "diffLines": diff.lines().count(),
+    })
+}
+
+fn benchmark_trajectory_json(snapshot: &RunSnapshot, adapter_version: &str) -> JsonValue {
+    let mut steps = Vec::new();
+    for (index, message) in snapshot.messages.iter().enumerate() {
+        let source = match message.role {
+            MessageRole::Assistant => "agent",
+            MessageRole::User => "user",
+            MessageRole::System => "system",
+            MessageRole::Tool => "environment",
+            MessageRole::Developer => "system",
+        };
+        let mut step = json!({
+            "step_id": index + 1,
+            "timestamp": message.created_at,
+            "source": source,
+            "message": message.content,
+        });
+        if message.role == MessageRole::Assistant {
+            step["model_name"] = json!(snapshot.model_id);
+        }
+        if let Some(metadata) = &message.provider_metadata {
+            if !metadata.assistant_tool_calls.is_empty() {
+                step["tool_calls"] = json!(metadata
+                    .assistant_tool_calls
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "tool_call_id": call.tool_call_id,
+                            "function_name": call.provider_tool_name,
+                            "arguments": call.arguments,
+                        })
+                    })
+                    .collect::<Vec<_>>());
+            }
+        }
+        steps.push(step);
+    }
+    let step_count = steps.len();
+    json!({
+        "schema_version": "ATIF-v1.4",
+        "session_id": snapshot.run_id,
+        "agent": {
+            "name": "xero",
+            "version": env!("CARGO_PKG_VERSION"),
+            "model_name": snapshot.model_id,
+            "extra": {
+                "adapter_version": adapter_version,
+            },
+        },
+        "steps": steps,
+        "final_metrics": {
+            "total_steps": step_count,
+        },
+        "extra": {
+            "conversion_status": "partial_xero_trace_is_lossless",
+            "xero_trace_path": "xero-trace.json",
+            "trace_id": snapshot.trace_id,
+        },
+    })
+}
+
+fn benchmark_stdout_text(
+    config: &BenchmarkRunConfig,
+    snapshot: Option<&RunSnapshot>,
+    elapsed_ms: u64,
+) -> String {
+    match snapshot {
+        Some(snapshot) => format!(
+            "Xero benchmark run {} finished with status {:?} for task {} in {} ms.\n",
+            snapshot.run_id, snapshot.status, config.task_id, elapsed_ms
+        ),
+        None => format!(
+            "Xero benchmark run {} did not start for task {}.\n",
+            config.run_id, config.task_id
+        ),
+    }
+}
+
+fn final_workspace_diff(repo_root: &Path) -> Result<String, CliError> {
+    let probe = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .output();
+    match probe {
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "true" =>
+        {
+            final_workspace_git_diff(repo_root)
+        }
+        Ok(output) => {
+            final_workspace_file_listing(repo_root, String::from_utf8_lossy(&output.stderr).trim())
+        }
+        Err(error) => final_workspace_file_listing(repo_root, &format!("git unavailable: {error}")),
+    }
+}
+
+fn final_workspace_git_diff(repo_root: &Path) -> Result<String, CliError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("diff")
+        .arg("--binary")
+        .arg("--no-ext-diff")
+        .output()
+        .map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_git_diff_failed",
+                format!(
+                    "Could not run git diff in `{}`: {error}",
+                    repo_root.display()
+                ),
+                1,
+            )
+        })?;
+    if !output.status.success() {
+        return Err(CliError::benchmark(
+            "xero_benchmark_git_diff_failed",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            1,
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn final_workspace_file_listing(repo_root: &Path, reason: &str) -> Result<String, CliError> {
+    let mut entries = Vec::new();
+    collect_workspace_file_listing(repo_root, repo_root, &mut entries, 5_000)?;
+    entries.sort();
+    let reason = if reason.is_empty() {
+        "git diff is unavailable for this workspace"
+    } else {
+        reason
+    };
+    let mut output = format!("# Non-git workspace final file listing\n# Reason: {reason}\n");
+    for entry in entries {
+        output.push_str(&entry);
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn collect_workspace_file_listing(
+    root: &Path,
+    dir: &Path,
+    entries: &mut Vec<String>,
+    limit: usize,
+) -> Result<(), CliError> {
+    if entries.len() >= limit {
+        return Ok(());
+    }
+    let read_dir = fs::read_dir(dir).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_workspace_listing_failed",
+            format!(
+                "Could not list workspace directory `{}`: {error}",
+                dir.display()
+            ),
+            1,
+        )
+    })?;
+    for entry in read_dir {
+        if entries.len() >= limit {
+            entries.push(format!("... listing truncated at {limit} entries"));
+            break;
+        }
+        let entry = entry.map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_workspace_listing_failed",
+                format!("Could not read a workspace directory entry: {error}"),
+                1,
+            )
+        })?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|value| matches!(value, ".git" | ".xero"))
+        {
+            continue;
+        }
+        let metadata = entry.metadata().map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_workspace_listing_failed",
+                format!(
+                    "Could not stat workspace path `{}`: {error}",
+                    path.display()
+                ),
+                1,
+            )
+        })?;
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(path.as_path())
+            .display()
+            .to_string();
+        if metadata.is_dir() {
+            entries.push(format!("dir  - {relative}/"));
+            collect_workspace_file_listing(root, &path, entries, limit)?;
+        } else if metadata.is_file() {
+            entries.push(format!("file {:>10} {relative}", metadata.len()));
+        } else {
+            entries.push(format!("other - {relative}"));
+        }
+    }
+    Ok(())
+}
+
+fn write_support_bundle(path: &Path, files: &[(&str, &Path)]) -> Result<(), CliError> {
+    let file = fs::File::create(path).map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_support_bundle_write_failed",
+            format!(
+                "Could not create support bundle `{}`: {error}",
+                path.display()
+            ),
+            1,
+        )
+    })?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, file_path) in files {
+        let bytes = fs::read(file_path).map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_support_bundle_read_failed",
+                format!(
+                    "Could not read support bundle source `{}`: {error}",
+                    file_path.display()
+                ),
+                1,
+            )
+        })?;
+        zip.start_file(*name, options).map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_support_bundle_write_failed",
+                format!("Could not add `{name}` to support bundle: {error}"),
+                1,
+            )
+        })?;
+        zip.write_all(&bytes).map_err(|error| {
+            CliError::benchmark(
+                "xero_benchmark_support_bundle_write_failed",
+                format!("Could not write `{name}` to support bundle: {error}"),
+                1,
+            )
+        })?;
+    }
+    zip.finish().map_err(|error| {
+        CliError::benchmark(
+            "xero_benchmark_support_bundle_write_failed",
+            format!(
+                "Could not finish support bundle `{}`: {error}",
+                path.display()
+            ),
+            1,
+        )
+    })?;
+    Ok(())
+}
+
+fn installed_cli_versions_json() -> JsonValue {
+    json!({
+        "xero": env!("CARGO_PKG_VERSION"),
+        "git": command_version("git", &["--version"]),
+        "python3": command_version("python3", &["--version"]),
+        "docker": command_version("docker", &["--version"]),
+        "uvx": command_version("uvx", &["--version"]),
+    })
+}
+
+fn command_version(program: &str, args: &[&str]) -> Option<String> {
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                (!stdout.is_empty())
+                    .then_some(stdout)
+                    .or_else(|| (!stderr.is_empty()).then_some(stderr))
+            } else {
+                None
+            }
+        })
 }
 
 fn command_agent_host(
@@ -389,6 +2540,11 @@ fn command_agent_host(
     }
 
     let adapter = external_agent_adapter(&adapter_id)?;
+    if adapter.adapter_id == "cursor" {
+        return Err(CliError::usage(
+            "Use `xero agent cursor` for the Cursor SDK adapter so Xero can attach MCP tools, persistence, and reconciliation.",
+        ));
+    }
     let Some(approval_source) = external_agent_approval_source(allow_subprocess) else {
         return Err(CliError::user_fixable(
             "xero_cli_external_agent_approval_required",
@@ -437,6 +2593,184 @@ fn command_agent_host(
         text,
         json!({
             "kind": "externalAgentHost",
+            "storePath": store.path(),
+            "snapshot": snapshot,
+        }),
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorNativeToolPolicy {
+    Recover,
+    Warn,
+    FailOnUnrecoverableNativeMutation,
+    FailOnAnyNativeTool,
+}
+
+impl CursorNativeToolPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Recover => "recover",
+            Self::Warn => "warn",
+            Self::FailOnUnrecoverableNativeMutation => "fail_on_unrecoverable_native_mutation",
+            Self::FailOnAnyNativeTool => "fail_on_any_native_tool",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorContainmentMode {
+    Copy,
+    Live,
+}
+
+impl CursorContainmentMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Live => "live",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CursorAgentRunRequest {
+    project_id: String,
+    agent_session_id: String,
+    run_id: String,
+    prompt: String,
+    model_id: String,
+    repo_root: PathBuf,
+    bridge_path: PathBuf,
+    xero_cli_path: PathBuf,
+    api_key_env: Option<String>,
+    timeout_ms: u64,
+    max_tool_calls: Option<u64>,
+    max_command_calls: Option<u64>,
+    runtime_agent_id: String,
+    mcp_mode: ToolRegistryMcpMode,
+    native_tool_policy: CursorNativeToolPolicy,
+    containment: CursorContainmentMode,
+    fixture: Option<PathBuf>,
+    approval_source: ExternalAgentApprovalSource,
+}
+
+fn command_agent_cursor(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    if take_help(&args) {
+        return Ok(response(
+            &globals,
+            "Usage: xero agent cursor [PROMPT] [--repo PATH] [--project-id ID] [--model MODEL] [--mode observe-only|workspace-write|command-enabled] [--allow-writes] [--allow-commands] --allow-subprocess\nRuns Cursor through the Cursor SDK bridge as a Xero external-agent adapter.",
+            json!({ "command": "agent cursor" }),
+        ));
+    }
+    let prompt_flag = take_option(&mut args, "--prompt")?;
+    let repo = take_option(&mut args, "--repo")?.unwrap_or_else(|| ".".into());
+    let project_id = take_option(&mut args, "--project-id")?;
+    let agent_session_id =
+        take_option(&mut args, "--session-id")?.unwrap_or_else(|| generate_id("cursor-session"));
+    let run_id = take_option(&mut args, "--run-id")?.unwrap_or_else(|| generate_id("cursor-run"));
+    let model_id =
+        take_option(&mut args, "--model")?.unwrap_or_else(|| CURSOR_DEFAULT_MODEL_ID.into());
+    let api_key_env = take_option(&mut args, "--api-key-env")?;
+    let timeout_ms = take_option(&mut args, "--timeout-ms")?
+        .map(|value| parse_positive_u64(&value, "--timeout-ms"))
+        .transpose()?
+        .unwrap_or(EXTERNAL_AGENT_DEFAULT_TIMEOUT_MS);
+    let max_tool_calls = take_option(&mut args, "--max-tool-calls")?
+        .map(|value| parse_positive_u64(&value, "--max-tool-calls"))
+        .transpose()?;
+    let max_command_calls = take_option(&mut args, "--max-command-calls")?
+        .map(|value| parse_positive_u64(&value, "--max-command-calls"))
+        .transpose()?;
+    let runtime_agent_id =
+        take_option(&mut args, "--runtime-agent-id")?.unwrap_or_else(|| "engineer".into());
+    let mut mcp_mode = take_option(&mut args, "--mode")?
+        .map(|value| parse_tool_registry_mcp_mode(&value))
+        .transpose()?
+        .unwrap_or(ToolRegistryMcpMode::ObserveOnly);
+    if take_bool_flag(&mut args, "--allow-writes") && mcp_mode == ToolRegistryMcpMode::ObserveOnly {
+        mcp_mode = ToolRegistryMcpMode::WorkspaceWrite;
+    }
+    if take_bool_flag(&mut args, "--allow-commands") {
+        mcp_mode = ToolRegistryMcpMode::CommandEnabled;
+    }
+    if matches!(
+        runtime_agent_id.as_str(),
+        "ask" | "plan" | "crawl" | "agent_create"
+    ) {
+        mcp_mode = ToolRegistryMcpMode::ObserveOnly;
+    }
+    let native_tool_policy = take_option(&mut args, "--native-tool-policy")?
+        .map(|value| parse_cursor_native_tool_policy(&value))
+        .transpose()?
+        .unwrap_or(CursorNativeToolPolicy::Recover);
+    let containment = take_option(&mut args, "--containment")?
+        .map(|value| parse_cursor_containment_mode(&value))
+        .transpose()?
+        .unwrap_or(CursorContainmentMode::Copy);
+    let bridge_path = take_option(&mut args, "--bridge-path")?
+        .map(PathBuf::from)
+        .unwrap_or_else(default_cursor_bridge_path);
+    let xero_cli_path = take_option(&mut args, "--xero-cli-path")?
+        .map(PathBuf::from)
+        .unwrap_or_else(default_xero_cli_path);
+    let fixture = take_option(&mut args, "--fixture")?.map(PathBuf::from);
+    let allow_subprocess = take_bool_flag(&mut args, "--allow-subprocess");
+    reject_unknown_options(&args)?;
+
+    let prompt = prompt_flag
+        .or_else(|| (!args.is_empty()).then(|| args.join(" ")))
+        .ok_or_else(|| CliError::usage("Missing prompt. Use `xero agent cursor \"...\"`."))?;
+    if prompt.trim().is_empty() {
+        return Err(CliError::usage("Prompt cannot be empty."));
+    }
+    let Some(approval_source) = external_agent_approval_source(allow_subprocess) else {
+        return Err(CliError::user_fixable(
+            "xero_cli_external_agent_approval_required",
+            "Cursor SDK hosting launches a local Node subprocess. Re-run with `--allow-subprocess` or set XERO_EXTERNAL_AGENT_APPROVED=1 after reviewing the bridge command.",
+        ));
+    };
+    let repo_root = canonicalize_existing_path(&repo)?;
+    let project_id = project_id.unwrap_or_else(|| stable_project_id_for_repo_root(&repo_root));
+    let request = CursorAgentRunRequest {
+        project_id,
+        agent_session_id,
+        run_id,
+        prompt,
+        model_id,
+        repo_root,
+        bridge_path,
+        xero_cli_path,
+        api_key_env,
+        timeout_ms,
+        max_tool_calls,
+        max_command_calls,
+        runtime_agent_id,
+        mcp_mode,
+        native_tool_policy,
+        containment,
+        fixture,
+        approval_source,
+    };
+    let store = open_cursor_agent_store(&globals, &request.project_id)?;
+    let snapshot = host_cursor_agent_run(&globals, &store, request)?;
+    let text = format!(
+        "Cursor run {} finished with status {:?}.\nProvider: {}/{}\nTrace: {}\nState: {}",
+        snapshot.run_id,
+        snapshot.status,
+        snapshot.provider_id,
+        snapshot.model_id,
+        snapshot.trace_id,
+        store.path().display()
+    );
+    Ok(response(
+        &globals,
+        text,
+        json!({
+            "kind": "cursorAgentRun",
             "storePath": store.path(),
             "snapshot": snapshot,
         }),
@@ -570,6 +2904,277 @@ fn command_conversation_compact(
     ))
 }
 
+fn command_conversation_continue(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let prompt = take_option(&mut args, "--prompt")?;
+    let run_id = take_run_id_arg(&mut args)?;
+    let prompt = prompt
+        .or_else(|| (!args.is_empty()).then(|| args.join(" ")))
+        .ok_or_else(|| CliError::usage("Missing continuation prompt."))?;
+    reject_unknown_options(&args)?;
+    let (store, snapshot) = load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+    let (runtime, provider_preflight) =
+        runtime_for_existing_snapshot(&globals, store, &snapshot, true)?;
+    let continued = runtime
+        .continue_run(ContinueRunRequest {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            prompt,
+        })
+        .map_err(core_error)?;
+    Ok(response(
+        &globals,
+        format!(
+            "Continued run {} with status {:?}.",
+            continued.run_id, continued.status
+        ),
+        json!({
+            "kind": "conversationContinue",
+            "providerPreflight": provider_preflight,
+            "snapshot": continued,
+        }),
+    ))
+}
+
+fn command_conversation_answer(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let text = take_option(&mut args, "--text")?;
+    let run_id = take_run_id_arg(&mut args)?;
+    let text = text
+        .or_else(|| (!args.is_empty()).then(|| args.join(" ")))
+        .ok_or_else(|| CliError::usage("Missing answer text."))?;
+    reject_unknown_options(&args)?;
+    let (store, snapshot) = load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+    let (runtime, provider_preflight) =
+        runtime_for_existing_snapshot(&globals, store, &snapshot, true)?;
+    let answered = runtime
+        .submit_user_input(UserInputRequest {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            text,
+        })
+        .map_err(core_error)?;
+    Ok(response(
+        &globals,
+        format!(
+            "Answered run {} with status {:?}.",
+            answered.run_id, answered.status
+        ),
+        json!({
+            "kind": "conversationAnswer",
+            "providerPreflight": provider_preflight,
+            "snapshot": answered,
+        }),
+    ))
+}
+
+fn command_conversation_approval(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+    approve: bool,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let action_id = take_option(&mut args, "--action-id")?
+        .ok_or_else(|| CliError::usage("Missing `--action-id`."))?;
+    let response_text = take_option(&mut args, "--response")?;
+    let run_id = take_run_id_arg(&mut args)?;
+    reject_unknown_options(&args)?;
+    let (store, snapshot) = load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+    let (runtime, provider_preflight) =
+        runtime_for_existing_snapshot(&globals, store, &snapshot, true)?;
+    let request = ApprovalDecisionRequest {
+        project_id: snapshot.project_id.clone(),
+        run_id: snapshot.run_id.clone(),
+        action_id,
+        response: response_text,
+    };
+    let updated = if approve {
+        runtime.approve_action(request)
+    } else {
+        runtime.reject_action(request)
+    }
+    .map_err(core_error)?;
+    Ok(response(
+        &globals,
+        format!(
+            "{} approval for run {}. Status {:?}.",
+            if approve { "Accepted" } else { "Rejected" },
+            updated.run_id,
+            updated.status
+        ),
+        json!({
+            "kind": if approve { "conversationApprove" } else { "conversationReject" },
+            "providerPreflight": provider_preflight,
+            "snapshot": updated,
+        }),
+    ))
+}
+
+fn command_conversation_cancel(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let run_id = take_run_id_arg(&mut args)?;
+    reject_unknown_options(&args)?;
+    let (store, snapshot) = load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+    let (runtime, _provider_preflight) =
+        runtime_for_existing_snapshot(&globals, store, &snapshot, false)?;
+    let cancelled = runtime
+        .cancel_run(CancelRunRequest {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+        })
+        .map_err(core_error)?;
+    Ok(response(
+        &globals,
+        format!("Cancelled run {}.", cancelled.run_id),
+        json!({ "kind": "conversationCancel", "snapshot": cancelled }),
+    ))
+}
+
+fn command_conversation_resume(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let response_text = take_option(&mut args, "--response")?;
+    let run_id = take_run_id_arg(&mut args)?;
+    let response_text = response_text
+        .or_else(|| (!args.is_empty()).then(|| args.join(" ")))
+        .ok_or_else(|| CliError::usage("Missing resume response."))?;
+    reject_unknown_options(&args)?;
+    let (store, snapshot) = load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+    let (runtime, provider_preflight) =
+        runtime_for_existing_snapshot(&globals, store, &snapshot, true)?;
+    let resumed = runtime
+        .resume_run(ResumeRunRequest {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            response: response_text,
+        })
+        .map_err(core_error)?;
+    Ok(response(
+        &globals,
+        format!(
+            "Resumed run {} with status {:?}.",
+            resumed.run_id, resumed.status
+        ),
+        json!({
+            "kind": "conversationResume",
+            "providerPreflight": provider_preflight,
+            "snapshot": resumed,
+        }),
+    ))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationSearchHit {
+    project_id: String,
+    run_id: String,
+    agent_session_id: String,
+    source: String,
+    index: usize,
+    role_or_kind: String,
+    preview: String,
+}
+
+fn command_conversation_search(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let run_id = take_option(&mut args, "--run-id")?;
+    let include_events = take_bool_flag(&mut args, "--include-events");
+    let query = take_option(&mut args, "--query")?
+        .or_else(|| (!args.is_empty()).then(|| args.join(" ")))
+        .ok_or_else(|| CliError::usage("Missing search query."))?;
+    reject_unknown_options(&args)?;
+    let snapshots = if let Some(run_id) = run_id {
+        let (_store, snapshot) =
+            load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+        vec![snapshot]
+    } else {
+        list_conversation_runs(&globals, project_id.as_deref())?
+            .into_iter()
+            .filter_map(|run| {
+                load_conversation_snapshot(&globals, Some(&run.project_id), &run.run_id)
+                    .ok()
+                    .map(|(_store, snapshot)| snapshot)
+            })
+            .collect()
+    };
+    let hits = search_conversation_snapshots(&snapshots, &query, include_events);
+    let text = if hits.is_empty() {
+        "No transcript matches found.".into()
+    } else {
+        hits.iter()
+            .map(|hit| {
+                format!(
+                    "{} {} {}[{}] {}",
+                    hit.project_id, hit.run_id, hit.source, hit.index, hit.preview
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(response(
+        &globals,
+        text,
+        json!({ "kind": "conversationSearch", "query": query, "includeEvents": include_events, "hits": hits }),
+    ))
+}
+
+fn command_conversation_export(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    let project_id = take_option(&mut args, "--project-id")?;
+    let format = take_option(&mut args, "--format")?.unwrap_or_else(|| "markdown".into());
+    let output = take_option(&mut args, "--output")?;
+    let run_id = take_run_id_arg(&mut args)?;
+    reject_unknown_options(&args)?;
+    let (store, snapshot) = load_conversation_snapshot(&globals, project_id.as_deref(), &run_id)?;
+    let trace = store
+        .export_trace(&snapshot.project_id, &snapshot.run_id)
+        .map_err(core_error)?;
+    let payload = match format.as_str() {
+        "markdown" | "md" => trace.to_markdown_summary().map_err(core_error)?,
+        "json" => serde_json::to_string_pretty(&trace).map_err(|error| {
+            CliError::system_fault(
+                "xero_cli_conversation_export_encode_failed",
+                format!("Could not encode trace JSON: {error}"),
+            )
+        })?,
+        other => {
+            return Err(CliError::usage(format!(
+                "Unsupported export format `{other}`. Use markdown or json."
+            )));
+        }
+    };
+    if let Some(path) = output.as_deref() {
+        write_text_output(path, &payload)?;
+    }
+    Ok(response(
+        &globals,
+        payload.clone(),
+        json!({
+            "kind": "conversationExport",
+            "format": format,
+            "outputPath": output,
+            "bytes": payload.len(),
+            "snapshot": snapshot,
+        }),
+    ))
+}
+
 fn command_conversation_retry(
     globals: GlobalOptions,
     args: Vec<String>,
@@ -597,7 +3202,10 @@ fn command_conversation_retry(
                 model_id: provider.model_id,
             },
             controls: Some(RunControls {
-                runtime_agent_id: "engineer".into(),
+                runtime_agent_id: snapshot.runtime_agent_id.clone(),
+                agent_definition_id: Some(snapshot.agent_definition_id.clone()),
+                agent_definition_version: Some(snapshot.agent_definition_version),
+                thinking_effort: None,
                 approval_mode: if globals.ci { "strict" } else { "on_request" }.into(),
                 plan_mode_required: globals.ci,
             }),
@@ -737,7 +3345,7 @@ fn command_provider_login(
         .is_some_and(|entry| entry.catalog_kind == "external_agent_adapter")
     {
         return Err(CliError::usage(
-            "External agent adapters do not use provider credentials. Launch them with `xero agent host --adapter ... --allow-subprocess`.",
+            "External agent adapters do not use provider profiles. Launch Cursor with `xero agent cursor --allow-subprocess`; launch other adapters with `xero agent host --adapter ... --allow-subprocess`.",
         ));
     }
     let profile_id = profile_id.unwrap_or_else(|| format!("{provider_id}-headless"));
@@ -759,6 +3367,57 @@ fn command_provider_login(
         &globals,
         text,
         json!({ "kind": "providerLogin", "profile": profile }),
+    ))
+}
+
+fn command_provider_remove(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    if take_help(&args) {
+        return Ok(response(
+            &globals,
+            "Usage: xero provider remove [--profile PROFILE_ID] [PROVIDER_ID]\nRemoves a headless provider profile from the CLI app-data config. Secrets remain in environment variables.",
+            json!({ "command": "provider remove" }),
+        ));
+    }
+    let profile_id = take_option(&mut args, "--profile")?;
+    reject_unknown_options(&args)?;
+    let provider_id = args.first().cloned();
+    let mut config = load_config(&globals)?;
+    let removed = if let Some(profile_id) = profile_id {
+        config.providers.remove(&profile_id)
+    } else if let Some(provider_id) = provider_id {
+        let profile_id = config
+            .providers
+            .iter()
+            .find_map(|(id, profile)| (profile.provider_id == provider_id).then(|| id.clone()))
+            .ok_or_else(|| {
+                CliError::user_fixable(
+                    "xero_cli_provider_profile_missing",
+                    format!("No headless profile is configured for provider `{provider_id}`."),
+                )
+            })?;
+        config.providers.remove(&profile_id)
+    } else {
+        return Err(CliError::usage(
+            "Missing provider id or `--profile PROFILE_ID` for `xero provider remove`.",
+        ));
+    };
+    let removed = removed.ok_or_else(|| {
+        CliError::user_fixable(
+            "xero_cli_provider_profile_missing",
+            "The requested headless provider profile is not configured.",
+        )
+    })?;
+    save_config(&globals, &config)?;
+    Ok(response(
+        &globals,
+        format!(
+            "Removed headless provider profile `{}` for `{}`.",
+            removed.profile_id, removed.provider_id
+        ),
+        json!({ "kind": "providerRemove", "profile": removed }),
     ))
 }
 
@@ -1166,6 +3825,80 @@ fn command_mcp_login(
     ))
 }
 
+fn command_mcp_remove(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, CliError> {
+    if take_help(&args) {
+        return Ok(response(
+            &globals,
+            "Usage: xero mcp remove NAME\nRemoves a headless MCP server from the CLI app-data config.",
+            json!({ "command": "mcp remove" }),
+        ));
+    }
+    reject_unknown_options(&args)?;
+    let name = args
+        .first()
+        .cloned()
+        .ok_or_else(|| CliError::usage("Missing MCP server name. Use `xero mcp remove name`."))?;
+    let mut config = load_config(&globals)?;
+    let removed = config.mcp_servers.remove(&name).ok_or_else(|| {
+        CliError::user_fixable(
+            "xero_cli_mcp_server_not_found",
+            format!("MCP server `{name}` is not configured."),
+        )
+    })?;
+    save_config(&globals, &config)?;
+    Ok(response(
+        &globals,
+        format!("Removed headless MCP server `{name}`."),
+        json!({ "kind": "mcpRemove", "server": removed }),
+    ))
+}
+
+fn command_mcp_status(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, CliError> {
+    if take_help(&args) {
+        return Ok(response(
+            &globals,
+            "Usage: xero mcp status\nReports configured headless MCP server readiness from the CLI app-data config.",
+            json!({ "command": "mcp status" }),
+        ));
+    }
+    reject_unknown_options(&args)?;
+    let config = load_config(&globals)?;
+    let servers = config
+        .mcp_servers
+        .values()
+        .map(|server| {
+            json!({
+                "name": server.name,
+                "command": server.command,
+                "argCount": server.args.len(),
+                "envCount": server.env.len(),
+                "hasTokenEnv": server.token_env.is_some(),
+                "configured": true,
+            })
+        })
+        .collect::<Vec<_>>();
+    let text = if servers.is_empty() {
+        "No headless MCP servers configured.".into()
+    } else {
+        servers
+            .iter()
+            .map(|server| {
+                format!(
+                    "{} configured token_env={}",
+                    server["name"].as_str().unwrap_or_default(),
+                    server["hasTokenEnv"].as_bool().unwrap_or(false)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(response(
+        &globals,
+        text,
+        json!({ "kind": "mcpStatus", "servers": servers }),
+    ))
+}
+
 fn command_mcp_serve(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, CliError> {
     if take_help(&args) {
         return Ok(response(
@@ -1184,6 +3917,140 @@ fn command_mcp_serve(globals: GlobalOptions, args: Vec<String>) -> Result<CliRes
         &globals,
         json!({ "kind": "mcpServe", "transport": "stdio" }),
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolRegistryMcpMode {
+    ObserveOnly,
+    WorkspaceWrite,
+    CommandEnabled,
+}
+
+impl ToolRegistryMcpMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ObserveOnly => "observe-only",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::CommandEnabled => "command-enabled",
+        }
+    }
+
+    fn allow_writes(self) -> bool {
+        matches!(self, Self::WorkspaceWrite | Self::CommandEnabled)
+    }
+
+    fn allow_commands(self) -> bool {
+        matches!(self, Self::CommandEnabled)
+    }
+}
+
+fn command_mcp_serve_tools(
+    globals: GlobalOptions,
+    mut args: Vec<String>,
+) -> Result<CliResponse, CliError> {
+    if take_help(&args) {
+        return Ok(response(
+            &globals,
+            "Usage: xero mcp serve-tools --project-id PROJECT --run-id RUN --session-id SESSION --repo REPO [--mode observe-only|workspace-write|command-enabled]\nRuns Xero's Tool Registry V2 MCP server over stdio for external-agent adapters.",
+            json!({
+                "command": "mcp serve-tools",
+                "transport": "stdio",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+            }),
+        ));
+    }
+
+    let self_test = take_bool_flag(&mut args, "--self-test");
+    let project_id = take_option(&mut args, "--project-id")?;
+    let run_id = take_option(&mut args, "--run-id")?;
+    let session_id = take_option(&mut args, "--session-id")?;
+    let repo = take_option(&mut args, "--repo")?.unwrap_or_else(|| ".".into());
+    let runtime_agent_id =
+        take_option(&mut args, "--runtime-agent-id")?.unwrap_or_else(|| "engineer".into());
+    let mut mode = take_option(&mut args, "--mode")?
+        .map(|value| parse_tool_registry_mcp_mode(&value))
+        .transpose()?
+        .unwrap_or(ToolRegistryMcpMode::ObserveOnly);
+    if take_bool_flag(&mut args, "--allow-writes") && mode == ToolRegistryMcpMode::ObserveOnly {
+        mode = ToolRegistryMcpMode::WorkspaceWrite;
+    }
+    if take_bool_flag(&mut args, "--allow-commands") {
+        mode = ToolRegistryMcpMode::CommandEnabled;
+    }
+    reject_unknown_options(&args)?;
+
+    if matches!(
+        runtime_agent_id.as_str(),
+        "ask" | "plan" | "crawl" | "agent_create"
+    ) {
+        mode = ToolRegistryMcpMode::ObserveOnly;
+    }
+
+    let repo_root = canonicalize_existing_path(&repo)?;
+    let runtime = HeadlessProductionToolRuntime::new_with_modes(
+        Some(&repo_root),
+        mode.allow_writes(),
+        mode.allow_commands(),
+        vec![globals.state_dir.display().to_string()],
+    )
+    .map_err(core_error)?;
+
+    if self_test {
+        let descriptors = runtime.descriptors();
+        return Ok(response(
+            &globals,
+            format!(
+                "Tool Registry MCP self-test passed with {} tool(s) in {} mode.",
+                descriptors.len(),
+                mode.as_str()
+            ),
+            json!({
+                "kind": "mcpServeToolsSelfTest",
+                "repoRoot": repo_root,
+                "mode": mode.as_str(),
+                "tools": descriptors.iter().map(|descriptor| descriptor.name.clone()).collect::<Vec<_>>(),
+            }),
+        ));
+    }
+
+    let project_id =
+        project_id.ok_or_else(|| CliError::usage("`--project-id` is required for serve-tools."))?;
+    let run_id =
+        run_id.ok_or_else(|| CliError::usage("`--run-id` is required for serve-tools."))?;
+    let session_id =
+        session_id.ok_or_else(|| CliError::usage("`--session-id` is required for serve-tools."))?;
+    let store = open_cursor_agent_store(&globals, &project_id)?;
+    let snapshot = store.load_run(&project_id, &run_id).map_err(core_error)?;
+    record_external_tool_registry_snapshot(&store, &snapshot, 0, &runtime, mode)?;
+
+    run_mcp_tools_stdio_server(ToolRegistryMcpServerConfig {
+        project_id,
+        run_id,
+        session_id,
+        repo_root,
+        app_data_roots: vec![globals.state_dir.display().to_string()],
+        mode,
+        store,
+    })?;
+    Ok(silent_response(
+        &globals,
+        json!({ "kind": "mcpServeTools", "transport": "stdio", "mode": mode.as_str() }),
+    ))
+}
+
+fn parse_tool_registry_mcp_mode(value: &str) -> Result<ToolRegistryMcpMode, CliError> {
+    match value.trim() {
+        "observe-only" | "observe_only" | "observe" | "read-only" | "read_only" => {
+            Ok(ToolRegistryMcpMode::ObserveOnly)
+        }
+        "workspace-write" | "workspace_write" | "write" => Ok(ToolRegistryMcpMode::WorkspaceWrite),
+        "command-enabled" | "command_enabled" | "command" => {
+            Ok(ToolRegistryMcpMode::CommandEnabled)
+        }
+        other => Err(CliError::usage(format!(
+            "Unknown serve-tools mode `{other}`. Use observe-only, workspace-write, or command-enabled."
+        ))),
+    }
 }
 
 fn command_workspace_index(
@@ -1472,7 +4339,7 @@ fn load_conversation_snapshot(
             return Err(core_error(error));
         }
     };
-    if snapshot.provider_id != FAKE_PROVIDER_ID {
+    if snapshot.provider_id != FAKE_PROVIDER_ID && !snapshot.provider_id.starts_with("external_") {
         return Err(CliError::user_fixable(
             "xero_cli_harness_store_real_run_rejected",
             format!(
@@ -1483,6 +4350,124 @@ fn load_conversation_snapshot(
         ));
     }
     Ok((CliAgentStore::Harness(harness), snapshot))
+}
+
+fn runtime_for_existing_snapshot(
+    globals: &GlobalOptions,
+    store: CliAgentStore,
+    snapshot: &RunSnapshot,
+    with_preflight: bool,
+) -> Result<
+    (
+        HeadlessProviderRuntime<CliAgentStore>,
+        Option<ProviderPreflightSnapshot>,
+    ),
+    CliError,
+> {
+    let provider = resolve_runtime_for_existing_snapshot(globals, snapshot)?;
+    let provider_preflight = if with_preflight {
+        Some(ensure_cli_provider_preflight_for_run(globals, &provider)?)
+    } else {
+        None
+    };
+    Ok((
+        HeadlessProviderRuntime::new(
+            store,
+            provider.execution,
+            HeadlessRuntimeOptions {
+                ci_mode: globals.ci,
+                provider_preflight: provider_preflight.clone(),
+                ..HeadlessRuntimeOptions::default()
+            },
+        ),
+        provider_preflight,
+    ))
+}
+
+fn take_run_id_arg(args: &mut Vec<String>) -> Result<String, CliError> {
+    if args.is_empty() {
+        Err(CliError::usage("Missing run id."))
+    } else {
+        Ok(args.remove(0))
+    }
+}
+
+fn search_conversation_snapshots(
+    snapshots: &[RunSnapshot],
+    query: &str,
+    include_events: bool,
+) -> Vec<ConversationSearchHit> {
+    let needle = query.to_ascii_lowercase();
+    snapshots
+        .iter()
+        .flat_map(|snapshot| {
+            let mut hits = Vec::new();
+            for (index, message) in snapshot.messages.iter().enumerate() {
+                if message.content.to_ascii_lowercase().contains(&needle) {
+                    hits.push(ConversationSearchHit {
+                        project_id: snapshot.project_id.clone(),
+                        run_id: snapshot.run_id.clone(),
+                        agent_session_id: snapshot.agent_session_id.clone(),
+                        source: "message".into(),
+                        index,
+                        role_or_kind: message_role_wire(&message.role).into(),
+                        preview: truncate_single_line(&message.content, 180),
+                    });
+                }
+            }
+            if include_events {
+                for (index, event) in snapshot.events.iter().enumerate() {
+                    let haystack = event.payload.to_string();
+                    if haystack.to_ascii_lowercase().contains(&needle) {
+                        hits.push(ConversationSearchHit {
+                            project_id: snapshot.project_id.clone(),
+                            run_id: snapshot.run_id.clone(),
+                            agent_session_id: snapshot.agent_session_id.clone(),
+                            source: "event".into(),
+                            index,
+                            role_or_kind: runtime_event_kind_wire(&event.event_kind).into(),
+                            preview: truncate_single_line(&haystack, 180),
+                        });
+                    }
+                }
+            }
+            hits
+        })
+        .collect()
+}
+
+fn truncate_single_line(value: &str, limit: usize) -> String {
+    let single = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single.chars().count() <= limit {
+        return single;
+    }
+    let mut truncated = single
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('~');
+    truncated
+}
+
+fn write_text_output(path: &str, payload: &str) -> Result<(), CliError> {
+    let path = PathBuf::from(path);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            CliError::system_fault(
+                "xero_cli_output_prepare_failed",
+                format!("Could not create `{}`: {error}", parent.display()),
+            )
+        })?;
+    }
+    fs::write(&path, payload).map_err(|error| {
+        CliError::system_fault(
+            "xero_cli_output_write_failed",
+            format!("Could not write `{}`: {error}", path.display()),
+        )
+    })
 }
 
 fn list_conversation_runs(
@@ -1581,6 +4566,22 @@ fn open_harness_agent_store(globals: &GlobalOptions) -> Result<FileAgentCoreStor
     FileAgentCoreStore::open(harness_store_path(globals)).map_err(core_error)
 }
 
+fn open_cursor_agent_store(
+    globals: &GlobalOptions,
+    project_id: &str,
+) -> Result<CliAgentStore, CliError> {
+    match open_registered_project_store(globals, project_id) {
+        Ok(store) => Ok(CliAgentStore::AppData(store)),
+        Err(error) if error.code == "xero_cli_project_registry_missing" => {
+            Ok(CliAgentStore::Harness(open_harness_agent_store(globals)?))
+        }
+        Err(error) if error.code == "xero_cli_project_not_found" => {
+            Ok(CliAgentStore::Harness(open_harness_agent_store(globals)?))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn harness_store_path(globals: &GlobalOptions) -> PathBuf {
     globals.state_dir.join(AGENT_CORE_STATE_FILE)
 }
@@ -1606,6 +4607,101 @@ enum CliAgentStore {
     AppData(AppDataProjectAgentStore),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentDefinitionForRun {
+    definition_id: String,
+    version: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BuiltinAgentDefinitionSeed {
+    definition_id: &'static str,
+    version: i64,
+    display_name: &'static str,
+    short_label: &'static str,
+    base_capability_profile: &'static str,
+    updated_at: &'static str,
+    snapshot_json: &'static str,
+}
+
+fn builtin_agent_definition_seed(definition_id: &str) -> Option<BuiltinAgentDefinitionSeed> {
+    Some(match definition_id {
+        "ask" => BuiltinAgentDefinitionSeed {
+            definition_id: "ask",
+            version: 1,
+            display_name: "Ask",
+            short_label: "Ask",
+            base_capability_profile: "observe_only",
+            updated_at: "2026-05-01T00:00:00Z",
+            snapshot_json: r#"{"id":"ask","version":1,"scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"observe_only","label":"Ask","shortLabel":"Ask","attachedSkills":[]}"#,
+        },
+        "plan" => BuiltinAgentDefinitionSeed {
+            definition_id: "plan",
+            version: 1,
+            display_name: "Plan",
+            short_label: "Plan",
+            base_capability_profile: "planning",
+            updated_at: "2026-05-06T00:00:00Z",
+            snapshot_json: r#"{"id":"plan","version":1,"scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"planning","label":"Plan","shortLabel":"Plan","attachedSkills":[]}"#,
+        },
+        "engineer" => BuiltinAgentDefinitionSeed {
+            definition_id: "engineer",
+            version: 1,
+            display_name: "Engineer",
+            short_label: "Build",
+            base_capability_profile: "engineering",
+            updated_at: "2026-05-01T00:00:00Z",
+            snapshot_json: r#"{"id":"engineer","version":1,"scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"engineering","label":"Engineer","shortLabel":"Build","attachedSkills":[]}"#,
+        },
+        "debug" => BuiltinAgentDefinitionSeed {
+            definition_id: "debug",
+            version: 1,
+            display_name: "Debug",
+            short_label: "Debug",
+            base_capability_profile: "debugging",
+            updated_at: "2026-05-01T00:00:00Z",
+            snapshot_json: r#"{"id":"debug","version":1,"scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"debugging","label":"Debug","shortLabel":"Debug","attachedSkills":[]}"#,
+        },
+        "crawl" => BuiltinAgentDefinitionSeed {
+            definition_id: "crawl",
+            version: 1,
+            display_name: "Crawl",
+            short_label: "Crawl",
+            base_capability_profile: "repository_recon",
+            updated_at: "2026-05-06T00:00:00Z",
+            snapshot_json: r#"{"id":"crawl","version":1,"scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"repository_recon","label":"Crawl","shortLabel":"Crawl","attachedSkills":[]}"#,
+        },
+        "agent_create" => BuiltinAgentDefinitionSeed {
+            definition_id: "agent_create",
+            version: 1,
+            display_name: "Agent Create",
+            short_label: "Create",
+            base_capability_profile: "agent_builder",
+            updated_at: "2026-05-01T00:00:00Z",
+            snapshot_json: r#"{"id":"agent_create","version":1,"scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"agent_builder","label":"Agent Create","shortLabel":"Create","attachedSkills":[]}"#,
+        },
+        "computer_use" => BuiltinAgentDefinitionSeed {
+            definition_id: "computer_use",
+            version: 1,
+            display_name: "Computer Use",
+            short_label: "Computer",
+            base_capability_profile: "computer_use",
+            updated_at: "2026-05-24T00:00:00Z",
+            snapshot_json: r#"{"schema":"xero.agent_definition.v1","id":"computer_use","version":1,"displayName":"Computer Use","shortLabel":"Computer","description":"Operate the visible computer through bounded UI control without repository mutation tools.","taskPurpose":"Use the currently visible computer directly for the user's task, asking before risky actions and reporting the result.","scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"computer_use","defaultApprovalMode":"suggest","allowedApprovalModes":["suggest"],"promptPolicy":"computer_use","toolPolicy":"computer_use","outputContract":"answer","attachedSkills":[]}"#,
+        },
+        "generalist" => BuiltinAgentDefinitionSeed {
+            definition_id: "generalist",
+            version: 1,
+            display_name: "Agent",
+            short_label: "Agent",
+            base_capability_profile: "engineering",
+            updated_at: "2026-05-12T00:00:00Z",
+            snapshot_json: r#"{"schema":"xero.agent_definition.v1","id":"generalist","version":1,"displayName":"Agent","shortLabel":"Agent","description":"A do-anything agent with the full engineering toolset that recognises when a specialist agent would handle the task better and offers to route.","taskPurpose":"Handle any user request directly, or suggest routing to Plan, Engineer, or Debug when the request fits a specialist's scope.","scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"engineering","defaultApprovalMode":"suggest","allowedApprovalModes":["suggest","auto_edit","yolo"],"promptPolicy":"generalist","toolPolicy":"engineering","outputContract":"answer","attachedSkills":[]}"#,
+        },
+        _ => return None,
+    })
+}
+
 impl CliAgentStore {
     fn path(&self) -> &Path {
         match self {
@@ -1618,6 +4714,29 @@ impl CliAgentStore {
         match self {
             Self::Harness(_) => None,
             Self::AppData(store) => Some(store.repo_root.as_path()),
+        }
+    }
+
+    fn resolve_agent_definition_for_run(
+        &self,
+        requested_definition_id: Option<&str>,
+        runtime_agent_id: &str,
+    ) -> Result<AgentDefinitionForRun, CliError> {
+        match self {
+            Self::Harness(_) => {
+                let definition_id = requested_definition_id
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or(runtime_agent_id)
+                    .to_owned();
+                Ok(AgentDefinitionForRun {
+                    definition_id,
+                    version: 1,
+                })
+            }
+            Self::AppData(store) => store
+                .resolve_agent_definition_for_run(requested_definition_id, runtime_agent_id)
+                .map_err(core_error),
         }
     }
 }
@@ -1751,6 +4870,121 @@ impl AppDataProjectAgentStore {
 
     fn path(&self) -> &Path {
         self.database_path.as_path()
+    }
+
+    fn resolve_agent_definition_for_run(
+        &self,
+        requested_definition_id: Option<&str>,
+        runtime_agent_id: &str,
+    ) -> xero_agent_core::CoreResult<AgentDefinitionForRun> {
+        let definition_id = requested_definition_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(runtime_agent_id);
+        let connection = self.connection()?;
+        let existing = self.query_agent_definition_for_run(&connection, definition_id)?;
+        if let Some(definition) = existing {
+            return Ok(definition);
+        }
+        self.backfill_builtin_agent_definition(&connection, definition_id)?;
+        self.query_agent_definition_for_run(&connection, definition_id)?
+            .ok_or_else(|| {
+                xero_agent_core::CoreError::invalid_request(
+                    "agent_core_app_data_agent_definition_missing",
+                    format!(
+                        "App-data project `{}` does not contain active agent definition `{definition_id}`.",
+                        self.project_id
+                    ),
+                )
+            })
+    }
+
+    fn query_agent_definition_for_run(
+        &self,
+        connection: &Connection,
+        definition_id: &str,
+    ) -> xero_agent_core::CoreResult<Option<AgentDefinitionForRun>> {
+        connection
+            .query_row(
+                "SELECT definition_id, current_version FROM agent_definitions WHERE definition_id = ?1 AND lifecycle_state != 'archived'",
+                params![definition_id],
+                |row| {
+                    Ok(AgentDefinitionForRun {
+                        definition_id: row.get(0)?,
+                        version: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| {
+                self.query_error("agent_core_app_data_agent_definition_read_failed", error)
+            })
+    }
+
+    fn backfill_builtin_agent_definition(
+        &self,
+        connection: &Connection,
+        definition_id: &str,
+    ) -> xero_agent_core::CoreResult<()> {
+        let Some(seed) = builtin_agent_definition_seed(definition_id) else {
+            return Ok(());
+        };
+        connection
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO agent_definitions (
+                    definition_id,
+                    current_version,
+                    display_name,
+                    short_label,
+                    scope,
+                    lifecycle_state,
+                    base_capability_profile,
+                    updated_at
+                )
+                VALUES (?1, ?2, ?3, ?4, 'built_in', 'active', ?5, ?6)
+                "#,
+                params![
+                    seed.definition_id,
+                    seed.version,
+                    seed.display_name,
+                    seed.short_label,
+                    seed.base_capability_profile,
+                    seed.updated_at,
+                ],
+            )
+            .map_err(|error| {
+                self.write_error(
+                    "agent_core_app_data_builtin_definition_backfill_failed",
+                    error,
+                )
+            })?;
+        connection
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO agent_definition_versions (
+                    definition_id,
+                    version,
+                    snapshot_json,
+                    validation_report_json,
+                    created_at
+                )
+                VALUES (?1, ?2, ?3, '{"status":"valid","source":"cli_builtin_backfill"}', ?4)
+                "#,
+                params![
+                    seed.definition_id,
+                    seed.version,
+                    seed.snapshot_json,
+                    seed.updated_at,
+                ],
+            )
+            .map_err(|error| {
+                self.write_error(
+                    "agent_core_app_data_builtin_definition_version_backfill_failed",
+                    error,
+                )
+            })?;
+        Ok(())
     }
 
     fn connection(&self) -> xero_agent_core::CoreResult<Connection> {
@@ -1992,6 +5226,9 @@ impl AgentCoreStore for AppDataProjectAgentStore {
         validate_core_required(&run.prompt, "prompt")?;
         validate_core_required(&run.provider_id, "providerId")?;
         validate_core_required(&run.model_id, "modelId")?;
+        validate_core_required(&run.runtime_agent_id, "runtimeAgentId")?;
+        validate_core_required(&run.agent_definition_id, "agentDefinitionId")?;
+        validate_core_required(&run.system_prompt, "systemPrompt")?;
         if run.project_id != self.project_id {
             return Err(xero_agent_core::CoreError::invalid_request(
                 "agent_core_app_data_project_mismatch",
@@ -2082,9 +5319,12 @@ impl AgentCoreStore for AppDataProjectAgentStore {
                     last_heartbeat_at,
                     updated_at
                 )
-                VALUES ('engineer', 'engineer', 1, ?1, ?2, ?3, ?4, ?5, ?6, 'starting', ?7, ?8, ?9, ?9, ?9)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'starting', ?10, ?11, ?12, ?12, ?12)
                 "#,
                 params![
+                    run.runtime_agent_id,
+                    run.agent_definition_id,
+                    run.agent_definition_version,
                     run.project_id,
                     run.agent_session_id,
                     run.run_id,
@@ -2092,7 +5332,7 @@ impl AgentCoreStore for AppDataProjectAgentStore {
                     run.provider_id,
                     run.model_id,
                     run.prompt,
-                    "Xero CLI production runtime.",
+                    run.system_prompt,
                     now,
                 ],
             )
@@ -2105,7 +5345,7 @@ impl AgentCoreStore for AppDataProjectAgentStore {
         let run = connection
             .query_row(
                 r#"
-                SELECT trace_id, project_id, agent_session_id, run_id, provider_id, model_id, status, prompt
+                SELECT trace_id, runtime_agent_id, agent_definition_id, agent_definition_version, system_prompt, project_id, agent_session_id, run_id, provider_id, model_id, status, prompt
                 FROM agent_runs
                 WHERE project_id = ?1 AND run_id = ?2
                 "#,
@@ -2115,11 +5355,15 @@ impl AgentCoreStore for AppDataProjectAgentStore {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
                     ))
                 },
             )
@@ -2137,13 +5381,17 @@ impl AgentCoreStore for AppDataProjectAgentStore {
             read_app_data_context_manifests(&connection, self, &run.0, project_id, run_id)?;
         Ok(RunSnapshot {
             trace_id: run.0,
-            project_id: run.1,
-            agent_session_id: run.2,
-            run_id: run.3,
-            provider_id: run.4,
-            model_id: run.5,
-            status: parse_core_run_status(&run.6),
-            prompt: run.7,
+            runtime_agent_id: run.1,
+            agent_definition_id: run.2,
+            agent_definition_version: run.3,
+            system_prompt: run.4,
+            project_id: run.5,
+            agent_session_id: run.6,
+            run_id: run.7,
+            provider_id: run.8,
+            model_id: run.9,
+            status: parse_core_run_status(&run.10),
+            prompt: run.11,
             messages,
             events,
             context_manifests,
@@ -2230,6 +5478,8 @@ impl AgentCoreStore for AppDataProjectAgentStore {
         validate_core_required(&manifest.manifest_id, "manifestId")?;
         let connection = self.connection()?;
         let trace_id = run_trace_id(&connection, self, &manifest.project_id, &manifest.run_id)?;
+        let run_identity =
+            app_data_run_identity(&connection, self, &manifest.project_id, &manifest.run_id)?;
         let recorded_after_event_id =
             latest_app_data_event_id(&connection, self, &manifest.project_id, &manifest.run_id)?;
         let manifest_json = serde_json::to_string(&manifest.manifest).map_err(|error| {
@@ -2268,13 +5518,16 @@ impl AgentCoreStore for AppDataProjectAgentStore {
                     manifest_json,
                     created_at
                 )
-                VALUES (?1, ?2, ?3, ?4, 'engineer', 'engineer', 1, ?5, ?6, 'provider_turn', 'continue_now', 'cli_app_data_runtime', NULL, 0, 'unknown', ?7, '[]', '[]', '[]', '[]', 'clean', ?8, ?9)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'provider_turn', 'continue_now', 'cli_app_data_runtime', NULL, 0, 'unknown', ?10, '[]', '[]', '[]', '[]', 'clean', ?11, ?12)
                 "#,
                 params![
                     manifest.manifest_id,
                     manifest.project_id,
                     manifest.agent_session_id,
                     manifest.run_id,
+                    run_identity.runtime_agent_id,
+                    run_identity.agent_definition_id,
+                    run_identity.agent_definition_version,
                     manifest.provider_id,
                     manifest.model_id,
                     context_hash,
@@ -2512,6 +5765,34 @@ fn run_trace_id(
         .map_err(|error| store.query_error("agent_core_app_data_run_trace_read_failed", error))
 }
 
+#[derive(Debug, Clone)]
+struct AppDataRunIdentity {
+    runtime_agent_id: String,
+    agent_definition_id: String,
+    agent_definition_version: i64,
+}
+
+fn app_data_run_identity(
+    connection: &Connection,
+    store: &AppDataProjectAgentStore,
+    project_id: &str,
+    run_id: &str,
+) -> xero_agent_core::CoreResult<AppDataRunIdentity> {
+    connection
+        .query_row(
+            "SELECT runtime_agent_id, agent_definition_id, agent_definition_version FROM agent_runs WHERE project_id = ?1 AND run_id = ?2",
+            params![project_id, run_id],
+            |row| {
+                Ok(AppDataRunIdentity {
+                    runtime_agent_id: row.get(0)?,
+                    agent_definition_id: row.get(1)?,
+                    agent_definition_version: row.get(2)?,
+                })
+            },
+        )
+        .map_err(|error| store.query_error("agent_core_app_data_run_identity_read_failed", error))
+}
+
 fn latest_app_data_event_id(
     connection: &Connection,
     store: &AppDataProjectAgentStore,
@@ -2584,12 +5865,8 @@ fn normalize_context_hash(value: &str) -> String {
 }
 
 fn session_title(agent_session_id: &str) -> String {
-    let trimmed = agent_session_id.trim();
-    if trimmed.is_empty() {
-        "CLI Session".into()
-    } else {
-        format!("CLI {trimmed}")
-    }
+    let _ = agent_session_id;
+    "New Chat".into()
 }
 
 #[derive(Debug, Clone)]
@@ -2648,6 +5925,14 @@ fn registered_project_by_id(
     project_id: &str,
 ) -> Result<RegisteredProject, CliError> {
     validate_required_cli(project_id, "projectId")?;
+    if project_id == project_cli::GLOBAL_COMPUTER_USE_PROJECT_ID {
+        project_cli::ensure_global_computer_use_project(globals)?;
+        return Ok(RegisteredProject {
+            database_path: project_cli::global_computer_use_database_path(globals),
+            project_id: project_cli::GLOBAL_COMPUTER_USE_PROJECT_ID.to_owned(),
+            repo_root: project_cli::global_computer_use_root(globals),
+        });
+    }
     read_registered_projects_strict(globals)?
         .into_iter()
         .find(|project| project.project_id == project_id)
@@ -2707,6 +5992,7 @@ fn read_registered_projects_from_database(
             SELECT projects.id, repositories.root_path
             FROM projects
             JOIN repositories ON repositories.project_id = projects.id
+            WHERE projects.id != ?1
             ORDER BY projects.updated_at DESC, repositories.updated_at DESC, repositories.root_path ASC
             "#,
         )
@@ -2718,18 +6004,21 @@ fn read_registered_projects_from_database(
         })?;
     let app_data_root = cli_app_data_root(globals);
     let rows = statement
-        .query_map([], |row| {
-            let project_id = row.get::<_, String>(0)?;
-            let repo_root = PathBuf::from(row.get::<_, String>(1)?);
-            Ok(RegisteredProject {
-                database_path: workspace_project_database_path_for_app_root(
-                    &app_data_root,
-                    &project_id,
-                ),
-                project_id,
-                repo_root,
-            })
-        })
+        .query_map(
+            params![project_cli::GLOBAL_COMPUTER_USE_PROJECT_ID],
+            |row| {
+                let project_id = row.get::<_, String>(0)?;
+                let repo_root = PathBuf::from(row.get::<_, String>(1)?);
+                Ok(RegisteredProject {
+                    database_path: workspace_project_database_path_for_app_root(
+                        &app_data_root,
+                        &project_id,
+                    ),
+                    project_id,
+                    repo_root,
+                })
+            },
+        )
         .map_err(|error| {
             CliError::system_fault(
                 "xero_cli_project_registry_read_failed",
@@ -2825,6 +6114,7 @@ fn runtime_event_kind_wire(kind: &RuntimeEventKind) -> &'static str {
         RuntimeEventKind::RunPaused => "run_paused",
         RuntimeEventKind::RunCompleted => "run_completed",
         RuntimeEventKind::RunFailed => "run_failed",
+        RuntimeEventKind::SubagentLifecycle => "subagent_lifecycle",
     }
 }
 
@@ -2858,6 +6148,7 @@ fn parse_runtime_event_kind(value: &str) -> RuntimeEventKind {
         "run_paused" => RuntimeEventKind::RunPaused,
         "run_completed" => RuntimeEventKind::RunCompleted,
         "run_failed" => RuntimeEventKind::RunFailed,
+        "subagent_lifecycle" => RuntimeEventKind::SubagentLifecycle,
         _ => RuntimeEventKind::RunFailed,
     }
 }
@@ -2893,6 +6184,7 @@ fn parse_global_options(raw_args: Vec<String>) -> Result<(GlobalOptions, Vec<Str
             output_mode,
             ci,
             state_dir,
+            tui_adapter: None,
         },
         command_args,
     ))
@@ -2965,14 +6257,32 @@ fn root_help() -> String {
         "Commands:",
         "  agent exec",
         "  agent host",
-        "  conversation list|show|dump|support-bundle|compact|retry|clone|stats",
-        "  provider list|login|doctor|preflight",
-        "  mcp list|add|login|serve",
+        "  agent cursor",
+        "  benchmark terminal-bench",
+        "  conversation list|show|dump|support-bundle|compact|continue|answer|approve|deny|cancel|resume|search|export|retry|clone|branch|stats",
+        "  project list|import|create|remove|snapshot|select",
+        "  project-state list|backup|restore|repair",
+        "  process targets|add-target|remove-target|start|list|status|tail|stop",
+        "  session list|create|rename|auto-name|archive|restore|delete|resume|select",
+        "  provider list|login|remove|doctor|preflight",
+        "  mcp list|add|login|remove|status|serve|serve-tools",
         "  workspace index|status|query|explain|reset",
+        "  file list|read|write|patch|delete|move|replace|tools",
+        "  git status|diff|stage|unstage|discard|commit|fetch|pull|push",
+        "  agent-definition list|show|versions|diff|archive",
+        "  skills list|enable|disable|remove|plugins",
+        "  plugins list|enable|disable|remove",
+        "  notification routes|upsert-route|remove-route|dispatches|replies",
+        "  environment status|profile|user-tools|save-tool|remove-tool",
+        "  settings agent-tooling|browser-control|soul",
+        "  update check|install",
+        "  usage summary",
+        "  wipe project|all",
         "  tool-pack list|doctor",
         "  commit-message",
         "  suggest-command",
         "  daemon",
+        "  tui",
     ]
     .join("\n")
 }
@@ -2983,31 +6293,123 @@ fn root_help_json() -> JsonValue {
         "commands": [
             "agent exec",
             "agent host",
+            "agent cursor",
+            "benchmark terminal-bench",
             "conversation list",
             "conversation show",
             "conversation dump",
             "conversation support-bundle",
             "conversation compact",
+            "conversation continue",
+            "conversation answer",
+            "conversation approve",
+            "conversation deny",
+            "conversation cancel",
+            "conversation resume",
+            "conversation search",
+            "conversation export",
             "conversation retry",
             "conversation clone",
+            "conversation branch",
             "conversation stats",
+            "project list",
+            "project import",
+            "project create",
+            "project remove",
+            "project snapshot",
+            "project select",
+            "project-state list",
+            "project-state backup",
+            "project-state restore",
+            "project-state repair",
+            "process targets",
+            "process add-target",
+            "process remove-target",
+            "process start",
+            "process list",
+            "process status",
+            "process tail",
+            "process stop",
+            "session list",
+            "session create",
+            "session rename",
+            "session auto-name",
+            "session archive",
+            "session restore",
+            "session delete",
+            "session resume",
+            "session select",
             "provider list",
             "provider login",
+            "provider remove",
             "provider doctor",
             "provider preflight",
             "mcp list",
             "mcp add",
             "mcp login",
+            "mcp remove",
+            "mcp status",
             "mcp serve",
+            "mcp serve-tools",
             "workspace index",
             "workspace status",
             "workspace query",
             "workspace explain",
             "workspace reset",
+            "file list",
+            "file read",
+            "file write",
+            "file patch",
+            "file delete",
+            "file move",
+            "file replace",
+            "file tools",
+            "git status",
+            "git diff",
+            "git stage",
+            "git unstage",
+            "git discard",
+            "git commit",
+            "git fetch",
+            "git pull",
+            "git push",
+            "agent-definition list",
+            "agent-definition show",
+            "agent-definition versions",
+            "agent-definition diff",
+            "agent-definition archive",
+            "skills list",
+            "skills enable",
+            "skills disable",
+            "skills remove",
+            "skills plugins",
+            "plugins list",
+            "plugins enable",
+            "plugins disable",
+            "plugins remove",
+            "notification routes",
+            "notification upsert-route",
+            "notification remove-route",
+            "notification dispatches",
+            "notification replies",
+            "environment status",
+            "environment profile",
+            "environment user-tools",
+            "environment save-tool",
+            "environment remove-tool",
+            "settings agent-tooling",
+            "settings browser-control",
+            "settings soul",
+            "update check",
+            "update install",
+            "usage summary",
+            "wipe project",
+            "wipe all",
             "tool-pack list",
             "tool-pack doctor",
             "commit-message",
-            "suggest-command"
+            "suggest-command",
+            "tui"
         ]
     })
 }
@@ -3076,14 +6478,14 @@ fn default_headless_state_dir() -> Result<PathBuf, CliError> {
 
     #[cfg(target_os = "macos")]
     {
-        return home_dir()
+        home_dir()
             .map(|home| {
                 home.join("Library")
                     .join("Application Support")
                     .join(APP_DATA_DIRECTORY_NAME)
                     .join(HEADLESS_DIRECTORY_NAME)
             })
-            .ok_or_else(home_dir_error);
+            .ok_or_else(home_dir_error)
     }
 
     #[cfg(target_os = "windows")]
@@ -3123,12 +6525,14 @@ fn default_headless_state_dir() -> Result<PathBuf, CliError> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn home_dir_error() -> CliError {
     CliError::system_fault(
         "xero_cli_home_unavailable",
@@ -3145,13 +6549,9 @@ fn generate_id(prefix: &str) -> String {
 }
 
 fn now_timestamp() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    let seconds = millis / 1_000;
-    let remainder = millis % 1_000;
-    format!("{seconds}.{remainder:03}Z")
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp formatting should succeed")
 }
 
 fn last_assistant_message(snapshot: &RunSnapshot) -> Option<String> {
@@ -3278,16 +6678,16 @@ fn provider_catalog() -> Vec<ProviderCatalogEntry> {
         ProviderCatalogEntry {
             provider_id: "openai_codex",
             label: "OpenAI Codex",
-            default_model: "gpt-5.4",
+            default_model: "gpt-5.5",
             credential_kind: "app_session",
-            headless_status: "diagnostics_only",
+            headless_status: "benchmark_app_oauth_supported",
             catalog_kind: "model_provider",
             adapter_kind: None,
         },
         ProviderCatalogEntry {
             provider_id: "openai_api",
             label: "OpenAI API",
-            default_model: "gpt-5.4",
+            default_model: "gpt-5.5",
             credential_kind: "api_key_env",
             headless_status: "configured_profile_required",
             catalog_kind: "model_provider",
@@ -3296,7 +6696,7 @@ fn provider_catalog() -> Vec<ProviderCatalogEntry> {
         ProviderCatalogEntry {
             provider_id: "openrouter",
             label: "OpenRouter",
-            default_model: "openai/gpt-5.4",
+            default_model: "openai/gpt-5.5",
             credential_kind: "api_key_env",
             headless_status: "configured_profile_required",
             catalog_kind: "model_provider",
@@ -3384,6 +6784,15 @@ fn provider_catalog() -> Vec<ProviderCatalogEntry> {
             adapter_kind: Some("gemini"),
         },
         ProviderCatalogEntry {
+            provider_id: CURSOR_PROVIDER_ID,
+            label: "Cursor",
+            default_model: CURSOR_DEFAULT_MODEL_ID,
+            credential_kind: "cursor_api_key_env",
+            headless_status: "local_sdk_mvp",
+            catalog_kind: "external_agent_adapter",
+            adapter_kind: Some("cursor"),
+        },
+        ProviderCatalogEntry {
             provider_id: "external_custom_agent",
             label: "Custom External Agent",
             default_model: "external-agent",
@@ -3423,6 +6832,10 @@ fn provider_credential_proof_for_entry(
     match (entry.credential_kind, profile) {
         ("none", _) => Some("none_required".into()),
         ("external_process", _) => Some("external_process".into()),
+        ("cursor_api_key_env", _) => env::var("CURSOR_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| "cursor_api_key_env_present".into()),
         (_, Some(profile)) if profile.api_key_env.is_some() => Some("api_key_env_recorded".into()),
         (_, Some(profile))
             if profile
@@ -3506,15 +6919,49 @@ struct CliProviderExecution {
 
 impl CliProviderExecution {
     fn with_project_workspace(mut self, store: &CliAgentStore) -> Self {
-        if let (
-            "real_provider",
-            Some(repo_root),
-            HeadlessProviderExecutionConfig::OpenAiCompatible(config),
-        ) = (self.execution_mode, store.repo_root(), &mut self.execution)
-        {
-            config.workspace_root = Some(repo_root.to_path_buf());
+        if let ("real_provider", Some(repo_root)) = (self.execution_mode, store.repo_root()) {
+            match &mut self.execution {
+                HeadlessProviderExecutionConfig::OpenAiCompatible(config) => {
+                    config.workspace_root = Some(repo_root.to_path_buf());
+                }
+                HeadlessProviderExecutionConfig::OpenAiCodexResponses(config) => {
+                    config.workspace_root = Some(repo_root.to_path_buf());
+                }
+                HeadlessProviderExecutionConfig::Fake => {}
+            }
         }
         self
+    }
+
+    fn with_workspace_writes(mut self, allow_workspace_writes: bool) -> Self {
+        match &mut self.execution {
+            HeadlessProviderExecutionConfig::OpenAiCompatible(config) => {
+                config.allow_workspace_writes &= allow_workspace_writes;
+            }
+            HeadlessProviderExecutionConfig::OpenAiCodexResponses(config) => {
+                config.allow_workspace_writes &= allow_workspace_writes;
+            }
+            HeadlessProviderExecutionConfig::Fake => {}
+        }
+        self
+    }
+}
+
+fn headless_runtime_agent_allows_writes(runtime_agent_id: &str) -> bool {
+    !matches!(runtime_agent_id, "ask" | "plan" | "agent_create")
+}
+
+fn normalize_cli_thinking_effort(value: &str) -> Result<String, CliError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none".into()),
+        "minimal" => Ok("minimal".into()),
+        "low" => Ok("low".into()),
+        "medium" => Ok("medium".into()),
+        "high" => Ok("high".into()),
+        "x_high" | "xhigh" => Ok("xhigh".into()),
+        _ => Err(CliError::usage(
+            "Invalid --thinking-effort. Use none, minimal, low, medium, high, or x_high.",
+        )),
     }
 }
 
@@ -3539,6 +6986,9 @@ fn resolve_cli_provider_execution(
     }
     if let Some(provider_id) = explicit_provider {
         ensure_owned_agent_provider(provider_id)?;
+    }
+    if explicit_provider == Some(OPENAI_CODEX_PROVIDER_ID) {
+        return resolve_cli_openai_codex_provider_execution(globals, model_id);
     }
 
     let config = load_config(globals)?;
@@ -3617,6 +7067,49 @@ fn find_provider_profile<'a>(config: &'a CliConfig, selector: &str) -> Option<&'
             .providers
             .values()
             .find(|profile| profile.provider_id == selector)
+    })
+}
+
+fn resolve_cli_openai_codex_provider_execution(
+    globals: &GlobalOptions,
+    model_id: Option<String>,
+) -> Result<CliProviderExecution, CliError> {
+    if globals.ci {
+        return Err(CliError::user_fixable(
+            "xero_cli_provider_unavailable_in_ci",
+            "Headless CI mode currently allows only `--provider fake_provider` because real-provider writes require explicit non-interactive approval policy.",
+        ));
+    }
+
+    let session = load_cli_openai_codex_oauth_session(globals)?;
+    let model_id = normalize_openai_codex_model_id(
+        model_id
+            .as_deref()
+            .or_else(|| {
+                provider_catalog_entry(OPENAI_CODEX_PROVIDER_ID).map(|entry| entry.default_model)
+            })
+            .unwrap_or("gpt-5.5"),
+    );
+
+    Ok(CliProviderExecution {
+        profile_id: "openai_codex-app-oauth".into(),
+        provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+        model_id: model_id.clone(),
+        execution_mode: "real_provider",
+        execution: HeadlessProviderExecutionConfig::OpenAiCodexResponses(
+            OpenAiCodexHeadlessConfig {
+                provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+                model_id,
+                base_url: OPENAI_CODEX_DEFAULT_BASE_URL.into(),
+                access_token: session.access_token,
+                account_id: session.account_id,
+                session_id: Some(session.session_id),
+                timeout_ms: 0,
+                workspace_root: env::current_dir().ok(),
+                allow_workspace_writes: true,
+            },
+        ),
+        credential_proof: Some("app_data_openai_codex_session".into()),
     })
 }
 
@@ -3701,11 +7194,18 @@ fn ensure_owned_agent_provider(provider_id: &str) -> Result<(), CliError> {
     };
 
     if entry.catalog_kind == "external_agent_adapter" {
+        let launch = if entry.provider_id == CURSOR_PROVIDER_ID {
+            "xero agent cursor".to_string()
+        } else {
+            format!(
+                "xero agent host --adapter {}",
+                entry.adapter_kind.unwrap_or("custom")
+            )
+        };
         return Err(CliError::user_fixable(
             "xero_cli_provider_external_agent_mismatch",
             format!(
-                "Provider `{provider_id}` is an external-agent adapter. Use `xero agent host --adapter {}` so the run is labeled and audited as external.",
-                entry.adapter_kind.unwrap_or("custom")
+                "Provider `{provider_id}` is an external-agent adapter. Use `{launch}` so the run is labeled and audited as external."
             ),
         ));
     }
@@ -3821,16 +7321,16 @@ fn cli_provider_preflight_for_selection(
 
     let snapshot = if provider_id == FAKE_PROVIDER_ID {
         let credential_proof = provider_credential_proof_for_entry(entry, profile);
-        cli_provider_preflight_snapshot(
-            &profile_id,
-            &provider_id,
+        cli_provider_preflight_snapshot(CliProviderPreflightSnapshotInput {
+            profile_id: &profile_id,
+            provider_id: &provider_id,
             model_id,
             entry,
-            ProviderPreflightSource::LiveProbe,
+            source: ProviderPreflightSource::LiveProbe,
             credential_proof,
-            true,
-            ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
-        )
+            credential_ready: true,
+            required_features: ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+        })
     } else {
         let profile = profile.ok_or_else(|| {
             CliError::user_fixable(
@@ -3871,14 +7371,16 @@ fn cli_provider_preflight_for_execution(
     })?;
     match &provider.execution {
         HeadlessProviderExecutionConfig::Fake => Ok(cli_provider_preflight_snapshot(
-            &provider.profile_id,
-            &provider.provider_id,
-            &provider.model_id,
-            entry,
-            ProviderPreflightSource::LiveProbe,
-            provider.credential_proof.clone(),
-            cli_provider_execution_credentials_available(&provider.execution),
-            required_features,
+            CliProviderPreflightSnapshotInput {
+                profile_id: &provider.profile_id,
+                provider_id: &provider.provider_id,
+                model_id: &provider.model_id,
+                entry,
+                source: ProviderPreflightSource::LiveProbe,
+                credential_proof: provider.credential_proof.clone(),
+                credential_ready: cli_provider_execution_credentials_available(&provider.execution),
+                required_features,
+            },
         )),
         HeadlessProviderExecutionConfig::OpenAiCompatible(config) => {
             Ok(run_openai_compatible_provider_preflight_probe(
@@ -3901,19 +7403,45 @@ fn cli_provider_preflight_for_execution(
                 },
             ))
         }
+        HeadlessProviderExecutionConfig::OpenAiCodexResponses(config) => Ok(
+            cli_provider_preflight_snapshot(CliProviderPreflightSnapshotInput {
+                profile_id: &provider.profile_id,
+                provider_id: &provider.provider_id,
+                model_id: &config.model_id,
+                entry,
+                source: ProviderPreflightSource::LiveProbe,
+                credential_proof: provider.credential_proof.clone(),
+                credential_ready: cli_provider_execution_credentials_available(&provider.execution),
+                required_features,
+            }),
+        ),
     }
 }
 
-fn cli_provider_preflight_snapshot(
-    profile_id: &str,
-    provider_id: &str,
-    model_id: &str,
+struct CliProviderPreflightSnapshotInput<'a> {
+    profile_id: &'a str,
+    provider_id: &'a str,
+    model_id: &'a str,
     entry: ProviderCatalogEntry,
     source: ProviderPreflightSource,
     credential_proof: Option<String>,
     credential_ready: bool,
     required_features: ProviderPreflightRequiredFeatures,
+}
+
+fn cli_provider_preflight_snapshot(
+    input: CliProviderPreflightSnapshotInput<'_>,
 ) -> ProviderPreflightSnapshot {
+    let CliProviderPreflightSnapshotInput {
+        profile_id,
+        provider_id,
+        model_id,
+        entry,
+        source,
+        credential_proof,
+        credential_ready,
+        required_features,
+    } = input;
     let catalog_source = match source {
         ProviderPreflightSource::LiveProbe | ProviderPreflightSource::LiveCatalog => "live",
         ProviderPreflightSource::CachedProbe => "cache",
@@ -3986,6 +7514,9 @@ fn cli_provider_execution_credentials_available(
                 .as_deref()
                 .is_some_and(|key| !key.trim().is_empty())
                 || is_local_provider_base_url(&config.base_url)
+        }
+        HeadlessProviderExecutionConfig::OpenAiCodexResponses(config) => {
+            !config.access_token.trim().is_empty() && !config.account_id.trim().is_empty()
         }
     }
 }
@@ -4121,6 +7652,54 @@ fn provider_doctor_checks(
         }];
     }
 
+    if provider_id == CURSOR_PROVIDER_ID {
+        let mut checks = vec![ProviderDoctorCheck {
+            code: "provider_external_agent_cataloged".into(),
+            status: "passed".into(),
+            message: "`external_cursor_sdk` is cataloged as the Cursor external-agent adapter."
+                .into(),
+        }];
+        checks.push(ProviderDoctorCheck {
+            code: "cursor_node_available".into(),
+            status: if command_available("node") {
+                "passed"
+            } else {
+                "failed"
+            }
+            .into(),
+            message: if command_available("node") {
+                "Node.js is available for the Cursor SDK bridge.".into()
+            } else {
+                "Node.js was not found on PATH. Install Node 20+ before running Cursor.".into()
+            },
+        });
+        let bridge_path = default_cursor_bridge_path();
+        checks.push(ProviderDoctorCheck {
+            code: "cursor_sdk_bridge_available".into(),
+            status: if bridge_path.is_file() {
+                "passed"
+            } else {
+                "failed"
+            }
+            .into(),
+            message: format!("Cursor SDK bridge path: {}", bridge_path.display()),
+        });
+        checks.push(ProviderDoctorCheck {
+            code: "cursor_auth_env".into(),
+            status: if env::var("CURSOR_API_KEY")
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                "passed"
+            } else {
+                "failed"
+            }
+            .into(),
+            message: "Set CURSOR_API_KEY to a Cursor API key or service account key.".into(),
+        });
+        return checks;
+    }
+
     if let Some(entry) = provider_catalog_entry(provider_id)
         .filter(|entry| entry.catalog_kind == "external_agent_adapter")
     {
@@ -4253,6 +7832,14 @@ fn external_agent_adapter(adapter_id: &str) -> Result<ExternalAgentAdapter, CliE
             default_command: Some("gemini"),
             default_args_before_prompt: &["-p"],
         }),
+        "cursor" | "cursor_sdk" | "external_cursor_sdk" => Ok(ExternalAgentAdapter {
+            adapter_id: "cursor",
+            provider_id: CURSOR_PROVIDER_ID,
+            label: "Cursor",
+            default_model_id: CURSOR_DEFAULT_MODEL_ID,
+            default_command: Some("node"),
+            default_args_before_prompt: &[],
+        }),
         "custom" | "external_custom_agent" => Ok(ExternalAgentAdapter {
             adapter_id: "custom",
             provider_id: "external_custom_agent",
@@ -4262,7 +7849,7 @@ fn external_agent_adapter(adapter_id: &str) -> Result<ExternalAgentAdapter, CliE
             default_args_before_prompt: &[],
         }),
         other => Err(CliError::usage(format!(
-            "Unknown external agent adapter `{other}`. Use codex, claude, gemini, or custom."
+            "Unknown external agent adapter `{other}`. Use codex, claude, gemini, cursor, or custom."
         ))),
     }
 }
@@ -4314,6 +7901,13 @@ fn external_agent_approval_source(allow_subprocess: bool) -> Option<ExternalAgen
         .map(|_| ExternalAgentApprovalSource::Environment)
 }
 
+fn external_agent_system_prompt(request: &ExternalAgentRunRequest) -> String {
+    format!(
+        "External agent session hosted by Xero. Provenance: {} ({})",
+        request.adapter.label, request.adapter.provider_id
+    )
+}
+
 fn host_external_agent_run(
     globals: &GlobalOptions,
     store: &FileAgentCoreStore,
@@ -4330,9 +7924,14 @@ fn host_external_agent_run(
     }
 
     let sandbox_metadata = external_agent_sandbox_metadata(globals, &request)?;
+    let system_prompt = external_agent_system_prompt(&request);
     let snapshot = store
         .insert_run(NewRunRecord {
             trace_id: None,
+            runtime_agent_id: "external".into(),
+            agent_definition_id: "external".into(),
+            agent_definition_version: 1,
+            system_prompt: system_prompt.clone(),
             project_id: request.project_id.clone(),
             agent_session_id: request.agent_session_id.clone(),
             run_id: request.run_id.clone(),
@@ -4388,10 +7987,7 @@ fn host_external_agent_run(
             project_id: snapshot.project_id.clone(),
             run_id: snapshot.run_id.clone(),
             role: MessageRole::System,
-            content: format!(
-                "External agent session hosted by Xero. Provenance: {} ({})",
-                request.adapter.label, request.adapter.provider_id
-            ),
+            content: system_prompt,
             provider_metadata: None,
         })
         .map_err(core_error)?;
@@ -4567,6 +8163,7 @@ fn external_agent_sandbox_metadata(
         description: "Launch an explicitly approved external agent subprocess and capture its output as an auditable Xero run.".into(),
         input_schema: json!({ "type": "object" }),
         capability_tags: vec!["external_agent".into(), "subprocess".into()],
+        application_metadata: Default::default(),
         effect_class: ToolEffectClass::CommandExecution,
         mutability: ToolMutability::Mutating,
         sandbox_requirement: ToolSandboxRequirement::FullLocal,
@@ -4659,6 +8256,1271 @@ fn external_agent_provenance(request: &ExternalAgentRunRequest) -> JsonValue {
         "command": request.command,
         "argv": request.argv,
     })
+}
+
+fn host_cursor_agent_run(
+    globals: &GlobalOptions,
+    store: &CliAgentStore,
+    request: CursorAgentRunRequest,
+) -> Result<RunSnapshot, CliError> {
+    validate_required_cli(&request.project_id, "projectId")?;
+    validate_required_cli(&request.agent_session_id, "sessionId")?;
+    validate_required_cli(&request.run_id, "runId")?;
+    validate_required_cli(&request.prompt, "prompt")?;
+    if !command_available("node") {
+        return Err(CliError::user_fixable(
+            "cursor_sdk_bridge_failed",
+            "Node.js is required to run the Cursor SDK bridge. Install Node 20+ and retry.",
+        ));
+    }
+    if !request.bridge_path.is_file() {
+        return Err(CliError::user_fixable(
+            "cursor_sdk_bridge_failed",
+            format!(
+                "Cursor SDK bridge script `{}` was not found.",
+                request.bridge_path.display()
+            ),
+        ));
+    }
+    if !request.xero_cli_path.exists() {
+        return Err(CliError::user_fixable(
+            "cursor_mcp_server_failed",
+            format!(
+                "Xero CLI path `{}` was not found for the Cursor MCP server.",
+                request.xero_cli_path.display()
+            ),
+        ));
+    }
+    if request.fixture.is_none()
+        && env::var(request.api_key_env.as_deref().unwrap_or("CURSOR_API_KEY"))
+            .ok()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+    {
+        return Err(CliError::user_fixable(
+            "cursor_auth_missing",
+            format!(
+                "Cursor requires {} before Xero can start a Cursor-backed run.",
+                request.api_key_env.as_deref().unwrap_or("CURSOR_API_KEY")
+            ),
+        ));
+    }
+    if request.fixture.is_none() {
+        cursor_bridge_import_self_test(&request.bridge_path)?;
+    }
+
+    let agent_definition =
+        store.resolve_agent_definition_for_run(None, &request.runtime_agent_id)?;
+    let system_prompt = "Cursor SDK via Xero MCP harness. Cursor-specific mechanics are trace detail; routine user experience should remain provider-like.".to_string();
+    let snapshot = store
+        .insert_run(NewRunRecord {
+            trace_id: None,
+            runtime_agent_id: request.runtime_agent_id.clone(),
+            agent_definition_id: agent_definition.definition_id,
+            agent_definition_version: agent_definition.version,
+            system_prompt: system_prompt.clone(),
+            project_id: request.project_id.clone(),
+            agent_session_id: request.agent_session_id.clone(),
+            run_id: request.run_id.clone(),
+            provider_id: CURSOR_PROVIDER_ID.into(),
+            model_id: request.model_id.clone(),
+            prompt: request.prompt.clone(),
+        })
+        .map_err(core_error)?;
+
+    let include_protected_dirs = request.containment == CursorContainmentMode::Live;
+    let baseline = capture_cursor_workspace_snapshot(&request.repo_root, include_protected_dirs)?;
+    let containment = prepare_cursor_containment(&request, &baseline)?;
+    let sandbox_metadata =
+        cursor_agent_sandbox_metadata(globals, &request, &containment.repo_root)?;
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::RunStarted,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "cursor_run_started",
+            )),
+            payload: json!({
+                "status": "starting",
+                "providerId": CURSOR_PROVIDER_ID,
+                "modelId": request.model_id,
+                "execution": "external_agent_adapter",
+                "provenance": cursor_agent_provenance(&request),
+                "mcp": {
+                    "server": MCP_TOOLS_SERVER_NAME,
+                    "mode": request.mcp_mode.as_str(),
+                    "toolRegistry": "tool_registry_v2",
+                },
+                "sandbox": external_agent_sandbox_payload(&sandbox_metadata, request.timeout_ms),
+                "containment": {
+                    "mode": request.containment.as_str(),
+                    "repoRoot": containment.repo_root,
+                },
+            }),
+        })
+        .map_err(core_error)?;
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::PolicyDecision,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "cursor_subprocess_approved",
+            )),
+            payload: json!({
+                "decision": "allow",
+                "policy": "external_agent_subprocess_requires_explicit_approval",
+                "approvalSource": match request.approval_source {
+                    ExternalAgentApprovalSource::OperatorFlag => "operator_flag",
+                    ExternalAgentApprovalSource::Environment => "environment",
+                },
+                "command": "node",
+                "bridgePath": request.bridge_path,
+                "timeoutMs": request.timeout_ms,
+                "preservedEnvironment": cursor_preserved_environment_keys(&request),
+            }),
+        })
+        .map_err(core_error)?;
+    store
+        .append_message(NewMessageRecord {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            role: MessageRole::System,
+            content: system_prompt,
+            provider_metadata: None,
+        })
+        .map_err(core_error)?;
+    store
+        .append_message(NewMessageRecord {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            role: MessageRole::User,
+            content: request.prompt.clone(),
+            provider_metadata: None,
+        })
+        .map_err(core_error)?;
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::MessageDelta,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "user_message",
+            )),
+            payload: json!({ "role": "user", "text": request.prompt }),
+        })
+        .map_err(core_error)?;
+    store
+        .update_run_status(&snapshot.project_id, &snapshot.run_id, RunStatus::Running)
+        .map_err(core_error)?;
+
+    let bridge = run_cursor_bridge_process(
+        globals,
+        store,
+        &request,
+        &containment.repo_root,
+        &sandbox_metadata,
+    )?;
+    if !bridge.stderr.trim().is_empty() {
+        append_cursor_bridge_output_event(store, &snapshot, "stderr", &bridge.stderr)?;
+    }
+    if !bridge.assistant_text.trim().is_empty() {
+        store
+            .append_message(NewMessageRecord {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                role: MessageRole::Assistant,
+                content: bridge.assistant_text.trim().to_owned(),
+                provider_metadata: None,
+            })
+            .map_err(core_error)?;
+    }
+
+    let promote_contained_changes = bridge.failure.is_none() && !bridge.cancelled;
+    let reconciliation = reconcile_cursor_workspace(
+        store,
+        &snapshot,
+        &request,
+        &baseline,
+        &containment,
+        promote_contained_changes,
+    )?;
+    let failed = if bridge.cancelled {
+        None
+    } else {
+        bridge.failure.or_else(|| reconciliation.failure.clone())
+    };
+    let final_snapshot = if bridge.cancelled {
+        store
+            .update_run_status(&snapshot.project_id, &snapshot.run_id, RunStatus::Cancelled)
+            .map_err(core_error)?;
+        store
+            .append_event(NewRuntimeEvent {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                event_kind: RuntimeEventKind::StateTransition,
+                trace: Some(RuntimeTraceContext::for_run(
+                    &snapshot.trace_id,
+                    &snapshot.run_id,
+                    "cursor_run_cancelled",
+                )),
+                payload: json!({
+                    "code": "cursor_run_cancelled",
+                    "message": "Cursor SDK bridge was cancelled by Xero.",
+                    "provenance": cursor_agent_provenance(&request),
+                    "reconciliation": reconciliation.report,
+                }),
+            })
+            .map_err(core_error)?;
+        store
+            .load_run(&snapshot.project_id, &snapshot.run_id)
+            .map_err(core_error)?
+    } else if let Some((code, message)) = failed {
+        store
+            .update_run_status(&snapshot.project_id, &snapshot.run_id, RunStatus::Failed)
+            .map_err(core_error)?;
+        store
+            .append_event(NewRuntimeEvent {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                event_kind: RuntimeEventKind::RunFailed,
+                trace: Some(RuntimeTraceContext::for_run(
+                    &snapshot.trace_id,
+                    &snapshot.run_id,
+                    "cursor_run_failed",
+                )),
+                payload: json!({
+                    "code": code,
+                    "message": message,
+                    "provenance": cursor_agent_provenance(&request),
+                    "reconciliation": reconciliation.report,
+                }),
+            })
+            .map_err(core_error)?;
+        store
+            .load_run(&snapshot.project_id, &snapshot.run_id)
+            .map_err(core_error)?
+    } else {
+        store
+            .update_run_status(&snapshot.project_id, &snapshot.run_id, RunStatus::Completed)
+            .map_err(core_error)?;
+        store
+            .append_event(NewRuntimeEvent {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                event_kind: RuntimeEventKind::RunCompleted,
+                trace: Some(RuntimeTraceContext::for_run(
+                    &snapshot.trace_id,
+                    &snapshot.run_id,
+                    "cursor_run_completed",
+                )),
+                payload: json!({
+                    "summary": "Cursor SDK run completed through Xero.",
+                    "provenance": cursor_agent_provenance(&request),
+                    "cursorAgentId": bridge.cursor_agent_id,
+                    "cursorRunId": bridge.cursor_run_id,
+                    "reconciliation": reconciliation.report,
+                }),
+            })
+            .map_err(core_error)?;
+        store
+            .load_run(&snapshot.project_id, &snapshot.run_id)
+            .map_err(core_error)?
+    };
+    cleanup_cursor_containment(containment);
+    Ok(final_snapshot)
+}
+
+fn parse_cursor_native_tool_policy(value: &str) -> Result<CursorNativeToolPolicy, CliError> {
+    match value.trim() {
+        "recover" => Ok(CursorNativeToolPolicy::Recover),
+        "warn" => Ok(CursorNativeToolPolicy::Warn),
+        "fail_on_unrecoverable_native_mutation" => {
+            Ok(CursorNativeToolPolicy::FailOnUnrecoverableNativeMutation)
+        }
+        "fail_on_any_native_tool" => Ok(CursorNativeToolPolicy::FailOnAnyNativeTool),
+        other => Err(CliError::usage(format!(
+            "Unknown Cursor native-tool policy `{other}`. Use recover, warn, fail_on_unrecoverable_native_mutation, or fail_on_any_native_tool."
+        ))),
+    }
+}
+
+fn parse_cursor_containment_mode(value: &str) -> Result<CursorContainmentMode, CliError> {
+    match value.trim() {
+        "copy" | "snapshot" | "snapshot-copy" => Ok(CursorContainmentMode::Copy),
+        "live" | "live-workspace" => Ok(CursorContainmentMode::Live),
+        other => Err(CliError::usage(format!(
+            "Unknown Cursor containment mode `{other}`. Use copy or live."
+        ))),
+    }
+}
+
+fn default_cursor_bridge_path() -> PathBuf {
+    env::var_os("XERO_CURSOR_BRIDGE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CURSOR_BRIDGE_SCRIPT_RELATIVE)
+        })
+}
+
+fn default_xero_cli_path() -> PathBuf {
+    env::var_os("XERO_CLI_PATH")
+        .map(PathBuf::from)
+        .or_else(|| env::current_exe().ok())
+        .unwrap_or_else(|| PathBuf::from("xero"))
+}
+
+fn cursor_bridge_import_self_test(bridge_path: &Path) -> Result<(), CliError> {
+    let output = Command::new("node")
+        .arg(bridge_path)
+        .arg("--self-test")
+        .output()
+        .map_err(|error| {
+            CliError::user_fixable(
+                "cursor_sdk_bridge_failed",
+                format!(
+                    "Could not run Cursor SDK bridge self-test `{}`: {error}",
+                    bridge_path.display()
+                ),
+            )
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let message = stdout
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<JsonValue>(line).ok())
+        .and_then(|event| {
+            event
+                .get("message")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| {
+            let combined = format!("{}{}", stdout, stderr);
+            truncate_bytes(combined.trim(), 2048)
+        });
+    Err(CliError::user_fixable(
+        "cursor_sdk_bridge_failed",
+        format!("Cursor SDK bridge self-test failed: {message}"),
+    ))
+}
+
+fn cursor_agent_provenance(request: &CursorAgentRunRequest) -> JsonValue {
+    json!({
+        "kind": "external_agent",
+        "adapterId": "cursor",
+        "adapterLabel": "Cursor",
+        "providerId": CURSOR_PROVIDER_ID,
+        "modelId": request.model_id,
+        "bridgeVersion": CURSOR_BRIDGE_VERSION,
+        "sdkRuntime": "local",
+        "nativeToolPolicy": request.native_tool_policy.as_str(),
+    })
+}
+
+fn cursor_preserved_environment_keys(request: &CursorAgentRunRequest) -> Vec<String> {
+    let mut keys = vec!["PATH".into(), "HOME".into()];
+    keys.push(
+        request
+            .api_key_env
+            .clone()
+            .unwrap_or_else(|| "CURSOR_API_KEY".into()),
+    );
+    keys
+}
+
+#[derive(Debug, Clone)]
+struct CursorWorkspaceSnapshot {
+    files: BTreeMap<String, CursorFileSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct CursorFileSnapshot {
+    sha256: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct CursorContainment {
+    repo_root: PathBuf,
+    temp_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Default)]
+struct CursorBridgeRunReport {
+    assistant_text: String,
+    stderr: String,
+    cursor_agent_id: Option<String>,
+    cursor_run_id: Option<String>,
+    tool_call_count: u64,
+    command_call_count: u64,
+    native_tool_count: u64,
+    native_mutation_count: u64,
+    cancelled: bool,
+    failure: Option<(String, String)>,
+}
+
+#[derive(Debug)]
+struct CursorReconciliationReport {
+    report: JsonValue,
+    failure: Option<(String, String)>,
+}
+
+fn capture_cursor_workspace_snapshot(
+    root: &Path,
+    include_protected_dirs: bool,
+) -> Result<CursorWorkspaceSnapshot, CliError> {
+    let mut snapshot = CursorWorkspaceSnapshot {
+        files: BTreeMap::new(),
+    };
+    capture_cursor_workspace_snapshot_inner(root, root, include_protected_dirs, &mut snapshot)?;
+    Ok(snapshot)
+}
+
+fn capture_cursor_workspace_snapshot_inner(
+    root: &Path,
+    path: &Path,
+    include_protected_dirs: bool,
+    snapshot: &mut CursorWorkspaceSnapshot,
+) -> Result<(), CliError> {
+    for entry in fs::read_dir(path).map_err(|error| {
+        CliError::system_fault(
+            "cursor_workspace_snapshot_failed",
+            format!(
+                "Could not read workspace directory `{}`: {error}",
+                path.display()
+            ),
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            CliError::system_fault("cursor_workspace_snapshot_failed", error.to_string())
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            CliError::system_fault("cursor_workspace_snapshot_failed", error.to_string())
+        })?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if file_type.is_dir() {
+            if should_skip_cursor_snapshot_dir(&name, include_protected_dirs) {
+                continue;
+            }
+            capture_cursor_workspace_snapshot_inner(
+                root,
+                &entry.path(),
+                include_protected_dirs,
+                snapshot,
+            )?;
+        } else if file_type.is_file() {
+            let bytes = fs::read(entry.path()).map_err(|error| {
+                CliError::system_fault(
+                    "cursor_workspace_snapshot_failed",
+                    format!("Could not read `{}`: {error}", entry.path().display()),
+                )
+            })?;
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .map_err(|error| {
+                    CliError::system_fault("cursor_workspace_snapshot_failed", error.to_string())
+                })?
+                .to_string_lossy()
+                .replace('\\', "/");
+            snapshot.files.insert(
+                relative,
+                CursorFileSnapshot {
+                    sha256: hex_sha256(&bytes),
+                    bytes,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+fn should_skip_cursor_snapshot_dir(name: &str, include_protected_dirs: bool) -> bool {
+    if !include_protected_dirs && matches!(name, ".git" | ".xero") {
+        return true;
+    }
+    matches!(
+        name,
+        ".next"
+            | ".turbo"
+            | ".cache"
+            | ".yarn"
+            | ".pnpm-store"
+            | "build"
+            | "coverage"
+            | "dist"
+            | "node_modules"
+            | "target"
+    )
+}
+
+fn prepare_cursor_containment(
+    request: &CursorAgentRunRequest,
+    _baseline: &CursorWorkspaceSnapshot,
+) -> Result<CursorContainment, CliError> {
+    if request.containment == CursorContainmentMode::Live {
+        return Ok(CursorContainment {
+            repo_root: request.repo_root.clone(),
+            temp_root: None,
+        });
+    }
+    let temp_root = env::temp_dir().join(format!(
+        "xero-cursor-{}-{}",
+        sanitize_identifier_segment(&request.run_id),
+        now_millis()
+    ));
+    fs::create_dir_all(&temp_root).map_err(|error| {
+        CliError::system_fault(
+            "cursor_containment_prepare_failed",
+            format!(
+                "Could not create Cursor containment directory `{}`: {error}",
+                temp_root.display()
+            ),
+        )
+    })?;
+    copy_cursor_workspace(&request.repo_root, &temp_root)?;
+    Ok(CursorContainment {
+        repo_root: temp_root.clone(),
+        temp_root: Some(temp_root),
+    })
+}
+
+fn copy_cursor_workspace(source: &Path, target: &Path) -> Result<(), CliError> {
+    for entry in fs::read_dir(source).map_err(|error| {
+        CliError::system_fault(
+            "cursor_containment_copy_failed",
+            format!("Could not read `{}`: {error}", source.display()),
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            CliError::system_fault("cursor_containment_copy_failed", error.to_string())
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            CliError::system_fault("cursor_containment_copy_failed", error.to_string())
+        })?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_cursor_snapshot_dir(&name, false) {
+            continue;
+        }
+        let destination = target.join(&name);
+        if file_type.is_dir() {
+            fs::create_dir_all(&destination).map_err(|error| {
+                CliError::system_fault(
+                    "cursor_containment_copy_failed",
+                    format!("Could not create `{}`: {error}", destination.display()),
+                )
+            })?;
+            copy_cursor_workspace(&entry.path(), &destination)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    CliError::system_fault(
+                        "cursor_containment_copy_failed",
+                        format!("Could not create `{}`: {error}", parent.display()),
+                    )
+                })?;
+            }
+            fs::copy(entry.path(), &destination).map_err(|error| {
+                CliError::system_fault(
+                    "cursor_containment_copy_failed",
+                    format!(
+                        "Could not copy `{}` to `{}`: {error}",
+                        entry.path().display(),
+                        destination.display()
+                    ),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_cursor_containment(containment: CursorContainment) {
+    if let Some(temp_root) = containment.temp_root {
+        let _ = fs::remove_dir_all(temp_root);
+    }
+}
+
+fn cursor_agent_sandbox_metadata(
+    globals: &GlobalOptions,
+    request: &CursorAgentRunRequest,
+    repo_root: &Path,
+) -> Result<SandboxExecutionMetadata, CliError> {
+    let descriptor = ToolDescriptorV2 {
+        name: "cursor_sdk_bridge".into(),
+        description:
+            "Launch the Cursor SDK bridge and capture its JSONL stream as an auditable Xero run."
+                .into(),
+        input_schema: json!({ "type": "object" }),
+        capability_tags: vec![
+            "external_agent".into(),
+            "cursor".into(),
+            "subprocess".into(),
+        ],
+        application_metadata: Default::default(),
+        effect_class: ToolEffectClass::CommandExecution,
+        mutability: ToolMutability::Mutating,
+        sandbox_requirement: ToolSandboxRequirement::FullLocal,
+        approval_requirement: ToolApprovalRequirement::Always,
+        telemetry_attributes: BTreeMap::new(),
+        result_truncation: Default::default(),
+    };
+    let sandbox = PermissionProfileSandbox::new(SandboxExecutionContext {
+        workspace_root: repo_root.display().to_string(),
+        app_data_roots: vec![globals.state_dir.display().to_string()],
+        project_trust: ProjectTrustState::UserApproved,
+        approval_source: match request.approval_source {
+            ExternalAgentApprovalSource::OperatorFlag => SandboxApprovalSource::Operator,
+            ExternalAgentApprovalSource::Environment => SandboxApprovalSource::Policy,
+        },
+        platform: SandboxPlatform::current(),
+        explicit_git_mutation_allowed: false,
+        legacy_xero_migration_allowed: false,
+        preserved_environment_keys: cursor_preserved_environment_keys(request),
+    });
+    let call = ToolCallInput {
+        tool_call_id: format!("cursor-bridge-{}", request.run_id),
+        tool_name: descriptor.name.clone(),
+        input: json!({
+            "projectId": request.project_id,
+            "runId": request.run_id,
+            "repoRoot": repo_root,
+            "bridgePath": request.bridge_path,
+        }),
+    };
+    sandbox
+        .evaluate(&descriptor, &call, &ToolExecutionContext::default())
+        .map_err(|denied| CliError::user_fixable(denied.error.code, denied.error.message))
+}
+
+fn run_cursor_bridge_process(
+    globals: &GlobalOptions,
+    store: &CliAgentStore,
+    request: &CursorAgentRunRequest,
+    effective_repo_root: &Path,
+    sandbox_metadata: &SandboxExecutionMetadata,
+) -> Result<CursorBridgeRunReport, CliError> {
+    let mut argv = vec![
+        "node".to_string(),
+        request.bridge_path.display().to_string(),
+        "--prompt".into(),
+        request.prompt.clone(),
+        "--repo-root".into(),
+        effective_repo_root.display().to_string(),
+        "--project-id".into(),
+        request.project_id.clone(),
+        "--run-id".into(),
+        request.run_id.clone(),
+        "--session-id".into(),
+        request.agent_session_id.clone(),
+        "--model".into(),
+        request.model_id.clone(),
+        "--xero-cli-path".into(),
+        request.xero_cli_path.display().to_string(),
+        "--xero-state-dir".into(),
+        globals.state_dir.display().to_string(),
+        "--mcp-mode".into(),
+        request.mcp_mode.as_str().into(),
+    ];
+    if let Some(api_key_env) = request.api_key_env.as_deref() {
+        argv.push("--api-key-env".into());
+        argv.push(api_key_env.into());
+    }
+    if let Some(fixture) = request.fixture.as_deref() {
+        argv.push("--fixture".into());
+        argv.push(fixture.display().to_string());
+    }
+    let output = SandboxedProcessRunner::new().run(
+        SandboxedProcessRequest {
+            argv,
+            cwd: Some(effective_repo_root.display().to_string()),
+            timeout_ms: Some(request.timeout_ms),
+            stdout_limit_bytes: 4 * 1024 * 1024,
+            stderr_limit_bytes: 1024 * 1024,
+            metadata: sandbox_metadata.clone(),
+        },
+        || cursor_run_cancelled(store, request),
+    );
+    let mut report = CursorBridgeRunReport::default();
+    match output {
+        Ok(output) => {
+            report.stderr = output.stderr.unwrap_or_default();
+            let stdout = output.stdout.unwrap_or_default();
+            for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+                append_cursor_bridge_output_event(
+                    store,
+                    &request_snapshot(store, request)?,
+                    "stdout",
+                    line,
+                )?;
+                match serde_json::from_str::<JsonValue>(line) {
+                    Ok(event) => process_cursor_bridge_event(store, request, &mut report, event)?,
+                    Err(error) => {
+                        report.failure.get_or_insert((
+                            "cursor_sdk_bridge_failed".into(),
+                            format!("Cursor bridge emitted invalid JSONL: {error}"),
+                        ));
+                    }
+                }
+            }
+            if output.exit_code != Some(0) && report.failure.is_none() {
+                report.failure = Some((
+                    "cursor_sdk_bridge_failed".into(),
+                    format!(
+                        "Cursor SDK bridge exited with status {:?}.",
+                        output.exit_code
+                    ),
+                ));
+            }
+        }
+        Err(error) => {
+            if error.code == "sandboxed_process_cancelled" {
+                report.cancelled = true;
+            }
+            report.failure = Some((
+                match error.code.as_str() {
+                    "sandboxed_process_timeout" => "cursor_run_timeout".into(),
+                    "sandboxed_process_cancelled" => "cursor_run_cancelled".into(),
+                    _ => "cursor_sdk_bridge_failed".into(),
+                },
+                error.message,
+            ));
+        }
+    }
+    Ok(report)
+}
+
+fn cursor_run_cancelled(store: &CliAgentStore, request: &CursorAgentRunRequest) -> bool {
+    store
+        .load_run(&request.project_id, &request.run_id)
+        .map(|snapshot| {
+            matches!(
+                snapshot.status,
+                RunStatus::Cancelling | RunStatus::Cancelled
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn request_snapshot(
+    store: &CliAgentStore,
+    request: &CursorAgentRunRequest,
+) -> Result<RunSnapshot, CliError> {
+    store
+        .load_run(&request.project_id, &request.run_id)
+        .map_err(core_error)
+}
+
+fn append_cursor_bridge_output_event(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    stream: &str,
+    output: &str,
+) -> Result<(), CliError> {
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::CommandOutput,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "cursor_bridge_output",
+            )),
+            payload: json!({
+                "stream": format!("cursor_bridge_{stream}"),
+                "text": truncate_bytes(output, 64 * 1024),
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn process_cursor_bridge_event(
+    store: &CliAgentStore,
+    request: &CursorAgentRunRequest,
+    report: &mut CursorBridgeRunReport,
+    event: JsonValue,
+) -> Result<(), CliError> {
+    let snapshot = request_snapshot(store, request)?;
+    let event_type = event
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("unknown");
+    if let Some(agent_id) = event.get("cursorAgentId").and_then(JsonValue::as_str) {
+        report.cursor_agent_id = Some(agent_id.to_owned());
+    }
+    if let Some(cursor_run_id) = event.get("cursorRunId").and_then(JsonValue::as_str) {
+        report.cursor_run_id = Some(cursor_run_id.to_owned());
+    }
+    match event_type {
+        "delta" => {
+            if let Some(text) = event.get("text").and_then(JsonValue::as_str) {
+                if !text.is_empty() {
+                    report.assistant_text.push_str(text);
+                    store
+                        .append_event(NewRuntimeEvent {
+                            project_id: snapshot.project_id.clone(),
+                            run_id: snapshot.run_id.clone(),
+                            event_kind: RuntimeEventKind::MessageDelta,
+                            trace: Some(RuntimeTraceContext::for_run(
+                                &snapshot.trace_id,
+                                &snapshot.run_id,
+                                "cursor_assistant_delta",
+                            )),
+                            payload: json!({
+                                "role": "assistant",
+                                "text": text,
+                                "provenance": cursor_agent_provenance(request),
+                            }),
+                        })
+                        .map_err(core_error)?;
+                }
+            }
+        }
+        "tool_call" => process_cursor_tool_call_event(store, request, report, &snapshot, &event)?,
+        "failed" => {
+            let code = event
+                .get("code")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("cursor_sdk_bridge_failed")
+                .to_owned();
+            let message = event
+                .get("message")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("Cursor SDK bridge failed.")
+                .to_owned();
+            report.failure = Some((code, message));
+        }
+        _ => {}
+    }
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::StateTransition,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "cursor_bridge_event",
+            )),
+            payload: json!({
+                "kind": "cursor_bridge_event",
+                "cursorEventKind": event_type,
+                "event": truncate_cursor_bridge_event(event),
+                "provenance": cursor_agent_provenance(request),
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn truncate_cursor_bridge_event(event: JsonValue) -> JsonValue {
+    let text = event.to_string();
+    if text.len() <= 16 * 1024 {
+        event
+    } else {
+        json!({
+            "truncated": true,
+            "preview": truncate_bytes(&text, 16 * 1024),
+        })
+    }
+}
+
+fn process_cursor_tool_call_event(
+    store: &CliAgentStore,
+    request: &CursorAgentRunRequest,
+    report: &mut CursorBridgeRunReport,
+    snapshot: &RunSnapshot,
+    event: &JsonValue,
+) -> Result<(), CliError> {
+    let name = event
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let status = event
+        .get("status")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("running");
+    if status == "running" {
+        report.tool_call_count = report.tool_call_count.saturating_add(1);
+        if is_cursor_command_tool_name(&name) {
+            report.command_call_count = report.command_call_count.saturating_add(1);
+        }
+    }
+    if let Some(limit) = request.max_tool_calls {
+        if report.tool_call_count > limit {
+            report.failure.get_or_insert((
+                "cursor_tool_call_limit_exceeded".into(),
+                format!("Cursor exceeded the configured max tool call limit of {limit}."),
+            ));
+        }
+    }
+    if let Some(limit) = request.max_command_calls {
+        if report.command_call_count > limit {
+            report.failure.get_or_insert((
+                "cursor_command_call_limit_exceeded".into(),
+                format!("Cursor exceeded the configured max command call limit of {limit}."),
+            ));
+        }
+    }
+    if is_cursor_native_tool_call(&name) {
+        report.native_tool_count = report.native_tool_count.saturating_add(1);
+        let mutating = is_cursor_native_mutating_tool(&name);
+        if mutating {
+            report.native_mutation_count = report.native_mutation_count.saturating_add(1);
+        }
+        store.append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::PolicyDecision,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "cursor_native_tool_observed",
+            )),
+            payload: json!({
+                "decision": if request.native_tool_policy == CursorNativeToolPolicy::FailOnAnyNativeTool { "deny" } else { "observe" },
+                "policy": "cursor_native_tool_bypass",
+                "reasonCode": "cursor_native_tool_bypass",
+                "toolName": name,
+                "status": status,
+                "mutating": mutating,
+                "defaultRecovery": request.native_tool_policy.as_str(),
+                "event": event,
+            }),
+        }).map_err(core_error)?;
+        if request.native_tool_policy == CursorNativeToolPolicy::FailOnAnyNativeTool {
+            report.failure.get_or_insert((
+                "cursor_native_tool_bypass".into(),
+                "Cursor used a native tool while strict native-tool denial was enabled.".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_cursor_native_tool_call(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    if normalized.contains("mcp") || normalized.contains("xero") {
+        return false;
+    }
+    CURSOR_NATIVE_TOOL_NAMES
+        .iter()
+        .any(|tool| normalized == *tool || normalized.ends_with(&format!("_{tool}")))
+}
+
+fn is_cursor_command_tool_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "shell" | "terminal" | "run_terminal_cmd" | "command"
+    )
+}
+
+fn is_cursor_native_mutating_tool(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "write"
+            | "edit"
+            | "delete"
+            | "shell"
+            | "terminal"
+            | "run_terminal_cmd"
+            | "apply_patch"
+            | "create_file"
+            | "update_file"
+    )
+}
+
+fn reconcile_cursor_workspace(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    request: &CursorAgentRunRequest,
+    baseline: &CursorWorkspaceSnapshot,
+    containment: &CursorContainment,
+    promote_contained_changes: bool,
+) -> Result<CursorReconciliationReport, CliError> {
+    let final_snapshot = capture_cursor_workspace_snapshot(
+        &containment.repo_root,
+        request.containment == CursorContainmentMode::Live,
+    )?;
+    let accounted =
+        accounted_cursor_file_change_paths(store, &request.project_id, &request.run_id)?;
+    let mut entries = Vec::new();
+    let mut failure = None;
+    for path in cursor_workspace_diff_paths(baseline, &final_snapshot) {
+        let diff_kind = cursor_diff_kind(&path, baseline, &final_snapshot);
+        let accounted_by_xero = accounted.contains(&path);
+        let safe = is_safe_cursor_reconciliation_path(&path);
+        let provenance = if accounted_by_xero {
+            "contained_cursor_change_promotion"
+        } else {
+            "recovered_cursor_direct_edit"
+        };
+        let mut action = "recorded";
+        if containment.temp_root.is_some() && safe && promote_contained_changes {
+            promote_cursor_diff_to_workspace(
+                store,
+                snapshot,
+                request,
+                &path,
+                provenance,
+                &diff_kind,
+                &final_snapshot,
+            )?;
+            action = "promoted";
+        } else if containment.temp_root.is_some() && safe {
+            action = "discarded_contained";
+        } else if containment.temp_root.is_none() && !safe {
+            restore_cursor_path_from_baseline(&request.repo_root, &path, baseline)?;
+            record_recovered_cursor_file_change(
+                store,
+                snapshot,
+                &path,
+                "revert_unsafe",
+                "cursor_unsafe_change_reverted",
+            )?;
+            action = "reverted";
+        } else if !safe {
+            action = "dropped_contained";
+        }
+        if !accounted_by_xero
+            && !safe
+            && request.native_tool_policy
+                == CursorNativeToolPolicy::FailOnUnrecoverableNativeMutation
+        {
+            failure.get_or_insert((
+                "cursor_untracked_mutation".into(),
+                "Cursor produced an unsafe direct mutation that Xero could not safely import."
+                    .into(),
+            ));
+        }
+        entries.push(json!({
+            "path": path,
+            "kind": diff_kind,
+            "accountedByXeroTools": accounted_by_xero,
+            "safe": safe,
+            "action": action,
+            "provenance": provenance,
+        }));
+    }
+    let report = json!({
+        "kind": "cursor_workspace_reconciliation",
+        "containment": request.containment.as_str(),
+        "mode": request.mcp_mode.as_str(),
+        "changedPathCount": entries.len(),
+        "changes": entries,
+    });
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::StateTransition,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "cursor_workspace_reconciliation",
+            )),
+            payload: report.clone(),
+        })
+        .map_err(core_error)?;
+    Ok(CursorReconciliationReport { report, failure })
+}
+
+fn accounted_cursor_file_change_paths(
+    store: &CliAgentStore,
+    project_id: &str,
+    run_id: &str,
+) -> Result<BTreeSet<String>, CliError> {
+    let snapshot = store.load_run(project_id, run_id).map_err(core_error)?;
+    Ok(snapshot
+        .events
+        .iter()
+        .filter(|event| event.event_kind == RuntimeEventKind::FileChanged)
+        .filter_map(|event| event.payload.get("path").and_then(JsonValue::as_str))
+        .map(|path| path.replace('\\', "/"))
+        .collect())
+}
+
+fn cursor_workspace_diff_paths(
+    baseline: &CursorWorkspaceSnapshot,
+    final_snapshot: &CursorWorkspaceSnapshot,
+) -> BTreeSet<String> {
+    let mut paths = baseline.files.keys().cloned().collect::<BTreeSet<_>>();
+    paths.extend(final_snapshot.files.keys().cloned());
+    paths
+        .into_iter()
+        .filter(|path| {
+            let before = baseline.files.get(path);
+            let after = final_snapshot.files.get(path);
+            before.map(|item| item.sha256.as_str()) != after.map(|item| item.sha256.as_str())
+        })
+        .collect()
+}
+
+fn cursor_diff_kind(
+    path: &str,
+    baseline: &CursorWorkspaceSnapshot,
+    final_snapshot: &CursorWorkspaceSnapshot,
+) -> &'static str {
+    match (
+        baseline.files.contains_key(path),
+        final_snapshot.files.contains_key(path),
+    ) {
+        (false, true) => "untracked_generated_file",
+        (true, false) => "untracked_delete",
+        (true, true) => "untracked_direct_edit",
+        (false, false) => "unchanged",
+    }
+}
+
+fn is_safe_cursor_reconciliation_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    if normalized.starts_with("../") || normalized.starts_with('/') {
+        return false;
+    }
+    let first = normalized.split('/').next().unwrap_or_default();
+    !matches!(first, ".git" | ".xero")
+}
+
+fn promote_cursor_diff_to_workspace(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    request: &CursorAgentRunRequest,
+    path: &str,
+    provenance: &str,
+    diff_kind: &str,
+    final_snapshot: &CursorWorkspaceSnapshot,
+) -> Result<(), CliError> {
+    let target = request.repo_root.join(path);
+    match final_snapshot.files.get(path) {
+        Some(file) => {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    CliError::system_fault(
+                        "cursor_reconciliation_promote_failed",
+                        format!("Could not create `{}`: {error}", parent.display()),
+                    )
+                })?;
+            }
+            fs::write(&target, &file.bytes).map_err(|error| {
+                CliError::system_fault(
+                    "cursor_reconciliation_promote_failed",
+                    format!("Could not promote `{}`: {error}", target.display()),
+                )
+            })?;
+            record_recovered_cursor_file_change(store, snapshot, path, diff_kind, provenance)
+        }
+        None => {
+            if target.exists() {
+                fs::remove_file(&target).map_err(|error| {
+                    CliError::system_fault(
+                        "cursor_reconciliation_promote_failed",
+                        format!("Could not remove `{}`: {error}", target.display()),
+                    )
+                })?;
+            }
+            record_recovered_cursor_file_change(store, snapshot, path, "delete", provenance)
+        }
+    }
+}
+
+fn restore_cursor_path_from_baseline(
+    repo_root: &Path,
+    path: &str,
+    baseline: &CursorWorkspaceSnapshot,
+) -> Result<(), CliError> {
+    let target = repo_root.join(path);
+    if let Some(file) = baseline.files.get(path) {
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                CliError::system_fault(
+                    "cursor_reconciliation_revert_failed",
+                    format!("Could not create `{}`: {error}", parent.display()),
+                )
+            })?;
+        }
+        fs::write(&target, &file.bytes).map_err(|error| {
+            CliError::system_fault(
+                "cursor_reconciliation_revert_failed",
+                format!("Could not restore `{}`: {error}", target.display()),
+            )
+        })?;
+    } else if target.exists() {
+        fs::remove_file(&target).map_err(|error| {
+            CliError::system_fault(
+                "cursor_reconciliation_revert_failed",
+                format!("Could not remove `{}`: {error}", target.display()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn record_recovered_cursor_file_change(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    path: &str,
+    operation: &str,
+    provenance: &str,
+) -> Result<(), CliError> {
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::FileChanged,
+            trace: Some(RuntimeTraceContext::for_storage_write(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "workspace_file",
+                snapshot.events.len(),
+            )),
+            payload: json!({
+                "path": path,
+                "operation": operation,
+                "runtime": "cursor_sdk_reconciliation",
+                "dispatch": {
+                    "registryVersion": "tool_registry_v2",
+                    "provenance": provenance,
+                    "recovered": provenance == "recovered_cursor_direct_edit",
+                },
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn command_available(command: &str) -> bool {
@@ -4841,6 +9703,16 @@ impl McpServerSession {
             mcp_string_arg(arguments, "sessionId").unwrap_or_else(|| generate_id("mcp-session"));
         let run_id = mcp_string_arg(arguments, "runId").unwrap_or_else(|| generate_id("mcp-run"));
         let model_id = mcp_string_arg(arguments, "modelId");
+        let runtime_agent_id =
+            mcp_string_arg(arguments, "runtimeAgentId").unwrap_or_else(|| "engineer".into());
+        let agent_definition_id = mcp_string_arg(arguments, "agentDefinitionId");
+        let thinking_effort = match mcp_string_arg(arguments, "thinkingEffort")
+            .map(|effort| normalize_cli_thinking_effort(&effort))
+            .transpose()
+        {
+            Ok(effort) => effort,
+            Err(error) => return mcp_tool_error(error.code, error.message),
+        };
         let provider = match resolve_cli_provider_execution(&self.globals, provider_id, model_id) {
             Ok(provider) => provider,
             Err(error) => return mcp_tool_error(error.code, error.message),
@@ -4850,7 +9722,15 @@ impl McpServerSession {
                 Ok(resolved) => resolved,
                 Err(error) => return mcp_tool_error(error.code, error.message),
             };
-        let provider = provider.with_project_workspace(&store);
+        let agent_definition = match store
+            .resolve_agent_definition_for_run(agent_definition_id.as_deref(), &runtime_agent_id)
+        {
+            Ok(definition) => definition,
+            Err(error) => return mcp_tool_error(error.code, error.message),
+        };
+        let provider = provider
+            .with_project_workspace(&store)
+            .with_workspace_writes(headless_runtime_agent_allows_writes(&runtime_agent_id));
         if provider.execution_mode == "real_provider" {
             if let Err(error) =
                 ensure_cli_real_provider_runtime_contract(&project_id, &provider, &store)
@@ -4883,11 +9763,16 @@ impl McpServerSession {
                 model_id: provider.model_id,
             },
             controls: Some(RunControls {
-                runtime_agent_id: "mcp_harness".into(),
+                runtime_agent_id: runtime_agent_id.clone(),
+                agent_definition_id: Some(agent_definition.definition_id),
+                agent_definition_version: Some(agent_definition.version),
+                thinking_effort,
                 approval_mode: if self.globals.ci {
                     "strict"
-                } else {
+                } else if headless_runtime_agent_allows_writes(&runtime_agent_id) {
                     "on_request"
+                } else {
+                    "suggest"
                 }
                 .into(),
                 plan_mode_required: self.globals.ci,
@@ -5217,6 +10102,9 @@ fn mcp_tool_definitions() -> Vec<JsonValue> {
                     "projectId": { "type": "string", "description": "Durable project id. Real-provider runs may omit this only when the current directory belongs to a registered app-data project." },
                     "sessionId": { "type": "string", "description": "Optional agent session id." },
                     "runId": { "type": "string", "description": "Optional run id." },
+                    "runtimeAgentId": { "type": "string", "description": "Runtime agent id to run, such as ask, engineer, debug, or plan. Defaults to engineer." },
+                    "agentDefinitionId": { "type": "string", "description": "Agent definition id to persist for the run. Defaults to runtimeAgentId." },
+                    "thinkingEffort": { "type": "string", "enum": ["minimal", "low", "medium", "high", "x_high", "xhigh"], "description": "Optional model thinking effort." },
                     "providerId": { "type": "string", "description": "Owned-agent provider id. Use fake_provider only for explicit harness tests." },
                     "modelId": { "type": "string", "description": "Model id for the owned-agent provider." }
                 },
@@ -5324,6 +10212,851 @@ fn mcp_tool_definitions() -> Vec<JsonValue> {
             "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
         }),
     ]
+}
+
+#[derive(Debug, Clone)]
+struct ToolRegistryMcpServerConfig {
+    project_id: String,
+    run_id: String,
+    session_id: String,
+    repo_root: PathBuf,
+    app_data_roots: Vec<String>,
+    mode: ToolRegistryMcpMode,
+    store: CliAgentStore,
+}
+
+fn run_mcp_tools_stdio_server(config: ToolRegistryMcpServerConfig) -> Result<(), CliError> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    run_mcp_tools_jsonrpc_stream(config, stdin.lock(), &mut stdout)
+}
+
+fn run_mcp_tools_jsonrpc_stream<R: BufRead, W: Write>(
+    config: ToolRegistryMcpServerConfig,
+    reader: R,
+    writer: &mut W,
+) -> Result<(), CliError> {
+    let mut session = ToolRegistryMcpServerSession { config };
+    for line in reader.lines() {
+        let line = line.map_err(|error| {
+            CliError::system_fault("xero_mcp_tools_stdio_read_failed", error.to_string())
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<JsonValue>(&line) {
+            Ok(message) => session.handle_message(message),
+            Err(error) => Some(mcp_error(
+                JsonValue::Null,
+                -32700,
+                "Parse error",
+                json!({ "message": error.to_string() }),
+            )),
+        };
+        if let Some(response) = response {
+            let payload = serde_json::to_string(&response).map_err(|error| {
+                CliError::system_fault("xero_mcp_tools_encode_failed", error.to_string())
+            })?;
+            writer.write_all(payload.as_bytes()).map_err(|error| {
+                CliError::system_fault("xero_mcp_tools_stdio_write_failed", error.to_string())
+            })?;
+            writer.write_all(b"\n").map_err(|error| {
+                CliError::system_fault("xero_mcp_tools_stdio_write_failed", error.to_string())
+            })?;
+            writer.flush().map_err(|error| {
+                CliError::system_fault("xero_mcp_tools_stdio_flush_failed", error.to_string())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+struct ToolRegistryMcpServerSession {
+    config: ToolRegistryMcpServerConfig,
+}
+
+impl ToolRegistryMcpServerSession {
+    fn handle_message(&mut self, message: JsonValue) -> Option<JsonValue> {
+        let Some(object) = message.as_object() else {
+            return Some(mcp_error(
+                JsonValue::Null,
+                -32600,
+                "Invalid Request",
+                json!({"message": "JSON-RPC messages must be objects."}),
+            ));
+        };
+        let id = object.get("id").cloned();
+        let Some(method) = object.get("method").and_then(JsonValue::as_str) else {
+            return id.map(|id| {
+                mcp_error(
+                    id,
+                    -32600,
+                    "Invalid Request",
+                    json!({"message": "Requests must include a string method."}),
+                )
+            });
+        };
+        let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
+        if id.is_none() {
+            return match method {
+                "notifications/initialized" | "notifications/cancelled" => None,
+                _ => None,
+            };
+        }
+        let id = id.unwrap_or(JsonValue::Null);
+        let result = match method {
+            "initialize" => Ok(mcp_tools_initialize_result(&params, self.config.mode)),
+            "ping" => Ok(json!({})),
+            "tools/list" => self.handle_tools_list(),
+            "tools/call" => self.handle_tool_call(params, &id),
+            _ => Err(mcp_error(
+                id.clone(),
+                -32601,
+                "Method not found",
+                json!({ "method": method }),
+            )),
+        };
+        Some(match result {
+            Ok(result) => mcp_success(id, result),
+            Err(error) => error,
+        })
+    }
+
+    fn runtime(&self) -> Result<HeadlessProductionToolRuntime, JsonValue> {
+        HeadlessProductionToolRuntime::new_with_modes(
+            Some(&self.config.repo_root),
+            self.config.mode.allow_writes(),
+            self.config.mode.allow_commands(),
+            self.config.app_data_roots.clone(),
+        )
+        .map_err(|error| {
+            mcp_error(
+                JsonValue::Null,
+                -32000,
+                "Xero Tool Registry runtime unavailable",
+                json!({ "code": error.code, "message": error.message }),
+            )
+        })
+    }
+
+    fn handle_tools_list(&self) -> Result<JsonValue, JsonValue> {
+        let runtime = self.runtime()?;
+        Ok(json!({
+            "tools": runtime
+                .descriptors()
+                .into_iter()
+                .map(mcp_tool_definition_from_descriptor)
+                .collect::<Vec<_>>()
+        }))
+    }
+
+    fn handle_tool_call(
+        &mut self,
+        params: JsonValue,
+        request_id: &JsonValue,
+    ) -> Result<JsonValue, JsonValue> {
+        let name = params
+            .get("name")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| {
+                mcp_error(
+                    request_id.clone(),
+                    -32602,
+                    "Invalid params",
+                    json!({"message": "`name` is required for tools/call."}),
+                )
+            })?;
+        let arguments = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if !arguments.is_object() {
+            return Err(mcp_error(
+                request_id.clone(),
+                -32602,
+                "Invalid params",
+                json!({"message": "`arguments` must be an object."}),
+            ));
+        }
+
+        let runtime = self.runtime()?;
+        let descriptor_names = runtime
+            .descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.name)
+            .collect::<BTreeSet<_>>();
+        if !descriptor_names.contains(name) {
+            let _ = record_external_policy_decision(
+                &self.config.store,
+                &self.config.project_id,
+                &self.config.run_id,
+                "deny",
+                "cursor_mcp_tool_not_allowed",
+                format!(
+                    "Tool `{name}` is not exposed in {} mode.",
+                    self.config.mode.as_str()
+                ),
+                json!({
+                    "toolName": name,
+                    "mode": self.config.mode.as_str(),
+                    "allowedTools": descriptor_names,
+                    "runtime": TOOL_REGISTRY_MCP_RUNTIME,
+                }),
+            );
+            return Ok(mcp_tool_error(
+                "cursor_mcp_tool_not_allowed",
+                format!(
+                    "Tool `{name}` is not available in {} mode.",
+                    self.config.mode.as_str()
+                ),
+            ));
+        }
+
+        let snapshot = match self
+            .config
+            .store
+            .load_run(&self.config.project_id, &self.config.run_id)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Ok(mcp_tool_error(error.code, error.message));
+            }
+        };
+        let call = ToolCallInput {
+            tool_call_id: mcp_tool_call_id(name, request_id, &arguments),
+            tool_name: name.to_owned(),
+            input: arguments,
+        };
+        if let Err(error) = record_external_tool_started(&self.config.store, &snapshot, 0, &call) {
+            return Ok(mcp_tool_error(error.code, error.message));
+        }
+
+        let report = match runtime.dispatch_batch(
+            &self.config.project_id,
+            &self.config.run_id,
+            0,
+            std::slice::from_ref(&call),
+        ) {
+            Ok(report) => report,
+            Err(error) => return Ok(mcp_tool_error(error.code, error.message)),
+        };
+        let report_json = serde_json::to_value(&report).unwrap_or_else(|_| json!({}));
+        let first_failure = first_tool_dispatch_failure(&report);
+        if let Err(error) =
+            persist_tool_registry_mcp_report(&self.config.store, &snapshot, &report, 0)
+        {
+            return Ok(mcp_tool_error(error.code, error.message));
+        }
+        if let Some((code, message)) = first_failure {
+            Ok(mcp_tool_result(
+                message.clone(),
+                json!({
+                    "ok": false,
+                    "projectId": self.config.project_id,
+                    "runId": self.config.run_id,
+                    "sessionId": self.config.session_id,
+                    "toolName": name,
+                    "mode": self.config.mode.as_str(),
+                    "error": { "code": code, "message": message },
+                    "report": report_json,
+                }),
+                true,
+            ))
+        } else {
+            Ok(mcp_tool_result(
+                format!("Dispatched `{name}` through Xero Tool Registry V2."),
+                json!({
+                    "ok": true,
+                    "projectId": self.config.project_id,
+                    "runId": self.config.run_id,
+                    "sessionId": self.config.session_id,
+                    "toolName": name,
+                    "mode": self.config.mode.as_str(),
+                    "report": report_json,
+                }),
+                false,
+            ))
+        }
+    }
+}
+
+fn mcp_tools_initialize_result(params: &JsonValue, mode: ToolRegistryMcpMode) -> JsonValue {
+    let requested = params
+        .get("protocolVersion")
+        .and_then(JsonValue::as_str)
+        .unwrap_or(MCP_PROTOCOL_VERSION);
+    let protocol_version = if matches!(requested, "2025-06-18" | "2025-03-26") {
+        requested
+    } else {
+        MCP_PROTOCOL_VERSION
+    };
+    json!({
+        "protocolVersion": protocol_version,
+        "capabilities": {
+            "tools": { "listChanged": false }
+        },
+        "serverInfo": {
+            "name": MCP_TOOLS_SERVER_NAME,
+            "title": "Xero Tool Registry V2",
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "instructions": format!(
+            "Use Xero Tool Registry V2 tools for auditable workspace actions. Current mode: {}.",
+            mode.as_str()
+        )
+    })
+}
+
+fn mcp_tool_definition_from_descriptor(descriptor: ToolDescriptorV2) -> JsonValue {
+    json!({
+        "name": descriptor.name,
+        "title": descriptor.name,
+        "description": descriptor.description,
+        "inputSchema": descriptor.input_schema,
+        "annotations": {
+            "readOnlyHint": descriptor.mutability == ToolMutability::ReadOnly,
+            "destructiveHint": matches!(
+                descriptor.effect_class,
+                ToolEffectClass::WorkspaceMutation | ToolEffectClass::CommandExecution
+            ),
+            "idempotentHint": descriptor.mutability == ToolMutability::ReadOnly,
+            "openWorldHint": matches!(
+                descriptor.effect_class,
+                ToolEffectClass::ExternalService | ToolEffectClass::BrowserControl | ToolEffectClass::DeviceControl
+            ),
+        }
+    })
+}
+
+fn mcp_tool_call_id(name: &str, request_id: &JsonValue, arguments: &JsonValue) -> String {
+    if let Some(id) = arguments
+        .get("toolCallId")
+        .or_else(|| arguments.get("tool_call_id"))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return id.to_owned();
+    }
+    let id = match request_id {
+        JsonValue::String(value) => value.clone(),
+        other => other.to_string(),
+    };
+    format!(
+        "cursor-mcp-{}-{}",
+        sanitize_identifier_segment(name),
+        sanitize_identifier_segment(&id)
+    )
+}
+
+fn sanitize_identifier_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim_matches('-');
+    if sanitized.is_empty() {
+        "id".into()
+    } else {
+        sanitized.chars().take(80).collect()
+    }
+}
+
+fn first_tool_dispatch_failure(report: &ToolBatchDispatchReport) -> Option<(String, String)> {
+    for group in &report.groups {
+        for outcome in &group.outcomes {
+            if let ToolDispatchOutcome::Failed(failure) = outcome {
+                return Some((failure.error.code.clone(), failure.error.message.clone()));
+            }
+        }
+    }
+    None
+}
+
+fn record_external_tool_registry_snapshot(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    turn_index: usize,
+    runtime: &HeadlessProductionToolRuntime,
+    mode: ToolRegistryMcpMode,
+) -> Result<(), CliError> {
+    let descriptors = runtime.descriptors();
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::ToolRegistrySnapshot,
+            trace: Some(RuntimeTraceContext::for_provider_turn(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                turn_index,
+            )),
+            payload: json!({
+                "kind": "active_tool_registry",
+                "runtime": TOOL_REGISTRY_MCP_RUNTIME,
+                "providerLoop": "cursor_sdk_bridge",
+                "turnIndex": turn_index,
+                "executionRegistry": "tool_registry_v2",
+                "mode": mode.as_str(),
+                "descriptorNames": descriptors.iter().map(|descriptor| descriptor.name.clone()).collect::<Vec<_>>(),
+                "descriptorsV2": descriptors,
+                "legacyMiniToolsAvailable": false,
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn record_external_tool_started(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    turn_index: usize,
+    call: &ToolCallInput,
+) -> Result<(), CliError> {
+    let (persisted_input, input_redacted) =
+        redacted_tool_registry_mcp_input(&call.tool_name, &call.input);
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::ToolStarted,
+            trace: Some(RuntimeTraceContext::for_tool_call(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                &call.tool_call_id,
+            )),
+            payload: json!({
+                "toolCallId": call.tool_call_id,
+                "toolName": call.tool_name,
+                "turnIndex": turn_index,
+                "runtime": TOOL_REGISTRY_MCP_RUNTIME,
+                "input": persisted_input,
+                "inputRedacted": input_redacted,
+                "dispatch": {
+                    "registryVersion": "tool_registry_v2",
+                    "providerLoop": "cursor_sdk_bridge",
+                    "path": "xero_mcp_serve_tools",
+                },
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn record_external_policy_decision(
+    store: &CliAgentStore,
+    project_id: &str,
+    run_id: &str,
+    decision: &str,
+    reason_code: &str,
+    message: impl Into<String>,
+    details: JsonValue,
+) -> Result<(), CliError> {
+    let snapshot = store.load_run(project_id, run_id).map_err(core_error)?;
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: project_id.to_owned(),
+            run_id: run_id.to_owned(),
+            event_kind: RuntimeEventKind::PolicyDecision,
+            trace: Some(RuntimeTraceContext::for_run(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                reason_code,
+            )),
+            payload: json!({
+                "decision": decision,
+                "policy": "cursor_external_agent_adapter",
+                "reasonCode": reason_code,
+                "message": message.into(),
+                "details": details,
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn persist_tool_registry_mcp_report(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    report: &ToolBatchDispatchReport,
+    turn_index: usize,
+) -> Result<(), CliError> {
+    for group in &report.groups {
+        for outcome in &group.outcomes {
+            match outcome {
+                ToolDispatchOutcome::Succeeded(success) => {
+                    persist_tool_registry_mcp_success(store, snapshot, group, success, turn_index)?
+                }
+                ToolDispatchOutcome::Failed(failure) => {
+                    persist_tool_registry_mcp_failure(store, snapshot, group, failure)?
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn persist_tool_registry_mcp_success(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    group: &xero_agent_core::ToolGroupDispatchReport,
+    success: &ToolDispatchSuccess,
+    turn_index: usize,
+) -> Result<(), CliError> {
+    persist_tool_registry_mcp_file_changes(store, snapshot, success, turn_index)?;
+    if success.tool_name == TOOL_NAME_COMMAND {
+        persist_tool_registry_mcp_command_output(store, snapshot, success)?;
+    }
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::ToolCompleted,
+            trace: Some(RuntimeTraceContext::for_tool_call(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                &success.tool_call_id,
+            )),
+            payload: json!({
+                "toolCallId": success.tool_call_id,
+                "toolName": success.tool_name,
+                "ok": true,
+                "summary": success.summary,
+                "resultPreview": truncate_bytes(&success.output.to_string(), 2048),
+                "dispatch": tool_registry_mcp_success_dispatch(group, success),
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn persist_tool_registry_mcp_failure(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    group: &xero_agent_core::ToolGroupDispatchReport,
+    failure: &ToolDispatchFailure,
+) -> Result<(), CliError> {
+    if matches!(
+        failure.error.category,
+        ToolErrorCategory::PolicyDenied | ToolErrorCategory::SandboxDenied
+    ) {
+        store
+            .append_event(NewRuntimeEvent {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                event_kind: RuntimeEventKind::PolicyDecision,
+                trace: Some(RuntimeTraceContext::for_tool_call(
+                    &snapshot.trace_id,
+                    &snapshot.run_id,
+                    &failure.tool_call_id,
+                )),
+                payload: json!({
+                    "decision": "deny",
+                    "policy": "tool_registry_v2",
+                    "reasonCode": failure.error.code,
+                    "message": failure.error.message,
+                    "toolName": failure.tool_name,
+                    "runtime": TOOL_REGISTRY_MCP_RUNTIME,
+                }),
+            })
+            .map_err(core_error)?;
+    }
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::ToolCompleted,
+            trace: Some(RuntimeTraceContext::for_tool_call(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                &failure.tool_call_id,
+            )),
+            payload: json!({
+                "toolCallId": failure.tool_call_id,
+                "toolName": failure.tool_name,
+                "ok": false,
+                "code": failure.error.code,
+                "message": failure.error.message,
+                "dispatch": tool_registry_mcp_failure_dispatch(group, failure),
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn persist_tool_registry_mcp_file_changes(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    success: &ToolDispatchSuccess,
+    turn_index: usize,
+) -> Result<(), CliError> {
+    match success.tool_name.as_str() {
+        TOOL_NAME_WRITE => record_tool_registry_mcp_file_changed(
+            store,
+            snapshot,
+            success.output["path"].clone(),
+            "write",
+            turn_index,
+            json!({
+                "bytes": success.output["bytes"].clone(),
+                "fileReservation": success.output["fileReservation"].clone(),
+                "rollback": success.output["rollback"].clone(),
+            }),
+        ),
+        TOOL_NAME_PATCH => {
+            for path in success.output["changedFiles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                record_tool_registry_mcp_file_changed(
+                    store,
+                    snapshot,
+                    path.clone(),
+                    "patch",
+                    turn_index,
+                    json!({}),
+                )?;
+            }
+            Ok(())
+        }
+        TOOL_NAME_DELETE => record_tool_registry_mcp_file_changed(
+            store,
+            snapshot,
+            success.output["path"].clone(),
+            "delete",
+            turn_index,
+            json!({
+                "kind": success.output["kind"].clone(),
+                "recursive": success.output["recursive"].clone(),
+                "fileReservation": success.output["fileReservation"].clone(),
+                "rollback": success.output["rollback"].clone(),
+            }),
+        ),
+        TOOL_NAME_MOVE => {
+            record_tool_registry_mcp_file_changed(
+                store,
+                snapshot,
+                success.output["from"].clone(),
+                "move_from",
+                turn_index,
+                json!({
+                    "to": success.output["to"].clone(),
+                    "kind": success.output["kind"].clone(),
+                    "fileReservation": success.output["fileReservation"].clone(),
+                    "rollback": success.output["rollback"].clone(),
+                }),
+            )?;
+            record_tool_registry_mcp_file_changed(
+                store,
+                snapshot,
+                success.output["to"].clone(),
+                "move_to",
+                turn_index,
+                json!({
+                    "from": success.output["from"].clone(),
+                    "kind": success.output["kind"].clone(),
+                    "fileReservation": success.output["fileReservation"].clone(),
+                    "rollback": success.output["rollback"].clone(),
+                }),
+            )
+        }
+        TOOL_NAME_REPLACE => {
+            for changed_file in success.output["changedFiles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                record_tool_registry_mcp_file_changed(
+                    store,
+                    snapshot,
+                    changed_file["path"].clone(),
+                    "replace",
+                    turn_index,
+                    json!({
+                        "replacements": changed_file["replacements"].clone(),
+                        "occurrences": changed_file["occurrences"].clone(),
+                        "truncated": changed_file["truncated"].clone(),
+                        "fileReservation": changed_file["fileReservation"].clone(),
+                        "rollback": changed_file["rollback"].clone(),
+                        "dryRun": success.output["dryRun"].clone(),
+                    }),
+                )?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn record_tool_registry_mcp_file_changed(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    path: JsonValue,
+    operation: &'static str,
+    turn_index: usize,
+    dispatch_extra: JsonValue,
+) -> Result<(), CliError> {
+    store
+        .append_event(NewRuntimeEvent {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            event_kind: RuntimeEventKind::FileChanged,
+            trace: Some(RuntimeTraceContext::for_storage_write(
+                &snapshot.trace_id,
+                &snapshot.run_id,
+                "workspace_file",
+                turn_index,
+            )),
+            payload: json!({
+                "path": path,
+                "operation": operation,
+                "runtime": TOOL_REGISTRY_MCP_RUNTIME,
+                "dispatch": {
+                    "registryVersion": "tool_registry_v2",
+                    "details": dispatch_extra,
+                },
+            }),
+        })
+        .map(|_| ())
+        .map_err(core_error)
+}
+
+fn persist_tool_registry_mcp_command_output(
+    store: &CliAgentStore,
+    snapshot: &RunSnapshot,
+    success: &ToolDispatchSuccess,
+) -> Result<(), CliError> {
+    for stream in ["stdout", "stderr"] {
+        let text = success.output[stream].as_str().unwrap_or_default();
+        if text.is_empty() {
+            continue;
+        }
+        store
+            .append_event(NewRuntimeEvent {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                event_kind: RuntimeEventKind::CommandOutput,
+                trace: Some(RuntimeTraceContext::for_tool_call(
+                    &snapshot.trace_id,
+                    &snapshot.run_id,
+                    &success.tool_call_id,
+                )),
+                payload: json!({
+                    "stream": stream,
+                    "text": truncate_bytes(text, 64 * 1024),
+                    "toolCallId": success.tool_call_id,
+                    "runtime": TOOL_REGISTRY_MCP_RUNTIME,
+                }),
+            })
+            .map_err(core_error)?;
+    }
+    Ok(())
+}
+
+fn tool_registry_mcp_success_dispatch(
+    group: &xero_agent_core::ToolGroupDispatchReport,
+    success: &ToolDispatchSuccess,
+) -> JsonValue {
+    json!({
+        "registryVersion": "tool_registry_v2",
+        "providerLoop": "cursor_sdk_bridge",
+        "groupMode": group.mode,
+        "groupElapsedMs": group.elapsed_ms,
+        "elapsedMs": success.elapsed_ms,
+        "truncation": success.truncation,
+        "sandbox": success.sandbox_metadata,
+        "telemetry": success.telemetry_attributes,
+        "preHook": success.pre_hook_payload,
+        "postHook": success.post_hook_payload,
+        "fileReservation": success.output.get("fileReservation").cloned(),
+        "rollback": success.output.get("rollback").cloned(),
+        "timeout": group.timeout_error.as_ref().map(tool_execution_error_json),
+    })
+}
+
+fn tool_registry_mcp_failure_dispatch(
+    group: &xero_agent_core::ToolGroupDispatchReport,
+    failure: &ToolDispatchFailure,
+) -> JsonValue {
+    json!({
+        "registryVersion": "tool_registry_v2",
+        "providerLoop": "cursor_sdk_bridge",
+        "groupMode": group.mode,
+        "groupElapsedMs": group.elapsed_ms,
+        "elapsedMs": failure.elapsed_ms,
+        "typedErrorCategory": failure.error.category,
+        "modelMessage": failure.error.model_message,
+        "retryable": failure.error.retryable,
+        "doomLoopSignal": failure.doom_loop_signal,
+        "rollbackPayload": failure.rollback_payload,
+        "rollbackError": failure.rollback_error.as_ref().map(tool_execution_error_json),
+        "sandbox": failure.sandbox_metadata,
+        "preHook": failure.pre_hook_payload,
+        "postHook": failure.post_hook_payload,
+        "timeout": group.timeout_error.as_ref().map(tool_execution_error_json),
+    })
+}
+
+fn tool_execution_error_json(error: &ToolExecutionError) -> JsonValue {
+    json!({
+        "category": error.category,
+        "code": error.code,
+        "message": error.message,
+        "modelMessage": error.model_message,
+        "retryable": error.retryable,
+    })
+}
+
+fn redacted_tool_registry_mcp_input(tool_name: &str, input: &JsonValue) -> (JsonValue, bool) {
+    let Some(object) = input.as_object() else {
+        return (input.clone(), false);
+    };
+    let mut redacted = object.clone();
+    let mut changed = false;
+    for key in ["content", "patch", "search", "replacement"] {
+        if redacted.contains_key(key)
+            && matches!(
+                tool_name,
+                TOOL_NAME_WRITE | TOOL_NAME_PATCH | TOOL_NAME_REPLACE
+            )
+        {
+            redacted.insert(
+                key.into(),
+                json!({
+                    "redacted": true,
+                    "reason": "tool_input_may_contain_source_text",
+                }),
+            );
+            changed = true;
+        }
+    }
+    (JsonValue::Object(redacted), changed)
+}
+
+fn mcp_tool_result(
+    summary: impl Into<String>,
+    structured_content: JsonValue,
+    is_error: bool,
+) -> JsonValue {
+    let summary = summary.into();
+    json!({
+        "content": [
+            {
+                "type": "text",
+                "text": summary,
+            }
+        ],
+        "structuredContent": structured_content,
+        "isError": is_error,
+    })
 }
 
 fn mcp_success(id: JsonValue, result: JsonValue) -> JsonValue {
@@ -6457,6 +12190,7 @@ fn open_workspace_index_database(
                 active_phase INTEGER NOT NULL DEFAULT 0 CHECK (active_phase >= 0),
                 branch TEXT,
                 runtime TEXT,
+                start_targets TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
@@ -7632,6 +13366,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn now_timestamp_emits_rfc3339_for_app_data_rows() {
+        let timestamp = now_timestamp();
+
+        assert!(timestamp.contains('T'));
+        assert!(timestamp.ends_with('Z'));
+        assert!(!timestamp.starts_with("unix:"));
+    }
+
+    #[test]
     fn fake_provider_harness_agent_exec_persists_headless_run_for_conversation_show() {
         let state_dir = unique_temp_dir("agent-exec");
         let exec = run_with_args([
@@ -7675,6 +13418,66 @@ mod tests {
     }
 
     #[test]
+    fn conversation_search_and_export_reuse_canonical_trace_snapshot() {
+        let state_dir = unique_temp_dir("conversation-search-export");
+        run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "agent",
+            "exec",
+            "--project-id",
+            "project-1",
+            "--session-id",
+            "session-1",
+            "--run-id",
+            "run-search",
+            "--provider",
+            "fake_provider",
+            "Find the needle phrase.",
+        ])
+        .expect("agent exec should succeed");
+
+        let search = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "conversation",
+            "search",
+            "--run-id",
+            "run-search",
+            "needle",
+        ])
+        .expect("conversation search should succeed");
+        assert_eq!(search.json["kind"], json!("conversationSearch"));
+        assert!(search.json["hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .any(|hit| hit["runId"] == json!("run-search")));
+
+        let output_path = state_dir.join("trace.md");
+        let export = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "conversation",
+            "export",
+            "--output",
+            output_path.to_str().expect("output path"),
+            "run-search",
+        ])
+        .expect("conversation export should succeed");
+        assert_eq!(export.json["kind"], json!("conversationExport"));
+        assert!(fs::read_to_string(output_path)
+            .expect("exported markdown")
+            .contains("run-search"));
+    }
+
+    #[test]
     fn agent_exec_requires_explicit_provider_when_unconfigured() {
         let state_dir = unique_temp_dir("agent-exec-provider-required");
         let error = run_with_args([
@@ -7688,6 +13491,78 @@ mod tests {
         .expect_err("unconfigured real provider should be rejected");
 
         assert_eq!(error.code, "xero_cli_provider_required");
+    }
+
+    #[test]
+    fn openai_codex_resolves_app_data_oauth_without_headless_profile() {
+        let app_data_root = unique_temp_dir("openai-codex-app-oauth");
+        let state_dir = app_data_root.join(HEADLESS_DIRECTORY_NAME);
+        fs::create_dir_all(&state_dir).expect("create headless state");
+        seed_openai_codex_oauth_session(
+            &app_data_root,
+            "acct_app",
+            "sess_app",
+            "app-oauth-access-token",
+            current_unix_timestamp() + 3600,
+        );
+        let globals = GlobalOptions {
+            output_mode: OutputMode::Text,
+            ci: false,
+            state_dir: state_dir.clone(),
+            tui_adapter: None,
+        };
+
+        let provider = resolve_cli_provider_execution(
+            &globals,
+            Some(OPENAI_CODEX_PROVIDER_ID.into()),
+            Some("openai/gpt-5.5".into()),
+        )
+        .expect("OpenAI Codex should reuse the app-local OAuth session");
+
+        assert_eq!(provider.profile_id, "openai_codex-app-oauth");
+        assert_eq!(provider.provider_id, OPENAI_CODEX_PROVIDER_ID);
+        assert_eq!(provider.model_id, "gpt-5.5");
+        assert_eq!(
+            provider.credential_proof.as_deref(),
+            Some("app_data_openai_codex_session")
+        );
+        assert!(
+            !state_dir.join(CLI_CONFIG_FILE).exists(),
+            "OpenAI Codex app OAuth must not require a headless CLI profile"
+        );
+        match provider.execution {
+            HeadlessProviderExecutionConfig::OpenAiCodexResponses(config) => {
+                assert_eq!(config.base_url, OPENAI_CODEX_DEFAULT_BASE_URL);
+                assert_eq!(config.access_token, "app-oauth-access-token");
+                assert_eq!(config.account_id, "acct_app");
+                assert_eq!(config.session_id.as_deref(), Some("sess_app"));
+            }
+            other => panic!("expected OpenAI Codex OAuth execution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_codex_missing_app_oauth_points_to_tauri_login() {
+        let app_data_root = unique_temp_dir("openai-codex-missing-oauth");
+        let state_dir = app_data_root.join(HEADLESS_DIRECTORY_NAME);
+        fs::create_dir_all(&state_dir).expect("create headless state");
+        let globals = GlobalOptions {
+            output_mode: OutputMode::Text,
+            ci: false,
+            state_dir,
+            tui_adapter: None,
+        };
+
+        let error = resolve_cli_provider_execution(
+            &globals,
+            Some(OPENAI_CODEX_PROVIDER_ID.into()),
+            Some("gpt-5.5".into()),
+        )
+        .expect_err("missing app OAuth should be a login-state error");
+
+        assert_eq!(error.code, "xero_cli_openai_oauth_store_missing");
+        assert!(error.message.contains("Xero Tauri app"));
+        assert!(!error.message.contains("provider login openai_codex"));
     }
 
     #[test]
@@ -7944,6 +13819,177 @@ mod tests {
             show.json["snapshot"]["traceId"],
             output.json["snapshot"]["traceId"]
         );
+    }
+
+    #[test]
+    fn real_provider_agent_exec_honors_selected_ask_agent() {
+        let state_dir = unique_temp_dir("agent-exec-real-provider-ask");
+        let workspace = unique_temp_dir("agent-exec-real-provider-ask-workspace");
+        seed_registered_project(&state_dir, "project-real", &workspace);
+        let server = MockOpenAiCompatibleServer::start(vec![json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "This is the whole project, not just landing."
+                }
+            }]
+        })]);
+
+        run_with_args([
+            "xero",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "provider",
+            "login",
+            "openai_api",
+            "--base-url",
+            server.base_url.as_str(),
+        ])
+        .expect("provider profile should be recorded");
+
+        let output = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "agent",
+            "exec",
+            "--provider",
+            "openai_api",
+            "--model",
+            "test-model",
+            "--project-id",
+            "project-real",
+            "--session-id",
+            "session-ask",
+            "--run-id",
+            "run-ask",
+            "--runtime-agent-id",
+            "ask",
+            "--agent-definition-id",
+            "ask",
+            "--thinking-effort",
+            "x_high",
+            "What is this project about?",
+        ])
+        .expect("ask real provider run should succeed");
+        server.join();
+
+        assert_eq!(output.json["snapshot"]["runtimeAgentId"], json!("ask"));
+        assert_eq!(output.json["snapshot"]["agentDefinitionId"], json!("ask"));
+        assert!(output.json["snapshot"]["systemPrompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.contains("You are Xero's Ask agent")));
+        let registry = output.json["snapshot"]["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .find(|event| event["eventKind"] == json!("tool_registry_snapshot"))
+            .expect("tool registry snapshot");
+        let descriptor_names = registry["payload"]["descriptorNames"]
+            .as_array()
+            .expect("descriptor names");
+        assert!(descriptor_names.iter().any(|name| name == "read"));
+        assert!(descriptor_names.iter().any(|name| name == "list"));
+        assert!(descriptor_names
+            .iter()
+            .all(|name| !matches!(name.as_str(), Some("write" | "patch" | "command"))));
+
+        let project_database =
+            workspace_project_database_path_for_app_root(&state_dir, "project-real");
+        let connection = Connection::open(project_database).expect("open project database");
+        let persisted = connection
+            .query_row(
+                "SELECT runtime_agent_id, agent_definition_id, agent_definition_version, system_prompt FROM agent_runs WHERE project_id = 'project-real' AND run_id = 'run-ask'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .expect("persisted ask run");
+        assert_eq!(persisted.0, "ask");
+        assert_eq!(persisted.1, "ask");
+        assert_eq!(persisted.2, 1);
+        assert!(persisted.3.contains("You are Xero's Ask agent"));
+    }
+
+    #[test]
+    fn real_provider_agent_exec_backfills_missing_generalist_definition() {
+        let state_dir = unique_temp_dir("agent-exec-real-provider-generalist");
+        let workspace = unique_temp_dir("agent-exec-real-provider-generalist-workspace");
+        seed_registered_project(&state_dir, "project-real", &workspace);
+        let server = MockOpenAiCompatibleServer::start(vec![json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Generalist run completed."
+                }
+            }]
+        })]);
+
+        run_with_args([
+            "xero",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "provider",
+            "login",
+            "openai_api",
+            "--base-url",
+            server.base_url.as_str(),
+        ])
+        .expect("provider profile should be recorded");
+
+        let output = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "agent",
+            "exec",
+            "--provider",
+            "openai_api",
+            "--model",
+            "test-model",
+            "--project-id",
+            "project-real",
+            "--session-id",
+            "session-agent",
+            "--run-id",
+            "run-agent",
+            "--runtime-agent-id",
+            "generalist",
+            "--agent-definition-id",
+            "generalist",
+            "What is this project about?",
+        ])
+        .expect("generalist real provider run should succeed");
+        server.join();
+
+        assert_eq!(
+            output.json["snapshot"]["runtimeAgentId"],
+            json!("generalist")
+        );
+        assert_eq!(
+            output.json["snapshot"]["agentDefinitionId"],
+            json!("generalist")
+        );
+
+        let project_database =
+            workspace_project_database_path_for_app_root(&state_dir, "project-real");
+        let connection = Connection::open(project_database).expect("open project database");
+        let persisted = connection
+            .query_row(
+                "SELECT display_name FROM agent_definitions WHERE definition_id = 'generalist'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("backfilled generalist definition");
+        assert_eq!(persisted, "Agent");
     }
 
     #[test]
@@ -8371,6 +14417,127 @@ mod tests {
     }
 
     #[test]
+    fn real_provider_exposes_command_and_patch_tools_for_benchmark_workloads() {
+        let state_dir = unique_temp_dir("agent-exec-real-provider-v2-command-patch");
+        let workspace = unique_temp_dir("agent-exec-real-provider-v2-command-patch-workspace");
+        seed_registered_project(&state_dir, "project-real", &workspace);
+        let patch = [
+            "diff --git a/generated.txt b/generated.txt",
+            "new file mode 100644",
+            "index 0000000..8baef1b",
+            "--- /dev/null",
+            "+++ b/generated.txt",
+            "@@ -0,0 +1 @@",
+            "+patched",
+            "",
+        ]
+        .join("\n");
+        let command_args = serde_json::to_string(&json!({
+            "argv": ["sh", "-c", "printf command-ok"],
+            "timeoutMs": 5000
+        }))
+        .expect("command args");
+        let patch_args = serde_json::to_string(&json!({ "patch": patch })).expect("patch args");
+        let server = MockOpenAiCompatibleServer::start(vec![
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call-command",
+                            "type": "function",
+                            "function": {
+                                "name": "command",
+                                "arguments": command_args
+                            }
+                        }, {
+                            "id": "call-patch",
+                            "type": "function",
+                            "function": {
+                                "name": "patch",
+                                "arguments": patch_args
+                            }
+                        }]
+                    }
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Command and patch completed."
+                    }
+                }]
+            }),
+        ]);
+
+        run_with_args([
+            "xero",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "provider",
+            "login",
+            "openai_api",
+            "--base-url",
+            server.base_url.as_str(),
+        ])
+        .expect("provider profile should be recorded");
+
+        let output = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "agent",
+            "exec",
+            "--provider",
+            "openai_api",
+            "--model",
+            "test-model",
+            "--project-id",
+            "project-real",
+            "--session-id",
+            "session-real",
+            "--run-id",
+            "run-real",
+            "Run a command and apply a patch.",
+        ]);
+        let output = output.expect("real provider run should succeed");
+        server.join();
+
+        assert_eq!(
+            fs::read_to_string(workspace.join("generated.txt")).expect("patched file"),
+            "patched\n"
+        );
+        let events = output.json["snapshot"]["events"]
+            .as_array()
+            .expect("events");
+        let registry = events
+            .iter()
+            .find(|event| event["eventKind"] == json!("tool_registry_snapshot"))
+            .expect("tool registry snapshot");
+        for tool_name in ["command", "patch"] {
+            assert!(registry["payload"]["descriptorNames"]
+                .as_array()
+                .expect("descriptor names")
+                .iter()
+                .any(|name| name == tool_name));
+        }
+        let completed = events
+            .iter()
+            .filter(|event| event["eventKind"] == json!("tool_completed"))
+            .map(|event| event["payload"]["toolName"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(completed, vec!["command", "patch"]);
+        assert!(events.iter().any(|event| {
+            event["eventKind"] == json!("file_changed")
+                && event["payload"]["operation"] == json!("patch")
+                && event["payload"]["path"] == json!("generated.txt")
+        }));
+    }
+
+    #[test]
     fn fake_provider_harness_conversation_dump_and_support_bundle_use_canonical_trace_snapshot() {
         let state_dir = unique_temp_dir("conversation-trace");
         run_with_args([
@@ -8510,6 +14677,22 @@ mod tests {
             .expect("clone messages")
             .iter()
             .any(|message| message["role"] == json!("user")));
+
+        let branched = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "conversation",
+            "branch",
+            "run-facade",
+        ])
+        .expect("conversation branch should fork through the facade");
+        assert_eq!(branched.json["kind"], json!("conversationClone"));
+        assert_ne!(
+            branched.json["snapshot"]["agentSessionId"],
+            json!("session-facade")
+        );
 
         let retried = run_with_args([
             "xero",
@@ -8764,8 +14947,9 @@ mod tests {
             output_mode: OutputMode::Json,
             ci: false,
             state_dir,
+            tui_adapter: None,
         };
-        let messages = vec![
+        let messages = [
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -8883,8 +15067,9 @@ mod tests {
             output_mode: OutputMode::Json,
             ci: false,
             state_dir: state_dir.clone(),
+            tui_adapter: None,
         };
-        let messages = vec![
+        let messages = [
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -8968,8 +15153,9 @@ mod tests {
             output_mode: OutputMode::Json,
             ci: false,
             state_dir: state_dir.clone(),
+            tui_adapter: None,
         };
-        let messages = vec![
+        let messages = [
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -9088,8 +15274,7 @@ mod tests {
             show.json["snapshot"]["traceId"]
         );
         assert!(
-            responses[2]["result"]["structuredContent"]["supportBundle"]["qualityGates"]
-                ["gates"]
+            responses[2]["result"]["structuredContent"]["supportBundle"]["qualityGates"]["gates"]
                 .is_array(),
             "MCP support bundle should include trace quality gates without treating later-phase gates as Phase 2 blockers"
         );
@@ -9149,6 +15334,130 @@ mod tests {
             external["capabilities"]["capabilities"]["toolCalls"]["status"],
             json!("not_applicable")
         );
+
+        let cursor = providers
+            .iter()
+            .find(|provider| provider["providerId"] == json!(CURSOR_PROVIDER_ID))
+            .expect("cursor provider");
+        assert_eq!(cursor["defaultModel"], json!(CURSOR_DEFAULT_MODEL_ID));
+        assert_eq!(
+            cursor["capabilities"]["catalogKind"],
+            json!("external_agent_adapter")
+        );
+        assert_eq!(cursor["adapterKind"], json!("cursor"));
+    }
+
+    #[test]
+    fn provider_remove_deletes_headless_profile_from_cli_config() {
+        let state_dir = unique_temp_dir("provider-remove");
+        run_with_args([
+            "xero",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "provider",
+            "login",
+            "openrouter",
+            "--profile",
+            "remove-me",
+            "--api-key-env",
+            "OPENROUTER_API_KEY",
+        ])
+        .expect("provider login should succeed");
+
+        let removed = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "provider",
+            "remove",
+            "--profile",
+            "remove-me",
+        ])
+        .expect("provider remove should succeed");
+        assert_eq!(removed.json["kind"], json!("providerRemove"));
+        assert_eq!(removed.json["profile"]["profileId"], json!("remove-me"));
+
+        let listed = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "provider",
+            "list",
+        ])
+        .expect("provider list should succeed");
+        let openrouter = listed.json["providers"]
+            .as_array()
+            .expect("providers")
+            .iter()
+            .find(|provider| provider["providerId"] == json!("openrouter"))
+            .expect("openrouter");
+        assert_eq!(openrouter["profiles"], json!([]));
+    }
+
+    #[test]
+    fn mcp_status_and_remove_reuse_cli_config() {
+        let state_dir = unique_temp_dir("mcp-status-remove");
+        run_with_args([
+            "xero",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "mcp",
+            "add",
+            "local-tools",
+            "--command",
+            "node",
+            "--arg",
+            "server.mjs",
+        ])
+        .expect("mcp add should succeed");
+        run_with_args([
+            "xero",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "mcp",
+            "login",
+            "local-tools",
+            "--token-env",
+            "LOCAL_TOOLS_TOKEN",
+        ])
+        .expect("mcp login should succeed");
+
+        let status = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "mcp",
+            "status",
+        ])
+        .expect("mcp status should succeed");
+        assert_eq!(status.json["servers"][0]["name"], json!("local-tools"));
+        assert_eq!(status.json["servers"][0]["hasTokenEnv"], json!(true));
+
+        let removed = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "mcp",
+            "remove",
+            "local-tools",
+        ])
+        .expect("mcp remove should succeed");
+        assert_eq!(removed.json["kind"], json!("mcpRemove"));
+
+        let empty = run_with_args([
+            "xero",
+            "--json",
+            "--state-dir",
+            state_dir.to_str().expect("state dir"),
+            "mcp",
+            "status",
+        ])
+        .expect("mcp status should succeed");
+        assert_eq!(empty.json["servers"], json!([]));
     }
 
     #[test]
@@ -9446,6 +15755,402 @@ mod tests {
                     .is_some_and(|content| content.contains("external-output"))));
     }
 
+    #[test]
+    fn mcp_serve_tools_observe_only_lists_registry_tools_and_denies_write() {
+        let state_dir = unique_temp_dir("mcp-serve-tools-observe");
+        let repo_dir = unique_temp_dir("mcp-serve-tools-repo");
+        fs::write(repo_dir.join("README.md"), "hello").expect("seed repo");
+        let store = FileAgentCoreStore::open(state_dir.join(AGENT_CORE_STATE_FILE)).expect("store");
+        let snapshot = store
+            .insert_run(NewRunRecord {
+                trace_id: None,
+                runtime_agent_id: "engineer".into(),
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: 1,
+                system_prompt: "cursor test".into(),
+                project_id: "project-cursor-mcp".into(),
+                agent_session_id: "session-cursor-mcp".into(),
+                run_id: "run-cursor-mcp".into(),
+                provider_id: CURSOR_PROVIDER_ID.into(),
+                model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+                prompt: "test".into(),
+            })
+            .expect("insert run");
+        let config = ToolRegistryMcpServerConfig {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            session_id: snapshot.agent_session_id.clone(),
+            repo_root: repo_dir,
+            app_data_roots: vec![state_dir.display().to_string()],
+            mode: ToolRegistryMcpMode::ObserveOnly,
+            store: CliAgentStore::Harness(store),
+        };
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":MCP_PROTOCOL_VERSION}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"write","arguments":{"path":"note.txt","content":"nope"}}}),
+        ]
+        .into_iter()
+        .map(|message| serde_json::to_string(&message).expect("encode"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut output = Vec::new();
+        run_mcp_tools_jsonrpc_stream(config, std::io::Cursor::new(input), &mut output)
+            .expect("mcp tools stream");
+        let responses = String::from_utf8(output)
+            .expect("utf8")
+            .lines()
+            .map(|line| serde_json::from_str::<JsonValue>(line).expect("json"))
+            .collect::<Vec<_>>();
+        let tools = responses[1]["result"]["tools"].as_array().expect("tools");
+        assert!(tools.iter().any(|tool| tool["name"] == json!("read")));
+        assert!(tools.iter().any(|tool| tool["name"] == json!("list")));
+        assert!(!tools.iter().any(|tool| tool["name"] == json!("write")));
+        assert_eq!(responses[2]["result"]["isError"], json!(true));
+        assert_eq!(
+            responses[2]["result"]["structuredContent"]["error"]["code"],
+            json!("cursor_mcp_tool_not_allowed")
+        );
+    }
+
+    #[test]
+    fn mcp_serve_tools_workspace_write_dispatches_through_registry_and_persists_trace() {
+        let state_dir = unique_temp_dir("mcp-serve-tools-write");
+        let repo_dir = unique_temp_dir("mcp-serve-tools-write-repo");
+        let store = FileAgentCoreStore::open(state_dir.join(AGENT_CORE_STATE_FILE)).expect("store");
+        let snapshot = store
+            .insert_run(NewRunRecord {
+                trace_id: None,
+                runtime_agent_id: "engineer".into(),
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: 1,
+                system_prompt: "cursor test".into(),
+                project_id: "project-cursor-write".into(),
+                agent_session_id: "session-cursor-write".into(),
+                run_id: "run-cursor-write".into(),
+                provider_id: CURSOR_PROVIDER_ID.into(),
+                model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+                prompt: "test".into(),
+            })
+            .expect("insert run");
+        let config = ToolRegistryMcpServerConfig {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            session_id: snapshot.agent_session_id.clone(),
+            repo_root: repo_dir.clone(),
+            app_data_roots: vec![state_dir.display().to_string()],
+            mode: ToolRegistryMcpMode::WorkspaceWrite,
+            store: CliAgentStore::Harness(store.clone()),
+        };
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":MCP_PROTOCOL_VERSION}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write","arguments":{"path":"note.txt","content":"hello"}}}),
+        ]
+        .into_iter()
+        .map(|message| serde_json::to_string(&message).expect("encode"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut output = Vec::new();
+        run_mcp_tools_jsonrpc_stream(config, std::io::Cursor::new(input), &mut output)
+            .expect("mcp tools stream");
+        assert_eq!(
+            fs::read_to_string(repo_dir.join("note.txt")).unwrap(),
+            "hello"
+        );
+        let responses = String::from_utf8(output)
+            .expect("utf8")
+            .lines()
+            .map(|line| serde_json::from_str::<JsonValue>(line).expect("json"))
+            .collect::<Vec<_>>();
+        assert_eq!(responses[1]["result"]["isError"], json!(false));
+        let trace = store
+            .export_trace("project-cursor-write", "run-cursor-write")
+            .expect("trace");
+        assert!(trace.snapshot.events.iter().any(|event| {
+            event.event_kind == RuntimeEventKind::ToolStarted
+                && event.payload["dispatch"]["registryVersion"] == json!("tool_registry_v2")
+        }));
+        assert!(trace.snapshot.events.iter().any(|event| {
+            event.event_kind == RuntimeEventKind::FileChanged
+                && event.payload["dispatch"]["registryVersion"] == json!("tool_registry_v2")
+        }));
+    }
+
+    #[test]
+    fn mcp_serve_tools_workspace_write_rejects_command_tool() {
+        let state_dir = unique_temp_dir("mcp-serve-tools-command-denied");
+        let repo_dir = unique_temp_dir("mcp-serve-tools-command-denied-repo");
+        let store = FileAgentCoreStore::open(state_dir.join(AGENT_CORE_STATE_FILE)).expect("store");
+        let snapshot = store
+            .insert_run(NewRunRecord {
+                trace_id: None,
+                runtime_agent_id: "engineer".into(),
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: 1,
+                system_prompt: "cursor test".into(),
+                project_id: "project-cursor-command-denied".into(),
+                agent_session_id: "session-cursor-command-denied".into(),
+                run_id: "run-cursor-command-denied".into(),
+                provider_id: CURSOR_PROVIDER_ID.into(),
+                model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+                prompt: "test".into(),
+            })
+            .expect("insert run");
+        let config = ToolRegistryMcpServerConfig {
+            project_id: snapshot.project_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            session_id: snapshot.agent_session_id.clone(),
+            repo_root: repo_dir,
+            app_data_roots: vec![state_dir.display().to_string()],
+            mode: ToolRegistryMcpMode::WorkspaceWrite,
+            store: CliAgentStore::Harness(store.clone()),
+        };
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"command","arguments":{"command":"echo nope"}}}),
+        ]
+        .into_iter()
+        .map(|message| serde_json::to_string(&message).expect("encode"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let mut output = Vec::new();
+        run_mcp_tools_jsonrpc_stream(config, std::io::Cursor::new(input), &mut output)
+            .expect("mcp tools stream");
+        let responses = String::from_utf8(output)
+            .expect("utf8")
+            .lines()
+            .map(|line| serde_json::from_str::<JsonValue>(line).expect("json"))
+            .collect::<Vec<_>>();
+        let tools = responses[0]["result"]["tools"].as_array().expect("tools");
+        assert!(!tools.iter().any(|tool| tool["name"] == json!("command")));
+        assert_eq!(responses[1]["result"]["isError"], json!(true));
+        assert_eq!(
+            responses[1]["result"]["structuredContent"]["error"]["code"],
+            json!("cursor_mcp_tool_not_allowed")
+        );
+        let trace = store
+            .export_trace("project-cursor-command-denied", "run-cursor-command-denied")
+            .expect("trace");
+        assert!(trace.snapshot.events.iter().any(|event| {
+            event.event_kind == RuntimeEventKind::PolicyDecision
+                && event.payload["reasonCode"] == json!("cursor_mcp_tool_not_allowed")
+        }));
+    }
+
+    #[test]
+    fn cursor_reconciliation_promotes_safe_contained_direct_edit() {
+        let state_dir = unique_temp_dir("cursor-reconcile");
+        let repo_dir = unique_temp_dir("cursor-reconcile-repo");
+        fs::write(repo_dir.join("app.txt"), "old").expect("seed");
+        let baseline = capture_cursor_workspace_snapshot(&repo_dir, false).expect("baseline");
+        let contained = unique_temp_dir("cursor-reconcile-contained");
+        copy_cursor_workspace(&repo_dir, &contained).expect("copy");
+        fs::write(contained.join("app.txt"), "new").expect("edit contained");
+
+        let store = FileAgentCoreStore::open(state_dir.join(AGENT_CORE_STATE_FILE)).expect("store");
+        let snapshot = store
+            .insert_run(NewRunRecord {
+                trace_id: None,
+                runtime_agent_id: "engineer".into(),
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: 1,
+                system_prompt: "cursor test".into(),
+                project_id: "project-cursor-reconcile".into(),
+                agent_session_id: "session-cursor-reconcile".into(),
+                run_id: "run-cursor-reconcile".into(),
+                provider_id: CURSOR_PROVIDER_ID.into(),
+                model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+                prompt: "test".into(),
+            })
+            .expect("insert run");
+        let request = CursorAgentRunRequest {
+            project_id: snapshot.project_id.clone(),
+            agent_session_id: snapshot.agent_session_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            prompt: "test".into(),
+            model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+            repo_root: repo_dir.clone(),
+            bridge_path: PathBuf::from("bridge"),
+            xero_cli_path: PathBuf::from("xero"),
+            api_key_env: None,
+            timeout_ms: 1000,
+            max_tool_calls: None,
+            max_command_calls: None,
+            runtime_agent_id: "engineer".into(),
+            mcp_mode: ToolRegistryMcpMode::WorkspaceWrite,
+            native_tool_policy: CursorNativeToolPolicy::Recover,
+            containment: CursorContainmentMode::Copy,
+            fixture: None,
+            approval_source: ExternalAgentApprovalSource::OperatorFlag,
+        };
+        let containment = CursorContainment {
+            repo_root: contained.clone(),
+            temp_root: Some(contained),
+        };
+        let report = reconcile_cursor_workspace(
+            &CliAgentStore::Harness(store.clone()),
+            &snapshot,
+            &request,
+            &baseline,
+            &containment,
+            true,
+        )
+        .expect("reconcile");
+        assert!(report.failure.is_none());
+        assert_eq!(fs::read_to_string(repo_dir.join("app.txt")).unwrap(), "new");
+        let trace = store
+            .export_trace("project-cursor-reconcile", "run-cursor-reconcile")
+            .expect("trace");
+        assert!(trace.snapshot.events.iter().any(|event| {
+            event.event_kind == RuntimeEventKind::FileChanged
+                && event.payload["dispatch"]["provenance"] == json!("recovered_cursor_direct_edit")
+        }));
+    }
+
+    #[test]
+    fn cursor_reconciliation_ignores_protected_dirs_missing_from_containment_copy() {
+        let repo_dir = unique_temp_dir("cursor-reconcile-protected");
+        fs::create_dir_all(repo_dir.join(".git")).expect("git dir");
+        fs::create_dir_all(repo_dir.join(".xero")).expect("xero dir");
+        fs::write(repo_dir.join(".git/config"), "[core]\n").expect("git config");
+        fs::write(repo_dir.join(".xero/state.json"), "{}").expect("legacy state");
+        fs::write(repo_dir.join("app.txt"), "ok").expect("seed");
+
+        let baseline =
+            capture_cursor_workspace_snapshot(&repo_dir, false).expect("baseline snapshot");
+        let contained = unique_temp_dir("cursor-reconcile-protected-contained");
+        copy_cursor_workspace(&repo_dir, &contained).expect("copy");
+        let final_snapshot =
+            capture_cursor_workspace_snapshot(&contained, false).expect("final snapshot");
+        let diff_paths = cursor_workspace_diff_paths(&baseline, &final_snapshot);
+
+        assert!(
+            diff_paths.is_empty(),
+            "protected repository-local state excluded from containment should not appear as a workspace diff: {diff_paths:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_reconciliation_reverts_unsafe_live_change_from_baseline() {
+        let state_dir = unique_temp_dir("cursor-reconcile-live-unsafe");
+        let repo_dir = unique_temp_dir("cursor-reconcile-live-unsafe-repo");
+        fs::create_dir_all(repo_dir.join(".xero")).expect("legacy state dir");
+        fs::write(repo_dir.join(".xero/state.json"), r#"{"ok":true}"#).expect("seed");
+        let baseline = capture_cursor_workspace_snapshot(&repo_dir, true).expect("baseline");
+        fs::write(repo_dir.join(".xero/state.json"), r#"{"ok":false}"#).expect("unsafe edit");
+
+        let store = FileAgentCoreStore::open(state_dir.join(AGENT_CORE_STATE_FILE)).expect("store");
+        let snapshot = store
+            .insert_run(NewRunRecord {
+                trace_id: None,
+                runtime_agent_id: "engineer".into(),
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: 1,
+                system_prompt: "cursor test".into(),
+                project_id: "project-cursor-live-unsafe".into(),
+                agent_session_id: "session-cursor-live-unsafe".into(),
+                run_id: "run-cursor-live-unsafe".into(),
+                provider_id: CURSOR_PROVIDER_ID.into(),
+                model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+                prompt: "test".into(),
+            })
+            .expect("insert run");
+        let request = CursorAgentRunRequest {
+            project_id: snapshot.project_id.clone(),
+            agent_session_id: snapshot.agent_session_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            prompt: "test".into(),
+            model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+            repo_root: repo_dir.clone(),
+            bridge_path: PathBuf::from("bridge"),
+            xero_cli_path: PathBuf::from("xero"),
+            api_key_env: None,
+            timeout_ms: 1000,
+            max_tool_calls: None,
+            max_command_calls: None,
+            runtime_agent_id: "engineer".into(),
+            mcp_mode: ToolRegistryMcpMode::WorkspaceWrite,
+            native_tool_policy: CursorNativeToolPolicy::Recover,
+            containment: CursorContainmentMode::Live,
+            fixture: None,
+            approval_source: ExternalAgentApprovalSource::OperatorFlag,
+        };
+        let containment = CursorContainment {
+            repo_root: repo_dir.clone(),
+            temp_root: None,
+        };
+        let report = reconcile_cursor_workspace(
+            &CliAgentStore::Harness(store.clone()),
+            &snapshot,
+            &request,
+            &baseline,
+            &containment,
+            true,
+        )
+        .expect("reconcile");
+
+        assert!(report.failure.is_none());
+        assert_eq!(
+            fs::read_to_string(repo_dir.join(".xero/state.json")).unwrap(),
+            r#"{"ok":true}"#
+        );
+        let trace = store
+            .export_trace("project-cursor-live-unsafe", "run-cursor-live-unsafe")
+            .expect("trace");
+        assert!(trace.snapshot.events.iter().any(|event| {
+            event.event_kind == RuntimeEventKind::FileChanged
+                && event.payload["dispatch"]["provenance"] == json!("cursor_unsafe_change_reverted")
+        }));
+    }
+
+    #[test]
+    fn cursor_support_bundle_redacts_bridge_output_text() {
+        let state_dir = unique_temp_dir("cursor-support-redaction");
+        let store = FileAgentCoreStore::open(state_dir.join(AGENT_CORE_STATE_FILE)).expect("store");
+        let snapshot = store
+            .insert_run(NewRunRecord {
+                trace_id: None,
+                runtime_agent_id: "engineer".into(),
+                agent_definition_id: "engineer".into(),
+                agent_definition_version: 1,
+                system_prompt: "cursor test".into(),
+                project_id: "project-cursor-redaction".into(),
+                agent_session_id: "session-cursor-redaction".into(),
+                run_id: "run-cursor-redaction".into(),
+                provider_id: CURSOR_PROVIDER_ID.into(),
+                model_id: CURSOR_DEFAULT_MODEL_ID.into(),
+                prompt: "test".into(),
+            })
+            .expect("insert run");
+        store
+            .append_event(NewRuntimeEvent {
+                project_id: snapshot.project_id.clone(),
+                run_id: snapshot.run_id.clone(),
+                event_kind: RuntimeEventKind::CommandOutput,
+                trace: Some(RuntimeTraceContext::for_run(
+                    &snapshot.trace_id,
+                    &snapshot.run_id,
+                    "cursor_bridge_output",
+                )),
+                payload: json!({
+                    "stream": "cursor_bridge_stderr",
+                    "text": "CURSOR_API_KEY=cursor-secret-value",
+                }),
+            })
+            .expect("event");
+
+        let trace = store
+            .export_trace("project-cursor-redaction", "run-cursor-redaction")
+            .expect("trace");
+        let support_bundle = trace.redacted_support_bundle().expect("support bundle");
+        let serialized = serde_json::to_string(&support_bundle).expect("serialize");
+
+        assert!(!serialized.contains("cursor-secret-value"));
+        assert!(support_bundle.redaction_report.redacted_value_count > 0);
+    }
+
     fn seed_registered_project(state_dir: &Path, project_id: &str, repo_root: &Path) {
         let repo_root = fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
         fs::create_dir_all(state_dir).expect("create app-data root");
@@ -9513,6 +16218,61 @@ mod tests {
                 params![project_id, project_id, now_timestamp()],
             )
             .expect("seed project row");
+    }
+
+    fn seed_openai_codex_oauth_session(
+        app_data_root: &Path,
+        account_id: &str,
+        session_id: &str,
+        access_token: &str,
+        expires_at: i64,
+    ) {
+        fs::create_dir_all(app_data_root).expect("create app-data root");
+        let connection =
+            Connection::open(app_data_root.join(GLOBAL_DATABASE_FILE)).expect("open OAuth store");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS provider_credentials (
+                    provider_id              TEXT    PRIMARY KEY,
+                    kind                     TEXT    NOT NULL,
+                    api_key                  TEXT,
+                    oauth_account_id         TEXT,
+                    oauth_session_id         TEXT,
+                    oauth_access_token       TEXT,
+                    oauth_refresh_token      TEXT,
+                    oauth_expires_at         INTEGER,
+                    base_url                 TEXT,
+                    api_version              TEXT,
+                    region                   TEXT,
+                    scope_project_id         TEXT,
+                    default_model_id         TEXT,
+                    updated_at               TEXT    NOT NULL
+                );
+                "#,
+            )
+            .expect("create provider_credentials");
+        connection
+            .execute(
+                "INSERT INTO provider_credentials (
+                    provider_id,
+                    kind,
+                    oauth_account_id,
+                    oauth_session_id,
+                    oauth_access_token,
+                    oauth_expires_at,
+                    updated_at
+                ) VALUES (?1, 'oauth_session', ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    OPENAI_CODEX_PROVIDER_ID,
+                    account_id,
+                    session_id,
+                    access_token,
+                    expires_at,
+                    now_timestamp(),
+                ],
+            )
+            .expect("insert OAuth session");
     }
 
     fn seed_global_project_registration_only(state_dir: &Path, project_id: &str, repo_root: &Path) {
@@ -9750,6 +16510,17 @@ mod tests {
             updated_at
         )
         VALUES ('engineer', 1, 'Engineer', 'Build', 'built_in', 'active', 'engineering', '2026-05-01T00:00:00Z');
+        INSERT OR IGNORE INTO agent_definitions (
+            definition_id,
+            current_version,
+            display_name,
+            short_label,
+            scope,
+            lifecycle_state,
+            base_capability_profile,
+            updated_at
+        )
+        VALUES ('ask', 1, 'Ask', 'Ask', 'built_in', 'active', 'observe_only', '2026-05-01T00:00:00Z');
         INSERT OR IGNORE INTO agent_definition_versions (
             definition_id,
             version,
@@ -9758,13 +16529,23 @@ mod tests {
             created_at
         )
         VALUES ('engineer', 1, '{"id":"engineer","version":1}', '{"status":"valid","source":"seed"}', '2026-05-01T00:00:00Z');
+        INSERT OR IGNORE INTO agent_definition_versions (
+            definition_id,
+            version,
+            snapshot_json,
+            validation_report_json,
+            created_at
+        )
+        VALUES ('ask', 1, '{"id":"ask","version":1}', '{"status":"valid","source":"seed"}', '2026-05-01T00:00:00Z');
         CREATE TABLE IF NOT EXISTS agent_sessions (
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             agent_session_id TEXT NOT NULL,
             title TEXT NOT NULL,
             summary TEXT NOT NULL DEFAULT '',
+            session_kind TEXT NOT NULL DEFAULT 'standard',
             status TEXT NOT NULL,
             selected INTEGER NOT NULL DEFAULT 0,
+            remote_visible INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             archived_at TEXT,
@@ -9926,6 +16707,9 @@ mod tests {
                         Ok((mut stream, _)) => {
                             request_count_for_thread
                                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            stream
+                                .set_nonblocking(false)
+                                .expect("configure mock probe stream");
                             read_http_request(&mut stream);
                             let body =
                                 serde_json::to_string(&response).expect("serialize probe response");
@@ -9974,6 +16758,595 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn final_workspace_diff_lists_non_git_workspace_outputs() {
+        let workspace = unique_temp_dir("benchmark-non-git-final-diff");
+        fs::create_dir_all(workspace.join("polyglot")).expect("create workspace dir");
+        fs::write(workspace.join("polyglot/main.py.c"), "print(55)\n").expect("write deliverable");
+        fs::write(workspace.join("polyglot/cmain"), "compiled debris\n")
+            .expect("write build output");
+
+        let diff = final_workspace_diff(&workspace).expect("non-git fallback diff");
+
+        assert!(diff.contains("Non-git workspace final file listing"));
+        assert!(diff.contains("polyglot/main.py.c"));
+        assert!(
+            diff.contains("polyglot/cmain"),
+            "fallback listing should expose verification debris"
+        );
+    }
+
+    #[test]
+    fn benchmark_real_provider_runtime_uses_explicit_workspace_root() {
+        let workspace = unique_temp_dir("benchmark-explicit-workspace");
+        let state_dir = unique_temp_dir("benchmark-explicit-workspace-state");
+        let globals = GlobalOptions {
+            output_mode: OutputMode::Text,
+            ci: false,
+            state_dir,
+            tui_adapter: None,
+        };
+        let config = BenchmarkRunConfig {
+            instruction: "Use the benchmark workspace.".into(),
+            workspace_root: workspace.clone(),
+            trial_app_data_root: unique_temp_dir("benchmark-explicit-workspace-app-data"),
+            output_dir: unique_temp_dir("benchmark-explicit-workspace-output"),
+            project_id: "benchmark-project".into(),
+            agent_session_id: "benchmark-session".into(),
+            run_id: "benchmark-run".into(),
+            benchmark_name: "terminal-bench".into(),
+            dataset_id: "terminal-bench@2.0".into(),
+            dataset_digest: None,
+            task_id: "workspace-root-task".into(),
+            attempt_index: 0,
+            provider_id: "openai_api".into(),
+            model_id: "test-model".into(),
+            profile_id: None,
+            credential_mode: None,
+            oauth_app_data_root: None,
+            oauth_account_id: None,
+            api_key_env: None,
+            base_url: Some("http://127.0.0.1:9/v1".into()),
+            temperature: None,
+            reasoning_effort: None,
+            max_output_tokens: None,
+            context_budget: None,
+            wall_time_seconds: None,
+            max_turns: None,
+            max_tool_calls: None,
+            max_command_calls: None,
+            max_cost_usd: None,
+            approval_mode: "strict".into(),
+            sandbox_policy: "harbor_task_sandbox".into(),
+            network_policy: "harbor_controlled".into(),
+            sandbox_provider: "harbor".into(),
+            environment_id: None,
+            image_digest: None,
+            prompt_version: XERO_BENCHMARK_PROMPT_VERSION.into(),
+            tool_policy_version: XERO_BENCHMARK_TOOL_POLICY_VERSION.into(),
+            adapter_version: XERO_BENCHMARK_ADAPTER_VERSION.into(),
+            harness_version: "harbor".into(),
+            xero_source_revision: None,
+            comparison_mode: "fixed-model".into(),
+            provider_account_class: "standard".into(),
+            endpoint_class: "openai-compatible".into(),
+            allow_fake_provider_fixture: false,
+        };
+
+        let provider = resolve_benchmark_provider_execution(&globals, &config)
+            .expect("benchmark real provider should resolve");
+        match provider.execution {
+            HeadlessProviderExecutionConfig::OpenAiCompatible(execution_config) => {
+                assert_eq!(
+                    execution_config.workspace_root.as_deref(),
+                    Some(workspace.as_path())
+                );
+            }
+            HeadlessProviderExecutionConfig::OpenAiCodexResponses(_) => {
+                panic!("expected OpenAI-compatible provider execution")
+            }
+            HeadlessProviderExecutionConfig::Fake => panic!("expected real provider execution"),
+        }
+    }
+
+    #[test]
+    fn benchmark_openai_codex_parse_defaults_to_oauth_mode() {
+        let workspace = unique_temp_dir("benchmark-openai-codex-parse-workspace");
+        let output_dir = unique_temp_dir("benchmark-openai-codex-parse-output");
+        let state_dir = unique_temp_dir("benchmark-openai-codex-parse-state");
+        let globals = GlobalOptions {
+            output_mode: OutputMode::Text,
+            ci: false,
+            state_dir,
+            tui_adapter: None,
+        };
+        let mut args: Vec<String> = vec![
+            "--instruction".into(),
+            "Use OAuth.".into(),
+            "--workspace-root".into(),
+            workspace.to_string_lossy().to_string(),
+            "--output-dir".into(),
+            output_dir.to_string_lossy().to_string(),
+            "--task-id".into(),
+            "openai-oauth-task".into(),
+            "--dataset-id".into(),
+            "terminal-bench@2.0".into(),
+            "--provider".into(),
+            "openai_codex".into(),
+            "--model".into(),
+            "openai/gpt-5.5".into(),
+        ];
+
+        let config = parse_benchmark_terminal_bench_config(&globals, &mut args)
+            .expect("parse OpenAI OAuth benchmark config");
+
+        assert_eq!(config.provider_id, OPENAI_CODEX_PROVIDER_ID);
+        assert_eq!(config.model_id, "gpt-5.5");
+        assert_eq!(config.credential_mode.as_deref(), Some("app_openai_oauth"));
+        assert_eq!(config.endpoint_class, "chatgpt-codex-oauth");
+        assert_eq!(config.api_key_env, None);
+    }
+
+    #[test]
+    fn benchmark_openai_codex_oauth_uri_uses_immutable_read_only_mode() {
+        let uri = sqlite_immutable_read_only_uri(Path::new("/tmp/xero oauth?/xero.db"));
+
+        assert_eq!(uri, "file:/tmp/xero%20oauth%3F/xero.db?mode=ro&immutable=1");
+    }
+
+    #[test]
+    fn benchmark_openai_codex_oauth_uses_app_data_session() {
+        let workspace = unique_temp_dir("benchmark-openai-codex-workspace");
+        let app_data_root = unique_temp_dir("benchmark-openai-codex-app-data");
+        let database_path = app_data_root.join(GLOBAL_DATABASE_FILE);
+        let connection = Connection::open(&database_path).expect("open OAuth store");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE provider_credentials (
+                    provider_id              TEXT    PRIMARY KEY,
+                    kind                     TEXT    NOT NULL,
+                    api_key                  TEXT,
+                    oauth_account_id         TEXT,
+                    oauth_session_id         TEXT,
+                    oauth_access_token       TEXT,
+                    oauth_refresh_token      TEXT,
+                    oauth_expires_at         INTEGER,
+                    base_url                 TEXT,
+                    api_version              TEXT,
+                    region                   TEXT,
+                    scope_project_id         TEXT,
+                    default_model_id         TEXT,
+                    updated_at               TEXT    NOT NULL
+                );
+                "#,
+            )
+            .expect("create provider_credentials");
+        connection
+            .execute(
+                "INSERT INTO provider_credentials (
+                    provider_id,
+                    kind,
+                    oauth_account_id,
+                    oauth_session_id,
+                    oauth_access_token,
+                    oauth_expires_at,
+                    updated_at
+                ) VALUES (?1, 'oauth_session', ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    OPENAI_CODEX_PROVIDER_ID,
+                    "acct_123",
+                    "sess_123",
+                    "oauth-access-token",
+                    current_unix_timestamp() + 3600,
+                    now_timestamp(),
+                ],
+            )
+            .expect("insert OAuth session");
+        let globals = GlobalOptions {
+            output_mode: OutputMode::Text,
+            ci: false,
+            state_dir: unique_temp_dir("benchmark-openai-codex-state"),
+            tui_adapter: None,
+        };
+        let config = BenchmarkRunConfig {
+            instruction: "Use the OpenAI OAuth session.".into(),
+            workspace_root: workspace.clone(),
+            trial_app_data_root: unique_temp_dir("benchmark-openai-codex-trial-app-data"),
+            output_dir: unique_temp_dir("benchmark-openai-codex-output"),
+            project_id: "benchmark-project".into(),
+            agent_session_id: "benchmark-session".into(),
+            run_id: "benchmark-run".into(),
+            benchmark_name: "terminal-bench".into(),
+            dataset_id: "terminal-bench@2.0".into(),
+            dataset_digest: None,
+            task_id: "openai-oauth-task".into(),
+            attempt_index: 0,
+            provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+            model_id: "openai/gpt-5.5".into(),
+            profile_id: None,
+            credential_mode: Some("app_openai_oauth".into()),
+            oauth_app_data_root: Some(app_data_root),
+            oauth_account_id: Some("acct_123".into()),
+            api_key_env: None,
+            base_url: Some("http://127.0.0.1:9/backend-api".into()),
+            temperature: None,
+            reasoning_effort: Some("medium".into()),
+            max_output_tokens: None,
+            context_budget: None,
+            wall_time_seconds: None,
+            max_turns: None,
+            max_tool_calls: None,
+            max_command_calls: None,
+            max_cost_usd: None,
+            approval_mode: "strict".into(),
+            sandbox_policy: "harbor_task_sandbox".into(),
+            network_policy: "harbor_controlled".into(),
+            sandbox_provider: "harbor".into(),
+            environment_id: None,
+            image_digest: None,
+            prompt_version: XERO_BENCHMARK_PROMPT_VERSION.into(),
+            tool_policy_version: XERO_BENCHMARK_TOOL_POLICY_VERSION.into(),
+            adapter_version: XERO_BENCHMARK_ADAPTER_VERSION.into(),
+            harness_version: "harbor".into(),
+            xero_source_revision: None,
+            comparison_mode: "fixed-model".into(),
+            provider_account_class: "standard".into(),
+            endpoint_class: "chatgpt-codex-oauth".into(),
+            allow_fake_provider_fixture: false,
+        };
+
+        let provider = resolve_benchmark_provider_execution(&globals, &config)
+            .expect("benchmark OpenAI OAuth provider should resolve");
+
+        assert_eq!(provider.provider_id, OPENAI_CODEX_PROVIDER_ID);
+        assert_eq!(provider.model_id, "gpt-5.5");
+        assert_eq!(
+            provider.credential_proof.as_deref(),
+            Some("app_data_openai_codex_session")
+        );
+        match provider.execution {
+            HeadlessProviderExecutionConfig::OpenAiCodexResponses(execution_config) => {
+                assert_eq!(execution_config.provider_id, OPENAI_CODEX_PROVIDER_ID);
+                assert_eq!(execution_config.model_id, "gpt-5.5");
+                assert_eq!(execution_config.access_token, "oauth-access-token");
+                assert_eq!(execution_config.account_id, "acct_123");
+                assert_eq!(execution_config.session_id.as_deref(), Some("sess_123"));
+                assert_eq!(
+                    execution_config.workspace_root.as_deref(),
+                    Some(workspace.as_path())
+                );
+                assert!(execution_config.allow_workspace_writes);
+            }
+            other => panic!("expected OpenAI Codex OAuth execution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn benchmark_openai_codex_oauth_reads_read_only_store() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let app_data_root = unique_temp_dir("benchmark-openai-codex-read-only-app-data");
+        let database_path = app_data_root.join(GLOBAL_DATABASE_FILE);
+        let connection = Connection::open(&database_path).expect("open OAuth store");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE provider_credentials (
+                    provider_id              TEXT    PRIMARY KEY,
+                    kind                     TEXT    NOT NULL,
+                    api_key                  TEXT,
+                    oauth_account_id         TEXT,
+                    oauth_session_id         TEXT,
+                    oauth_access_token       TEXT,
+                    oauth_refresh_token      TEXT,
+                    oauth_expires_at         INTEGER,
+                    base_url                 TEXT,
+                    api_version              TEXT,
+                    region                   TEXT,
+                    scope_project_id         TEXT,
+                    default_model_id         TEXT,
+                    updated_at               TEXT    NOT NULL
+                );
+                "#,
+            )
+            .expect("create provider_credentials");
+        connection
+            .execute(
+                "INSERT INTO provider_credentials (
+                    provider_id,
+                    kind,
+                    oauth_account_id,
+                    oauth_session_id,
+                    oauth_access_token,
+                    oauth_expires_at,
+                    updated_at
+                ) VALUES (?1, 'oauth_session', ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    OPENAI_CODEX_PROVIDER_ID,
+                    "acct_read_only",
+                    "sess_read_only",
+                    "oauth-read-only-token",
+                    current_unix_timestamp() + 3600,
+                    now_timestamp(),
+                ],
+            )
+            .expect("insert OAuth session");
+        drop(connection);
+        fs::set_permissions(&database_path, fs::Permissions::from_mode(0o444))
+            .expect("make OAuth database read-only");
+        fs::set_permissions(&app_data_root, fs::Permissions::from_mode(0o555))
+            .expect("make OAuth directory read-only");
+
+        let config = BenchmarkRunConfig {
+            instruction: "Use the OpenAI OAuth session.".into(),
+            workspace_root: unique_temp_dir("benchmark-openai-codex-read-only-workspace"),
+            trial_app_data_root: unique_temp_dir("benchmark-openai-codex-read-only-trial-app-data"),
+            output_dir: unique_temp_dir("benchmark-openai-codex-read-only-output"),
+            project_id: "benchmark-project".into(),
+            agent_session_id: "benchmark-session".into(),
+            run_id: "benchmark-run".into(),
+            benchmark_name: "terminal-bench".into(),
+            dataset_id: "terminal-bench@2.0".into(),
+            dataset_digest: None,
+            task_id: "openai-oauth-read-only-task".into(),
+            attempt_index: 0,
+            provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+            model_id: "gpt-5.5".into(),
+            profile_id: None,
+            credential_mode: Some("app_openai_oauth".into()),
+            oauth_app_data_root: Some(app_data_root.clone()),
+            oauth_account_id: Some("acct_read_only".into()),
+            api_key_env: None,
+            base_url: None,
+            temperature: None,
+            reasoning_effort: None,
+            max_output_tokens: None,
+            context_budget: None,
+            wall_time_seconds: None,
+            max_turns: None,
+            max_tool_calls: None,
+            max_command_calls: None,
+            max_cost_usd: None,
+            approval_mode: "strict".into(),
+            sandbox_policy: "harbor_task_sandbox".into(),
+            network_policy: "harbor_controlled".into(),
+            sandbox_provider: "harbor".into(),
+            environment_id: None,
+            image_digest: None,
+            prompt_version: XERO_BENCHMARK_PROMPT_VERSION.into(),
+            tool_policy_version: XERO_BENCHMARK_TOOL_POLICY_VERSION.into(),
+            adapter_version: XERO_BENCHMARK_ADAPTER_VERSION.into(),
+            harness_version: "harbor".into(),
+            xero_source_revision: None,
+            comparison_mode: "fixed-model".into(),
+            provider_account_class: "standard".into(),
+            endpoint_class: "chatgpt-codex-oauth".into(),
+            allow_fake_provider_fixture: false,
+        };
+
+        let session =
+            load_benchmark_openai_codex_oauth_session(&config).expect("read read-only OAuth store");
+
+        assert_eq!(session.account_id, "acct_read_only");
+        assert_eq!(session.session_id, "sess_read_only");
+        assert_eq!(session.access_token, "oauth-read-only-token");
+
+        let _ = fs::set_permissions(&app_data_root, fs::Permissions::from_mode(0o755));
+        let _ = fs::set_permissions(&database_path, fs::Permissions::from_mode(0o644));
+    }
+
+    #[test]
+    fn benchmark_terminal_bench_fake_fixture_writes_trial_artifacts_in_app_data() {
+        let workspace = unique_temp_dir("benchmark-workspace");
+        fs::write(workspace.join("README.md"), "benchmark workspace\n").expect("write workspace");
+        let state_dir = unique_temp_dir("benchmark-app-data");
+        let output_dir = unique_temp_dir("benchmark-output").join("trial-1");
+
+        let response = run_with_args([
+            "xero",
+            "--json",
+            "benchmark",
+            "terminal-bench",
+            "--instruction",
+            "Summarize the benchmark workspace.",
+            "--workspace-root",
+            workspace.to_str().expect("workspace"),
+            "--trial-app-data-root",
+            state_dir.to_str().expect("state dir"),
+            "--output-dir",
+            output_dir.to_str().expect("output dir"),
+            "--project-id",
+            "benchmark-project",
+            "--session-id",
+            "benchmark-session",
+            "--run-id",
+            "benchmark-run",
+            "--task-id",
+            "adapter-smoke-task",
+            "--dataset-id",
+            "terminal-bench@2.0",
+            "--provider",
+            "fake_provider",
+            "--model",
+            "fake-model",
+            "--allow-fake-provider-fixture",
+        ])
+        .expect("benchmark fake fixture should complete");
+
+        assert_eq!(response.json["kind"], json!("benchmarkTerminalBench"));
+        assert_eq!(response.json["status"], json!("completed"));
+        assert!(output_dir.join("manifest.json").is_file());
+        assert!(output_dir.join("trajectory.json").is_file());
+        assert!(output_dir.join("xero-trace.json").is_file());
+        assert!(output_dir.join("final.diff").is_file());
+        assert!(output_dir.join("support-bundle.zip").is_file());
+        assert!(state_dir.join(GLOBAL_DATABASE_FILE).is_file());
+        assert!(
+            workspace_project_database_path_for_app_root(&state_dir, "benchmark-project").is_file()
+        );
+
+        let manifest: JsonValue =
+            read_json_file(&output_dir.join("manifest.json")).expect("read manifest");
+        assert_eq!(manifest["run"]["status"], json!("completed"));
+        assert_eq!(manifest["harness"]["fakeProviderFixture"], json!(true));
+        assert_eq!(manifest["harness"]["xeroSourceRevision"], JsonValue::Null);
+        assert_eq!(manifest["benchmark"]["taskId"], json!("adapter-smoke-task"));
+        assert!(!manifest.to_string().contains(".xero"));
+    }
+
+    #[test]
+    fn benchmark_terminal_bench_rejects_unlabeled_fake_provider() {
+        let workspace = unique_temp_dir("benchmark-workspace-unlabeled");
+        let state_dir = unique_temp_dir("benchmark-app-data-unlabeled");
+        let output_dir = unique_temp_dir("benchmark-output-unlabeled");
+        let error = run_with_args([
+            "xero",
+            "benchmark",
+            "terminal-bench",
+            "--instruction",
+            "Fixture run.",
+            "--workspace-root",
+            workspace.to_str().expect("workspace"),
+            "--trial-app-data-root",
+            state_dir.to_str().expect("state dir"),
+            "--output-dir",
+            output_dir.to_str().expect("output dir"),
+            "--task-id",
+            "adapter-smoke-task",
+            "--dataset-id",
+            "terminal-bench@2.0",
+            "--provider",
+            "fake_provider",
+        ])
+        .expect_err("fake provider must be explicitly labeled");
+
+        assert_eq!(error.code, "xero_cli_usage");
+        assert!(error.message.contains("fixture-only"));
+    }
+
+    #[test]
+    fn benchmark_terminal_bench_rejects_legacy_xero_state() {
+        let workspace = unique_temp_dir("benchmark-workspace-legacy");
+        let legacy_state = workspace.join(".xero").join("benchmark-state");
+        let output_dir = unique_temp_dir("benchmark-output-legacy");
+        let error = run_with_args([
+            "xero",
+            "benchmark",
+            "terminal-bench",
+            "--instruction",
+            "Fixture run.",
+            "--workspace-root",
+            workspace.to_str().expect("workspace"),
+            "--trial-app-data-root",
+            legacy_state.to_str().expect("legacy state"),
+            "--output-dir",
+            output_dir.to_str().expect("output dir"),
+            "--task-id",
+            "adapter-smoke-task",
+            "--dataset-id",
+            "terminal-bench@2.0",
+            "--provider",
+            "fake_provider",
+            "--allow-fake-provider-fixture",
+        ])
+        .expect_err("legacy .xero state must be rejected");
+
+        assert_eq!(error.code, "xero_benchmark_legacy_state_rejected");
+        assert_eq!(error.exit_code, 2);
+    }
+
+    #[test]
+    fn benchmark_terminal_bench_enforces_command_call_limit_before_dispatch() {
+        let workspace = unique_temp_dir("benchmark-workspace-command-limit");
+        let state_dir = unique_temp_dir("benchmark-app-data-command-limit");
+        let output_dir = unique_temp_dir("benchmark-output-command-limit").join("trial-1");
+        let first_command = serde_json::to_string(&json!({
+            "argv": ["sh", "-c", "touch should-not-run-a"]
+        }))
+        .expect("first command");
+        let second_command = serde_json::to_string(&json!({
+            "argv": ["sh", "-c", "touch should-not-run-b"]
+        }))
+        .expect("second command");
+        let server = MockOpenAiCompatibleServer::start(vec![json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-command-a",
+                        "type": "function",
+                        "function": {
+                            "name": "command",
+                            "arguments": first_command
+                        }
+                    }, {
+                        "id": "call-command-b",
+                        "type": "function",
+                        "function": {
+                            "name": "command",
+                            "arguments": second_command
+                        }
+                    }]
+                }
+            }]
+        })]);
+
+        let error = run_with_args([
+            "xero",
+            "benchmark",
+            "terminal-bench",
+            "--instruction",
+            "Try too many commands.",
+            "--workspace-root",
+            workspace.to_str().expect("workspace"),
+            "--trial-app-data-root",
+            state_dir.to_str().expect("state dir"),
+            "--output-dir",
+            output_dir.to_str().expect("output dir"),
+            "--project-id",
+            "benchmark-project",
+            "--session-id",
+            "benchmark-session",
+            "--run-id",
+            "benchmark-run",
+            "--task-id",
+            "command-limit-task",
+            "--dataset-id",
+            "terminal-bench@2.0",
+            "--provider",
+            "openai_api",
+            "--model",
+            "test-model",
+            "--base-url",
+            server.base_url.as_str(),
+            "--max-command-calls",
+            "1",
+        ])
+        .expect_err("command call limit should fail the benchmark run");
+        drop(server);
+
+        assert_eq!(
+            error.code,
+            "agent_core_headless_command_call_limit_exceeded"
+        );
+        assert!(!workspace.join("should-not-run-a").exists());
+        assert!(!workspace.join("should-not-run-b").exists());
+        let manifest: JsonValue =
+            read_json_file(&output_dir.join("manifest.json")).expect("read manifest");
+        assert_eq!(manifest["run"]["status"], json!("agent_failure"));
+        assert_eq!(
+            manifest["run"]["failureCategory"],
+            json!("timeout_or_limit")
+        );
+        assert_eq!(
+            manifest["limits"]["enforcement"]["maxCommandCalls"],
+            json!("xero_runtime")
+        );
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {

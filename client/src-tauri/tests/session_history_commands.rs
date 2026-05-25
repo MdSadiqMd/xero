@@ -11,21 +11,22 @@ use xero_desktop_lib::{
     commands::{
         branch_agent_session, compact_session_history, delete_session_memory,
         export_session_transcript, extract_session_memory_candidates, get_session_context_snapshot,
-        get_session_transcript, list_session_memories, rewind_agent_session,
-        save_session_transcript_export, search_session_transcripts, update_session_memory,
-        validate_context_snapshot_contract, validate_export_payload_contract,
-        validate_session_memory_record_contract, validate_session_transcript_contract,
-        AgentSessionLineageBoundaryKindDto, BranchAgentSessionRequestDto,
-        CompactSessionHistoryRequestDto, DeleteSessionMemoryRequestDto,
-        ExportSessionTranscriptRequestDto, ExtractSessionMemoryCandidatesRequestDto,
-        GetSessionContextSnapshotRequestDto, GetSessionTranscriptRequestDto,
+        get_session_memory_review_queue, get_session_transcript, list_session_memories,
+        rewind_agent_session, save_session_transcript_export, search_session_transcripts,
+        update_session_memory, validate_context_snapshot_contract,
+        validate_export_payload_contract, validate_session_memory_record_contract,
+        validate_session_transcript_contract, AgentSessionLineageBoundaryKindDto,
+        BranchAgentSessionRequestDto, CompactSessionHistoryRequestDto,
+        DeleteSessionMemoryRequestDto, ExportSessionTranscriptRequestDto,
+        ExtractSessionMemoryCandidatesRequestDto, GetSessionContextSnapshotRequestDto,
+        GetSessionMemoryReviewQueueRequestDto, GetSessionTranscriptRequestDto,
         ListSessionMemoriesRequestDto, RewindAgentSessionRequestDto,
         SaveSessionTranscriptExportRequestDto, SearchSessionTranscriptsRequestDto,
         SessionCompactionTriggerDto, SessionContextContributorKindDto,
         SessionContextPolicyActionDto, SessionContextPolicyDecisionKindDto, SessionMemoryKindDto,
         SessionMemoryReviewStateDto, SessionMemoryScopeDto, SessionTranscriptExportFormatDto,
-        SessionTranscriptExportPayloadDto, SessionTranscriptScopeDto, SessionUsageSourceDto,
-        UpdateSessionMemoryRequestDto,
+        SessionTranscriptExportPayloadDto, SessionTranscriptItemKindDto, SessionTranscriptScopeDto,
+        SessionUsageSourceDto, UpdateSessionMemoryRequestDto,
     },
     configure_builder_with_state,
     db::{self, project_store},
@@ -185,6 +186,19 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
             updated_at: "2026-04-26T10:05:00Z".into(),
         }),
     );
+    project_store::append_agent_message(
+        &repo_root,
+        &project_store::NewAgentMessageRecord {
+            project_id: project_id.clone(),
+            run_id: "run-history-1".into(),
+            role: project_store::AgentMessageRole::Assistant,
+            content: String::new(),
+            provider_metadata_json: Some(json!({"providerMessageId": "msg-empty"}).to_string()),
+            created_at: "2026-04-26T10:00:02.500Z".into(),
+            attachments: Vec::new(),
+        },
+    )
+    .expect("append empty assistant message");
     seed_history_run(
         &repo_root,
         &project_id,
@@ -193,8 +207,9 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
         "Summarize the completed export work.",
         None,
     );
+    let rollback = seed_code_rollback_operation(&repo_root, &project_id, "run-history-1");
 
-    let transcript = get_session_transcript(
+    let transcript = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -202,7 +217,7 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
             agent_session_id: SESSION_ID.into(),
             run_id: None,
         },
-    )
+    ))
     .expect("project session transcript");
     validate_session_transcript_contract(&transcript).expect("valid session transcript");
 
@@ -237,12 +252,99 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
     assert!(tool_summary.contains("read ended succeeded."));
     assert!(tool_summary.contains("..."));
     assert!(tool_summary.len() < 380);
+    let rollback_item = transcript
+        .items
+        .iter()
+        .find(|item| item.item_id == format!("code_rollback:{}", rollback.operation_id))
+        .expect("rollback transcript item");
+    assert_eq!(
+        rollback_item.kind,
+        SessionTranscriptItemKindDto::CodeRollback
+    );
+    assert_eq!(rollback_item.source_table, "code_rollback_operations");
+    assert_eq!(
+        rollback_item.code_change_group_id.as_deref(),
+        Some(rollback.result_change_group_id.as_str())
+    );
+    assert!(rollback_item
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("Conversation history was preserved")));
+    assert!(rollback_item
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("src/tracked.txt")));
+    let history_operation_item = transcript
+        .items
+        .iter()
+        .find(|item| item.item_id == format!("code_history_operation:{}", rollback.operation_id))
+        .expect("code history operation transcript item");
+    assert_eq!(
+        history_operation_item.kind,
+        SessionTranscriptItemKindDto::CodeHistoryOperation
+    );
+    assert_eq!(
+        history_operation_item.source_table,
+        "code_history_operations"
+    );
+    assert_eq!(
+        history_operation_item.code_change_group_id.as_deref(),
+        Some(rollback.result_change_group_id.as_str())
+    );
+    assert!(history_operation_item.code_commit_id.is_some());
+    assert!(history_operation_item
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("Mode: selective_undo.")));
+    assert!(history_operation_item
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("Result commit:")));
 
     let serialized = serde_json::to_string(&transcript).expect("serialize transcript");
     assert!(!serialized.contains("sk-history-secret"));
     assert!(!serialized.contains("/Users/sn0w/.config"));
 
-    let context_snapshot = get_session_context_snapshot(
+    let history_notice = project_store::append_agent_coordination_event(
+        &repo_root,
+        &project_store::NewAgentCoordinationEventRecord {
+            project_id: project_id.clone(),
+            run_id: "run-history-2".into(),
+            event_kind: "history_rewrite_notice".into(),
+            summary: "Code undo completed for the tracked file.".into(),
+            payload: json!({
+                "operationId": rollback.operation_id.clone(),
+                "mode": "selective_undo",
+                "status": "completed",
+                "affectedPaths": ["src/tracked.txt"],
+                "resultCommitId": "code-commit-history-context",
+            }),
+            created_at: "2099-05-01T12:01:00Z".into(),
+            lease_seconds: Some(600),
+        },
+    )
+    .expect("append history coordination notice");
+    let history_mailbox = project_store::publish_agent_mailbox_item(
+        &repo_root,
+        &project_store::NewAgentMailboxItemRecord {
+            project_id: project_id.clone(),
+            sender_run_id: "run-history-2".into(),
+            item_type: project_store::AgentMailboxItemType::ReservationInvalidated,
+            parent_item_id: None,
+            target_agent_session_id: Some(SESSION_ID.into()),
+            target_run_id: Some("run-history-1".into()),
+            target_role: None,
+            title: "Code undo changed your reserved path".into(),
+            body: "Re-read src/tracked.txt before writing. Local path /Users/sn0w/.config/xero/state.json must stay redacted.".into(),
+            related_paths: vec!["src/tracked.txt".into()],
+            priority: project_store::AgentMailboxPriority::High,
+            created_at: "2099-05-01T12:02:00Z".into(),
+            ttl_seconds: Some(600),
+        },
+    )
+    .expect("publish history mailbox notice");
+
+    let context_snapshot = tauri::async_runtime::block_on(get_session_context_snapshot(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionContextSnapshotRequestDto {
@@ -253,9 +355,16 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
             model_id: None,
             pending_prompt: Some("Continue with final checks.".into()),
         },
-    )
+    ))
     .expect("run context snapshot");
     validate_context_snapshot_contract(&context_snapshot).expect("valid context snapshot");
+    assert!(context_snapshot.contributors.iter().all(|contributor| {
+        contributor
+            .text
+            .as_deref()
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(true)
+    }));
     assert_eq!(context_snapshot.run_id.as_deref(), Some("run-history-1"));
     assert_eq!(
         context_snapshot.budget.estimation_source,
@@ -295,6 +404,83 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
             && !contributor.model_visible
             && !contributor.included
     }));
+    let rollback_prompt_contributor = context_snapshot
+        .contributors
+        .iter()
+        .find(|contributor| {
+            contributor.prompt_fragment_id.as_deref() == Some("xero.code_rollback_state")
+        })
+        .expect("rollback prompt context contributor");
+    assert!(rollback_prompt_contributor.included);
+    assert!(rollback_prompt_contributor.model_visible);
+    assert!(rollback_prompt_contributor
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("Current files on disk")));
+    let rollback_contributor = context_snapshot
+        .contributors
+        .iter()
+        .find(|contributor| {
+            contributor.kind == SessionContextContributorKindDto::CodeRollback
+                && contributor.source_id.as_deref() == Some(rollback.operation_id.as_str())
+        })
+        .expect("rollback context contributor");
+    assert!(rollback_contributor.included);
+    assert!(rollback_contributor.model_visible);
+    assert!(rollback_contributor
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("Project files were restored independently")));
+    let history_operation_contributor = context_snapshot
+        .contributors
+        .iter()
+        .find(|contributor| {
+            contributor.kind == SessionContextContributorKindDto::CodeHistoryOperation
+                && contributor.source_id.as_deref() == Some(rollback.operation_id.as_str())
+        })
+        .expect("code history operation context contributor");
+    assert!(history_operation_contributor.included);
+    assert!(history_operation_contributor.model_visible);
+    assert!(history_operation_contributor.estimated_tokens <= 220);
+    assert!(history_operation_contributor
+        .text
+        .as_deref()
+        .is_some_and(|text| text.contains("Mode: selective_undo.")));
+    let history_notice_source_id = history_notice.id.to_string();
+    let history_notice_contributor = context_snapshot
+        .contributors
+        .iter()
+        .find(|contributor| {
+            contributor.kind == SessionContextContributorKindDto::CodeHistoryNotice
+                && contributor.source_id.as_deref() == Some(history_notice_source_id.as_str())
+        })
+        .expect("code history coordination notice contributor");
+    assert!(history_notice_contributor.included);
+    assert!(history_notice_contributor.model_visible);
+    assert!(history_notice_contributor.estimated_tokens <= 220);
+    assert!(history_notice_contributor
+        .text
+        .as_deref()
+        .is_some_and(|text| {
+            text.contains("history_rewrite_notice") && text.contains("src/tracked.txt")
+        }));
+    let history_mailbox_contributor = context_snapshot
+        .contributors
+        .iter()
+        .find(|contributor| {
+            contributor.kind == SessionContextContributorKindDto::CodeHistoryMailboxNotice
+                && contributor.source_id.as_deref() == Some(history_mailbox.item_id.as_str())
+        })
+        .expect("code history mailbox notice contributor");
+    assert!(history_mailbox_contributor.included);
+    assert!(history_mailbox_contributor.model_visible);
+    assert!(history_mailbox_contributor.estimated_tokens <= 220);
+    assert!(history_mailbox_contributor.redaction.redacted);
+    assert!(!history_mailbox_contributor
+        .text
+        .as_deref()
+        .unwrap_or_default()
+        .contains("/Users/sn0w/.config"));
     let context_json = serde_json::to_string(&context_snapshot).expect("serialize context");
     assert!(!context_json.contains("sk-history-secret"));
     assert!(!context_json.contains("/Users/sn0w/.config"));
@@ -320,6 +506,13 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
     assert!(markdown_export
         .content
         .contains("Validation passed after cargo test."));
+    assert!(markdown_export.content.contains("Code rollback applied"));
+    assert!(markdown_export.content.contains("Code undo applied"));
+    assert!(markdown_export.content.contains("Mode: selective_undo."));
+    assert!(markdown_export.content.contains(&rollback.operation_id));
+    assert!(markdown_export
+        .content
+        .contains("rollback candidate summary"));
     assert!(!markdown_export.content.contains("sk-history-secret"));
     assert!(!markdown_export.content.contains("/Users/sn0w/.config"));
 
@@ -375,10 +568,55 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
         .results
         .iter()
         .any(|result| result.snippet.to_ascii_lowercase().contains("validation")));
+    for query in [
+        rollback.operation_id.as_str(),
+        "tracked.txt",
+        "rollback candidate summary",
+    ] {
+        let rollback_search = search_session_transcripts(
+            app.handle().clone(),
+            app.state::<DesktopState>(),
+            SearchSessionTranscriptsRequestDto {
+                project_id: project_id.clone(),
+                query: query.into(),
+                agent_session_id: Some(SESSION_ID.into()),
+                run_id: None,
+                include_archived: false,
+                limit: Some(10),
+            },
+        )
+        .expect("rollback search");
+        assert!(
+            rollback_search
+                .results
+                .iter()
+                .any(|result| result.item_id == format!("code_rollback:{}", rollback.operation_id)),
+            "rollback search for `{query}` should find the rollback event"
+        );
+    }
+    let undo_search = search_session_transcripts(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        SearchSessionTranscriptsRequestDto {
+            project_id: project_id.clone(),
+            query: "selective_undo".into(),
+            agent_session_id: Some(SESSION_ID.into()),
+            run_id: None,
+            include_archived: false,
+            limit: Some(10),
+        },
+    )
+    .expect("code history operation search");
+    assert!(
+        undo_search.results.iter().any(|result| {
+            result.item_id == format!("code_history_operation:{}", rollback.operation_id)
+        }),
+        "search should find the append-only code history operation"
+    );
 
     project_store::archive_agent_session(&repo_root, &project_id, SESSION_ID)
         .expect("archive session");
-    let archived_transcript = get_session_transcript(
+    let archived_transcript = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -386,7 +624,7 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
             agent_session_id: SESSION_ID.into(),
             run_id: None,
         },
-    )
+    ))
     .expect("archived transcript remains readable");
     assert!(archived_transcript.archived);
     assert!(archived_transcript.archived_at.is_some());
@@ -470,7 +708,7 @@ fn run_scoped_projection_rejects_mismatched_sessions() {
         "Inspect the parallel run.",
     );
 
-    let mismatch = get_session_transcript(
+    let mismatch = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -478,11 +716,11 @@ fn run_scoped_projection_rejects_mismatched_sessions() {
             agent_session_id: SESSION_ID.into(),
             run_id: Some("run-parallel-history".into()),
         },
-    )
+    ))
     .expect_err("run scoped transcript should reject another session's run");
     assert_eq!(mismatch.code, "agent_run_session_mismatch");
 
-    let context_mismatch = get_session_context_snapshot(
+    let context_mismatch = tauri::async_runtime::block_on(get_session_context_snapshot(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionContextSnapshotRequestDto {
@@ -493,11 +731,11 @@ fn run_scoped_projection_rejects_mismatched_sessions() {
             model_id: None,
             pending_prompt: None,
         },
-    )
+    ))
     .expect_err("run scoped context should reject another session's run");
     assert_eq!(context_mismatch.code, "agent_run_session_mismatch");
 
-    let transcript = get_session_transcript(
+    let transcript = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -505,7 +743,7 @@ fn run_scoped_projection_rejects_mismatched_sessions() {
             agent_session_id: second_session.agent_session_id,
             run_id: Some("run-parallel-history".into()),
         },
-    )
+    ))
     .expect("run scoped transcript");
     assert_eq!(transcript.runs.len(), 1);
     assert!(transcript
@@ -530,7 +768,7 @@ fn context_snapshot_handles_sessions_without_runs() {
     )
     .expect("create empty session");
 
-    let snapshot = get_session_context_snapshot(
+    let snapshot = tauri::async_runtime::block_on(get_session_context_snapshot(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionContextSnapshotRequestDto {
@@ -541,7 +779,7 @@ fn context_snapshot_handles_sessions_without_runs() {
             model_id: Some(MODEL_ID.into()),
             pending_prompt: None,
         },
-    )
+    ))
     .expect("empty session context snapshot");
 
     validate_context_snapshot_contract(&snapshot).expect("valid empty context snapshot");
@@ -571,7 +809,7 @@ fn manual_compact_persists_supersedes_and_preserves_raw_history() {
         "Compact the durable replay path.",
         None,
     );
-    let transcript_before = get_session_transcript(
+    let transcript_before = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -579,7 +817,7 @@ fn manual_compact_persists_supersedes_and_preserves_raw_history() {
             agent_session_id: SESSION_ID.into(),
             run_id: Some("run-compact-1".into()),
         },
-    )
+    ))
     .expect("transcript before compact");
 
     let response = compact_session_history(
@@ -621,7 +859,7 @@ fn manual_compact_persists_supersedes_and_preserves_raw_history() {
                 && contributor.label == "Compacted history summary"
         }));
 
-    let transcript_after = get_session_transcript(
+    let transcript_after = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -629,7 +867,7 @@ fn manual_compact_persists_supersedes_and_preserves_raw_history() {
             agent_session_id: SESSION_ID.into(),
             run_id: Some("run-compact-1".into()),
         },
-    )
+    ))
     .expect("transcript after compact");
     assert_eq!(transcript_after.items.len(), transcript_before.items.len());
     let raw_snapshot = project_store::load_agent_run(&repo_root, &project_id, "run-compact-1")
@@ -880,7 +1118,7 @@ fn rewind_agent_session_branches_from_message_and_checkpoint_boundaries() {
     assert!(checkpoint_rewind
         .lineage
         .file_change_summary
-        .contains("Branching does not roll files back automatically."));
+        .contains("code rollback is a separate workspace restore action."));
 
     let invalid = rewind_agent_session(
         app.handle().clone(),
@@ -946,6 +1184,40 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
             && memory.agent_session_id.as_deref() == Some(SESSION_ID)
     }));
 
+    let review_queue = get_session_memory_review_queue(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetSessionMemoryReviewQueueRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: Some(SESSION_ID.into()),
+            limit: Some(2),
+        },
+    )
+    .expect("load memory review queue");
+    assert_eq!(
+        review_queue["schema"],
+        json!("xero.agent_memory_review_queue.v1")
+    );
+    assert_eq!(review_queue["limit"], json!(2));
+    assert_eq!(review_queue["counts"]["candidate"], json!(4));
+    assert_eq!(review_queue["counts"]["approved"], json!(0));
+    assert_eq!(review_queue["counts"]["disabled"], json!(4));
+    assert_eq!(
+        review_queue["items"]
+            .as_array()
+            .expect("review queue page")
+            .len(),
+        2
+    );
+    assert_eq!(
+        review_queue["items"][0]["redaction"]["rawTextHidden"],
+        json!(true)
+    );
+    assert!(review_queue["actions"]["approve"]
+        .as_str()
+        .expect("approve action")
+        .contains("approved"));
+
     let duplicate = extract_session_memory_candidates(
         app.handle().clone(),
         app.state::<DesktopState>(),
@@ -983,7 +1255,7 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
     assert_eq!(approved.review_state, SessionMemoryReviewStateDto::Approved);
     assert!(approved.enabled);
 
-    let approved_snapshot = get_session_context_snapshot(
+    let approved_snapshot = tauri::async_runtime::block_on(get_session_context_snapshot(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionContextSnapshotRequestDto {
@@ -994,7 +1266,7 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
             model_id: None,
             pending_prompt: None,
         },
-    )
+    ))
     .expect("context snapshot with approved memory");
     validate_context_snapshot_contract(&approved_snapshot).expect("valid approved-memory context");
     assert!(approved_snapshot.contributors.iter().any(|contributor| {
@@ -1033,7 +1305,7 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
     assert_eq!(disabled.review_state, SessionMemoryReviewStateDto::Approved);
     assert!(!disabled.enabled);
 
-    let disabled_snapshot = get_session_context_snapshot(
+    let disabled_snapshot = tauri::async_runtime::block_on(get_session_context_snapshot(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionContextSnapshotRequestDto {
@@ -1044,7 +1316,7 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
             model_id: None,
             pending_prompt: None,
         },
-    )
+    ))
     .expect("context snapshot with disabled memory");
     assert!(!disabled_snapshot.contributors.iter().any(|contributor| {
         contributor.kind == SessionContextContributorKindDto::ApprovedMemory
@@ -1081,6 +1353,16 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
             agent_session_id: None,
             include_disabled: true,
             include_rejected: true,
+            review_state: None,
+            scope: None,
+            kind: None,
+            freshness_state: None,
+            min_confidence: None,
+            source_run_id: None,
+            related_path: None,
+            created_after: None,
+            promotion_status: None,
+            retrievable: None,
         },
     )
     .expect("list project memories after source delete");
@@ -1116,6 +1398,16 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
             agent_session_id: None,
             include_disabled: true,
             include_rejected: true,
+            review_state: None,
+            scope: None,
+            kind: None,
+            freshness_state: None,
+            min_confidence: None,
+            source_run_id: None,
+            related_path: None,
+            created_after: None,
+            promotion_status: None,
+            retrievable: None,
         },
     )
     .expect("list memories after memory delete");
@@ -1123,6 +1415,100 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
         .memories
         .iter()
         .any(|memory| memory.memory_id == reenabled.memory_id));
+}
+
+#[test]
+fn memory_extraction_rejects_reverted_code_facts_without_history_provenance() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_fake_provider_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let run_id = "run-memory-undo-1";
+    let started_at = "2026-04-26T14:00:00Z";
+    seed_minimal_run_with_provider(
+        &repo_root,
+        &project_id,
+        SESSION_ID,
+        FAKE_PROVIDER_ID,
+        FAKE_MODEL_ID,
+        run_id,
+        started_at,
+        "Review memory extraction around code undo.",
+    );
+    project_store::append_agent_message(
+        &repo_root,
+        &project_store::NewAgentMessageRecord {
+            project_id: project_id.clone(),
+            run_id: run_id.into(),
+            role: project_store::AgentMessageRole::Assistant,
+            content:
+                "Project fact: src/tracked.txt uses rollback candidate content after the temporary implementation."
+                    .into(),
+            provider_metadata_json: None,
+            created_at: plus_seconds(started_at, 1),
+            attachments: Vec::new(),
+        },
+    )
+    .expect("append reverted code fact");
+    project_store::append_agent_message(
+        &repo_root,
+        &project_store::NewAgentMessageRecord {
+            project_id: project_id.clone(),
+            run_id: run_id.into(),
+            role: project_store::AgentMessageRole::Assistant,
+            content:
+                "Project fact: Historical before code undo operation: src/tracked.txt temporarily used rollback candidate content."
+                    .into(),
+            provider_metadata_json: None,
+            created_at: plus_seconds(started_at, 2),
+            attachments: Vec::new(),
+        },
+    )
+    .expect("append historical code fact");
+    seed_code_rollback_operation(&repo_root, &project_id, run_id);
+    let _ = project_store::update_agent_run_status(
+        &repo_root,
+        &project_id,
+        run_id,
+        project_store::AgentRunStatus::Completed,
+        None,
+        &plus_seconds(started_at, 20),
+    )
+    .expect("complete undo memory run");
+
+    let extracted = extract_session_memory_candidates(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ExtractSessionMemoryCandidatesRequestDto {
+            project_id,
+            agent_session_id: SESSION_ID.into(),
+            run_id: Some(run_id.into()),
+        },
+    )
+    .expect("extract undo memory candidates");
+
+    assert_eq!(extracted.created_count, 1);
+    assert_eq!(extracted.rejected_count, 1);
+    assert!(extracted.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "session_memory_candidate_code_history_provenance_required"
+    }));
+    assert!(!extracted.memories.iter().any(|memory| {
+        memory.text
+            == "src/tracked.txt uses rollback candidate content after the temporary implementation."
+    }));
+    let historical = extracted
+        .memories
+        .iter()
+        .find(|memory| {
+            memory
+                .text
+                .contains("Historical before code undo operation")
+        })
+        .expect("historical memory with provenance");
+    assert_eq!(historical.scope, SessionMemoryScopeDto::Project);
+    assert!(historical
+        .source_item_ids
+        .iter()
+        .any(|source_item_id| source_item_id.starts_with("code_history_operation:")));
 }
 
 #[test]
@@ -1148,6 +1534,7 @@ fn session_context_privacy_hardening_covers_exports_search_compaction_and_memory
             run_id: "run-privacy-1".into(),
             role: project_store::AgentMessageRole::User,
             content: "Retry https://user:pass@example.invalid/v1?token=opaque-url-token with Authorization:Bearer opaque-header-token.".into(),
+            provider_metadata_json: None,
             created_at: plus_seconds(started_at, 11),
             attachments: Vec::new(),
         },
@@ -1194,7 +1581,7 @@ fn session_context_privacy_hardening_covers_exports_search_compaction_and_memory
     )
     .expect("finish secret-bearing tool call");
 
-    let transcript = get_session_transcript(
+    let transcript = tauri::async_runtime::block_on(get_session_transcript(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetSessionTranscriptRequestDto {
@@ -1202,7 +1589,7 @@ fn session_context_privacy_hardening_covers_exports_search_compaction_and_memory
             agent_session_id: SESSION_ID.into(),
             run_id: Some("run-privacy-1".into()),
         },
-    )
+    ))
     .expect("privacy transcript");
     let transcript_json = serde_json::to_string(&transcript).expect("serialize transcript");
     for leaked in [
@@ -1312,6 +1699,16 @@ fn session_context_privacy_hardening_covers_exports_search_compaction_and_memory
             agent_session_id: None,
             include_disabled: true,
             include_rejected: true,
+            review_state: None,
+            scope: None,
+            kind: None,
+            freshness_state: None,
+            min_confidence: None,
+            source_run_id: None,
+            related_path: None,
+            created_after: None,
+            promotion_status: None,
+            retrievable: None,
         },
     )
     .expect("list unsafe memory candidate");
@@ -1359,6 +1756,51 @@ fn seed_history_run(
     );
 }
 
+fn seed_code_rollback_operation(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> project_store::AppliedCodeRollback {
+    let tracked_path = repo_root.join("src").join("tracked.txt");
+    let handle = project_store::begin_exact_path_capture(
+        repo_root,
+        project_store::CodeChangeGroupInput {
+            project_id: project_id.into(),
+            agent_session_id: SESSION_ID.into(),
+            run_id: run_id.into(),
+            change_group_id: Some("code-change-rollback-candidate".into()),
+            parent_change_group_id: None,
+            tool_call_id: Some(format!("{run_id}-tool-edit")),
+            runtime_event_id: None,
+            conversation_sequence: Some(11),
+            change_kind: project_store::CodeChangeKind::FileTool,
+            summary_label: "rollback candidate summary".into(),
+            restore_state: project_store::CodeChangeRestoreState::SnapshotAvailable,
+        },
+        vec![project_store::CodeRollbackCaptureTarget::modify(
+            "src/tracked.txt",
+        )],
+    )
+    .expect("begin rollback candidate capture");
+    fs::write(&tracked_path, "rollback candidate content\n").expect("write candidate content");
+    let completed = project_store::complete_exact_path_capture(repo_root, handle)
+        .expect("complete rollback candidate capture");
+    fs::write(
+        repo_root.join("src").join("unrelated.txt"),
+        "later unrelated content\n",
+    )
+    .expect("write later unrelated content");
+
+    let rollback =
+        project_store::apply_code_rollback(repo_root, project_id, &completed.change_group_id)
+            .expect("apply rollback for session history");
+    assert_eq!(
+        fs::read_to_string(&tracked_path).expect("read restored tracked file"),
+        "alpha\nbeta\n"
+    );
+    rollback
+}
+
 #[allow(clippy::too_many_arguments)]
 fn seed_history_run_with_provider(
     repo_root: &Path,
@@ -1387,6 +1829,7 @@ fn seed_history_run_with_provider(
             run_id: run_id.into(),
             role: project_store::AgentMessageRole::User,
             content: "Use api_key=sk-history-secret for the fixture.".into(),
+            provider_metadata_json: None,
             created_at: plus_seconds(started_at, 1),
             attachments: Vec::new(),
         },
@@ -1399,6 +1842,7 @@ fn seed_history_run_with_provider(
             run_id: run_id.into(),
             role: project_store::AgentMessageRole::Assistant,
             content: "The durable validation path is ready for export.".into(),
+            provider_metadata_json: None,
             created_at: plus_seconds(started_at, 2),
             attachments: Vec::new(),
         },
@@ -1432,6 +1876,7 @@ fn seed_history_run_with_provider(
                 }
             })
             .to_string(),
+            provider_metadata_json: None,
             created_at: plus_seconds(started_at, 3),
             attachments: Vec::new(),
         },
@@ -1499,6 +1944,7 @@ fn seed_history_run_with_provider(
         &project_store::NewAgentFileChangeRecord {
             project_id: project_id.into(),
             run_id: run_id.into(),
+            change_group_id: None,
             path: "/Users/sn0w/.config/xero/token.json".into(),
             operation: "write".into(),
             old_hash: None,
@@ -1644,6 +2090,7 @@ fn seed_memory_candidate_run(repo_root: &Path, project_id: &str) {
                 run_id: run_id.into(),
                 role,
                 content: content.into(),
+                provider_metadata_json: None,
                 created_at: plus_seconds(started_at, index as u32 + 1),
                 attachments: Vec::new(),
             },

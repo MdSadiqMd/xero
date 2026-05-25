@@ -489,6 +489,10 @@ pub(crate) fn join_relative_path(prefix: &str, leaf: &str) -> String {
 }
 
 pub(crate) fn skill_matches_query(skill_id: &str, query: &str) -> bool {
+    let query = query.trim();
+    if query == "*" || query.eq_ignore_ascii_case("__all__") {
+        return true;
+    }
     let haystack = skill_id.replace('-', " ").to_ascii_lowercase();
     query
         .split_whitespace()
@@ -560,4 +564,16 @@ fn strip_wrapping_quotes(value: &str) -> String {
 
 fn command_error_to_cache_contract(error: CommandError) -> AutonomousSkillCacheError {
     AutonomousSkillCacheError::Contract(error.message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skill_matches_query;
+
+    #[test]
+    fn wildcard_skill_query_matches_all_skill_ids() {
+        assert!(skill_matches_query("find-skills", "*"));
+        assert!(skill_matches_query("find-skills", "__all__"));
+        assert!(skill_matches_query("find-skills", "__ALL__"));
+    }
 }

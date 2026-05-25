@@ -13,7 +13,11 @@ pub const PROVIDER_PREFLIGHT_CONTRACT_VERSION: u32 = 1;
 pub const DEFAULT_PROVIDER_PREFLIGHT_TTL_SECONDS: i64 = 6 * 60 * 60;
 const DEFAULT_PROVIDER_PREFLIGHT_TIMEOUT_MS: u64 = 30_000;
 const PREFLIGHT_PROBE_TOOL_NAME: &str = "xero_preflight_noop";
-
+const AZURE_OPENAI_PROVIDER_ID: &str = "azure_openai";
+const DEEPSEEK_PROVIDER_ID: &str = "deepseek";
+const GITHUB_MODELS_PROVIDER_ID: &str = "github_models";
+const OPENAI_API_PROVIDER_ID: &str = "openai_api";
+const OPENROUTER_PROVIDER_ID: &str = "openrouter";
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderPreflightStatus {
@@ -141,6 +145,8 @@ pub struct ProviderPreflightSnapshot {
     pub profile_id: String,
     pub provider_id: String,
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_binding: Option<ProviderPreflightCacheBinding>,
     pub source: ProviderPreflightSource,
     pub checked_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,6 +157,15 @@ pub struct ProviderPreflightSnapshot {
     pub capabilities: ProviderCapabilityCatalog,
     pub checks: Vec<ProviderPreflightCheck>,
     pub status: ProviderPreflightStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderPreflightCacheBinding {
+    pub endpoint_fingerprint: String,
+    pub account_class: String,
+    pub required_features_fingerprint: String,
+    pub cache_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +209,25 @@ pub struct OpenAiCompatibleProviderPreflightProbeRequest {
     pub thinking_default_effort: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XaiProviderPreflightProbeRequest {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub base_url: String,
+    pub bearer_token: Option<String>,
+    pub timeout_ms: u64,
+    pub required_features: ProviderPreflightRequiredFeatures,
+    pub credential_proof: Option<String>,
+    pub context_window_tokens: Option<u64>,
+    pub max_output_tokens: Option<u64>,
+    pub context_limit_source: Option<String>,
+    pub context_limit_confidence: Option<String>,
+    pub thinking_supported: bool,
+    pub thinking_efforts: Vec<String>,
+    pub thinking_default_effort: Option<String>,
+}
+
 pub fn provider_preflight_snapshot(input: ProviderPreflightInput) -> ProviderPreflightSnapshot {
     let ttl_seconds = input
         .ttl_seconds
@@ -201,82 +235,88 @@ pub fn provider_preflight_snapshot(input: ProviderPreflightInput) -> ProviderPre
         .unwrap_or(DEFAULT_PROVIDER_PREFLIGHT_TTL_SECONDS);
     let stale = input.age_seconds.is_some_and(|age| age > ttl_seconds)
         || matches!(input.source, ProviderPreflightSource::Unavailable);
-    let mut checks = Vec::new();
-
-    checks.push(boolean_check(
-        &input,
-        "provider_preflight_credentials",
-        "credentials",
-        input.credential_ready,
-        "Credential or ambient auth is available for the selected provider path.",
-        "Credential or ambient auth was not verified for the selected provider path.",
-        "Credential or ambient auth is missing for the selected provider path.",
-        true,
-    ));
-    checks.push(boolean_check(
-        &input,
-        "provider_preflight_endpoint",
-        "endpoint",
-        input.endpoint_reachable,
-        "Provider endpoint reachability was verified.",
-        "Provider endpoint reachability has not been verified by a live probe.",
-        "Provider endpoint reachability failed for the selected provider path.",
-        true,
-    ));
-    checks.push(boolean_check(
-        &input,
-        "provider_preflight_model",
-        "model",
-        input.model_available,
-        "Selected model was verified on the selected provider path.",
-        "Selected model existence has not been verified by a live provider source.",
-        "Selected model is unavailable on the selected provider path.",
-        false,
-    ));
-
-    checks.push(feature_check(
-        &input,
-        "provider_preflight_streaming",
-        "streaming route",
-        input.required_features.streaming,
-        input.streaming_route_available,
-        input.capabilities.capabilities.streaming.status.as_str(),
-    ));
-    checks.push(feature_check(
-        &input,
-        "provider_preflight_tool_schema",
-        "minimal tool-call schema",
-        input.required_features.tool_calls,
-        input.tool_schema_accepted,
-        input.capabilities.capabilities.tool_calls.status.as_str(),
-    ));
-    checks.push(feature_check(
-        &input,
-        "provider_preflight_reasoning",
-        "reasoning controls",
-        input.required_features.reasoning_controls,
-        input.reasoning_controls_accepted,
-        input.capabilities.capabilities.reasoning.status.as_str(),
-    ));
-    checks.push(feature_check(
-        &input,
-        "provider_preflight_attachments",
-        "attachment route",
-        input.required_features.attachments,
-        input.attachments_accepted,
-        input.capabilities.capabilities.attachments.status.as_str(),
-    ));
-
-    checks.push(boolean_check(
-        &input,
-        "provider_preflight_context_limit",
-        "context limit",
-        input.context_limit_known,
-        "Context-limit source and confidence are available for the selected model.",
-        "Context-limit source or confidence is only partially known for the selected model.",
-        "Context limits are unavailable for the selected model.",
-        false,
-    ));
+    let mut checks = vec![
+        boolean_check(
+            &input,
+            "provider_preflight_credentials",
+            "credentials",
+            input.credential_ready,
+            BooleanCheckMessages {
+                passed: "Credential or ambient auth is available for the selected provider path.",
+                unknown: "Credential or ambient auth was not verified for the selected provider path.",
+                failed: "Credential or ambient auth is missing for the selected provider path.",
+            },
+            true,
+        ),
+        boolean_check(
+            &input,
+            "provider_preflight_endpoint",
+            "endpoint",
+            input.endpoint_reachable,
+            BooleanCheckMessages {
+                passed: "Provider endpoint reachability was verified.",
+                unknown: "Provider endpoint reachability has not been verified by a live probe.",
+                failed: "Provider endpoint reachability failed for the selected provider path.",
+            },
+            true,
+        ),
+        boolean_check(
+            &input,
+            "provider_preflight_model",
+            "model",
+            input.model_available,
+            BooleanCheckMessages {
+                passed: "Selected model was verified on the selected provider path.",
+                unknown: "Selected model existence has not been verified by a live provider source.",
+                failed: "Selected model is unavailable on the selected provider path.",
+            },
+            false,
+        ),
+        feature_check(
+            &input,
+            "provider_preflight_streaming",
+            "streaming route",
+            input.required_features.streaming,
+            input.streaming_route_available,
+            input.capabilities.capabilities.streaming.status.as_str(),
+        ),
+        feature_check(
+            &input,
+            "provider_preflight_tool_schema",
+            "minimal tool-call schema",
+            input.required_features.tool_calls,
+            input.tool_schema_accepted,
+            input.capabilities.capabilities.tool_calls.status.as_str(),
+        ),
+        feature_check(
+            &input,
+            "provider_preflight_reasoning",
+            "reasoning controls",
+            input.required_features.reasoning_controls,
+            input.reasoning_controls_accepted,
+            input.capabilities.capabilities.reasoning.status.as_str(),
+        ),
+        feature_check(
+            &input,
+            "provider_preflight_attachments",
+            "attachment route",
+            input.required_features.attachments,
+            input.attachments_accepted,
+            input.capabilities.capabilities.attachments.status.as_str(),
+        ),
+        boolean_check(
+            &input,
+            "provider_preflight_context_limit",
+            "context limit",
+            input.context_limit_known,
+            BooleanCheckMessages {
+                passed: "Context-limit source and confidence are available for the selected model.",
+                unknown: "Context-limit source or confidence is only partially known for the selected model.",
+                failed: "Context limits are unavailable for the selected model.",
+            },
+            false,
+        ),
+    ];
 
     if let Some(error) = input.provider_error.as_ref() {
         checks.push(ProviderPreflightCheck {
@@ -299,6 +339,7 @@ pub fn provider_preflight_snapshot(input: ProviderPreflightInput) -> ProviderPre
         profile_id: normalize_or_default(input.profile_id, "default"),
         provider_id: normalize_or_default(input.provider_id, "unknown"),
         model_id: normalize_or_default(input.model_id, "unknown-model"),
+        cache_binding: None,
         source: input.source,
         checked_at: normalize_or_default(input.checked_at, "unknown"),
         age_seconds: input.age_seconds,
@@ -309,6 +350,54 @@ pub fn provider_preflight_snapshot(input: ProviderPreflightInput) -> ProviderPre
         checks,
         status,
     }
+}
+
+pub fn provider_preflight_cache_binding(
+    provider_id: &str,
+    model_id: &str,
+    endpoint_fingerprint: &str,
+    account_class: &str,
+    required_features: &ProviderPreflightRequiredFeatures,
+) -> ProviderPreflightCacheBinding {
+    let feature_json = serde_json::to_string(required_features)
+        .unwrap_or_else(|_| "provider_preflight_required_features_unserializable".into());
+    let required_features_fingerprint =
+        crate::runtime_trace_id("provider-preflight-features", &[&feature_json]);
+    let cache_key = crate::runtime_trace_id(
+        "provider-preflight-cache",
+        &[
+            provider_id.trim(),
+            model_id.trim(),
+            endpoint_fingerprint.trim(),
+            account_class.trim(),
+            &required_features_fingerprint,
+        ],
+    );
+
+    ProviderPreflightCacheBinding {
+        endpoint_fingerprint: normalize_or_default(
+            endpoint_fingerprint.trim().to_owned(),
+            "unknown_endpoint",
+        ),
+        account_class: normalize_or_default(account_class.trim().to_owned(), "unknown_account"),
+        required_features_fingerprint,
+        cache_key,
+    }
+}
+
+pub fn bind_provider_preflight_cache(
+    mut snapshot: ProviderPreflightSnapshot,
+    endpoint_fingerprint: &str,
+    account_class: &str,
+) -> ProviderPreflightSnapshot {
+    snapshot.cache_binding = Some(provider_preflight_cache_binding(
+        &snapshot.provider_id,
+        &snapshot.model_id,
+        endpoint_fingerprint,
+        account_class,
+        &snapshot.required_features,
+    ));
+    snapshot
 }
 
 pub fn provider_preflight_blockers(
@@ -656,6 +745,229 @@ pub fn run_openai_compatible_provider_preflight_probe(
     }
 }
 
+pub fn run_xai_provider_preflight_probe(
+    request: XaiProviderPreflightProbeRequest,
+) -> ProviderPreflightSnapshot {
+    let credential_ready = request
+        .bearer_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty());
+    let capability_input = ProviderCapabilityCatalogInput {
+        provider_id: request.provider_id.clone(),
+        model_id: request.model_id.clone(),
+        catalog_source: "live".into(),
+        fetched_at: Some(crate::now_timestamp()),
+        last_success_at: Some(crate::now_timestamp()),
+        cache_age_seconds: Some(0),
+        cache_ttl_seconds: Some(DEFAULT_PROVIDER_CATALOG_TTL_SECONDS),
+        credential_proof: request
+            .credential_proof
+            .clone()
+            .or_else(|| credential_ready.then(|| "live_probe_credentials_available".into())),
+        context_window_tokens: request.context_window_tokens,
+        max_output_tokens: request.max_output_tokens,
+        context_limit_source: request
+            .context_limit_source
+            .clone()
+            .or_else(|| request.context_window_tokens.map(|_| "live_probe".into())),
+        context_limit_confidence: request
+            .context_limit_confidence
+            .clone()
+            .or_else(|| request.context_window_tokens.map(|_| "medium".into())),
+        thinking_supported: request.thinking_supported,
+        thinking_efforts: request.thinking_efforts.clone(),
+        thinking_default_effort: request.thinking_default_effort.clone(),
+    };
+    let capabilities = crate::provider_capability_catalog(capability_input);
+
+    if !credential_ready {
+        return provider_preflight_snapshot(ProviderPreflightInput {
+            profile_id: request.profile_id,
+            provider_id: request.provider_id,
+            model_id: request.model_id,
+            source: ProviderPreflightSource::LiveProbe,
+            checked_at: crate::now_timestamp(),
+            age_seconds: Some(0),
+            ttl_seconds: None,
+            required_features: request.required_features,
+            capabilities,
+            credential_ready: Some(false),
+            endpoint_reachable: None,
+            model_available: None,
+            streaming_route_available: None,
+            tool_schema_accepted: None,
+            reasoning_controls_accepted: None,
+            attachments_accepted: None,
+            context_limit_known: request.context_window_tokens.map(|_| true),
+            provider_error: Some(ProviderPreflightError {
+                code: "provider_preflight_credentials_missing".into(),
+                message: "No xAI OAuth session or API key is available for the selected provider profile.".into(),
+                class: ProviderPreflightErrorClass::Authentication,
+                retryable: false,
+            }),
+        });
+    }
+
+    let url = match xai_preflight_responses_url(&request.base_url) {
+        Ok(url) => url,
+        Err(error) => {
+            return provider_preflight_snapshot(ProviderPreflightInput {
+                profile_id: request.profile_id,
+                provider_id: request.provider_id,
+                model_id: request.model_id,
+                source: ProviderPreflightSource::LiveProbe,
+                checked_at: crate::now_timestamp(),
+                age_seconds: Some(0),
+                ttl_seconds: None,
+                required_features: request.required_features,
+                capabilities,
+                credential_ready: Some(true),
+                endpoint_reachable: Some(false),
+                model_available: None,
+                streaming_route_available: None,
+                tool_schema_accepted: None,
+                reasoning_controls_accepted: None,
+                attachments_accepted: None,
+                context_limit_known: request.context_window_tokens.map(|_| true),
+                provider_error: Some(ProviderPreflightError {
+                    code: error.code,
+                    message: error.message,
+                    class: ProviderPreflightErrorClass::EndpointUnreachable,
+                    retryable: false,
+                }),
+            });
+        }
+    };
+
+    let client = match Client::builder()
+        .timeout(Duration::from_millis(normalize_preflight_timeout(
+            request.timeout_ms,
+        )))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return provider_preflight_snapshot(ProviderPreflightInput {
+                profile_id: request.profile_id,
+                provider_id: request.provider_id,
+                model_id: request.model_id,
+                source: ProviderPreflightSource::LiveProbe,
+                checked_at: crate::now_timestamp(),
+                age_seconds: Some(0),
+                ttl_seconds: None,
+                required_features: request.required_features,
+                capabilities,
+                credential_ready: Some(true),
+                endpoint_reachable: Some(false),
+                model_available: None,
+                streaming_route_available: None,
+                tool_schema_accepted: None,
+                reasoning_controls_accepted: None,
+                attachments_accepted: None,
+                context_limit_known: request.context_window_tokens.map(|_| true),
+                provider_error: Some(ProviderPreflightError {
+                    code: "provider_preflight_http_client_failed".into(),
+                    message: format!("Xero could not build an xAI preflight HTTP client: {error}"),
+                    class: ProviderPreflightErrorClass::Unknown,
+                    retryable: true,
+                }),
+            });
+        }
+    };
+
+    let body = xai_preflight_body(&request);
+    let mut http_request = client.post(url).json(&body);
+    if let Some(token) = request
+        .bearer_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        http_request = http_request.bearer_auth(token);
+    }
+
+    match http_request.send() {
+        Ok(response) => {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            if status.is_success() {
+                provider_preflight_snapshot(ProviderPreflightInput {
+                    profile_id: request.profile_id,
+                    provider_id: request.provider_id,
+                    model_id: request.model_id,
+                    source: ProviderPreflightSource::LiveProbe,
+                    checked_at: crate::now_timestamp(),
+                    age_seconds: Some(0),
+                    ttl_seconds: None,
+                    required_features: request.required_features.clone(),
+                    capabilities,
+                    credential_ready: Some(true),
+                    endpoint_reachable: Some(true),
+                    model_available: Some(true),
+                    streaming_route_available: request.required_features.streaming.then_some(true),
+                    tool_schema_accepted: request.required_features.tool_calls.then_some(true),
+                    reasoning_controls_accepted: request
+                        .required_features
+                        .reasoning_controls
+                        .then_some(true),
+                    attachments_accepted: request.required_features.attachments.then_some(false),
+                    context_limit_known: Some(request.context_window_tokens.is_some()),
+                    provider_error: None,
+                })
+            } else {
+                let error = classify_provider_preflight_http_error(status.as_u16(), &text);
+                provider_preflight_snapshot(ProviderPreflightInput {
+                    profile_id: request.profile_id,
+                    provider_id: request.provider_id,
+                    model_id: request.model_id,
+                    source: ProviderPreflightSource::LiveProbe,
+                    checked_at: crate::now_timestamp(),
+                    age_seconds: Some(0),
+                    ttl_seconds: None,
+                    required_features: request.required_features,
+                    capabilities,
+                    credential_ready: Some(true),
+                    endpoint_reachable: Some(status.as_u16() != 404),
+                    model_available: Some(!matches!(
+                        error.class,
+                        ProviderPreflightErrorClass::ModelUnavailable
+                    )),
+                    streaming_route_available: None,
+                    tool_schema_accepted: None,
+                    reasoning_controls_accepted: None,
+                    attachments_accepted: None,
+                    context_limit_known: request.context_window_tokens.map(|_| true),
+                    provider_error: Some(error),
+                })
+            }
+        }
+        Err(error) => provider_preflight_snapshot(ProviderPreflightInput {
+            profile_id: request.profile_id,
+            provider_id: request.provider_id,
+            model_id: request.model_id,
+            source: ProviderPreflightSource::LiveProbe,
+            checked_at: crate::now_timestamp(),
+            age_seconds: Some(0),
+            ttl_seconds: None,
+            required_features: request.required_features,
+            capabilities,
+            credential_ready: Some(true),
+            endpoint_reachable: Some(false),
+            model_available: None,
+            streaming_route_available: None,
+            tool_schema_accepted: None,
+            reasoning_controls_accepted: None,
+            attachments_accepted: None,
+            context_limit_known: request.context_window_tokens.map(|_| true),
+            provider_error: Some(ProviderPreflightError {
+                code: "provider_preflight_request_failed".into(),
+                message: format!("xAI preflight request failed: {error}"),
+                class: ProviderPreflightErrorClass::EndpointUnreachable,
+                retryable: true,
+            }),
+        }),
+    }
+}
+
 pub fn openai_compatible_preflight_chat_url(base_url: &str) -> CoreResult<String> {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -677,14 +989,39 @@ pub fn openai_compatible_preflight_chat_url(base_url: &str) -> CoreResult<String
     })
 }
 
+pub fn xai_preflight_responses_url(base_url: &str) -> CoreResult<String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err(CoreError::invalid_request(
+            "provider_preflight_base_url_missing",
+            "An xAI provider base URL is required for live provider preflight.",
+        ));
+    }
+    if trimmed.starts_with("http://") && !is_local_http_endpoint(trimmed) {
+        return Err(CoreError::invalid_request(
+            "provider_preflight_base_url_insecure",
+            "Live xAI preflight allows plain HTTP only for localhost endpoints.",
+        ));
+    }
+    Ok(if trimmed.ends_with("/responses") {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}/responses")
+    })
+}
+
+struct BooleanCheckMessages<'a> {
+    passed: &'a str,
+    unknown: &'a str,
+    failed: &'a str,
+}
+
 fn boolean_check(
     input: &ProviderPreflightInput,
     code: &str,
     label: &str,
     value: Option<bool>,
-    passed: &str,
-    unknown: &str,
-    failed: &str,
+    messages: BooleanCheckMessages<'_>,
     retryable_on_failure: bool,
 ) -> ProviderPreflightCheck {
     match value {
@@ -692,7 +1029,7 @@ fn boolean_check(
             check_id: check_id(input, code),
             status: ProviderPreflightStatus::Passed,
             code: code.into(),
-            message: passed.into(),
+            message: messages.passed.into(),
             source: input.source,
             retryable: false,
         },
@@ -700,7 +1037,7 @@ fn boolean_check(
             check_id: check_id(input, code),
             status: ProviderPreflightStatus::Failed,
             code: code.into(),
-            message: failed.into(),
+            message: messages.failed.into(),
             source: input.source,
             retryable: retryable_on_failure,
         },
@@ -708,7 +1045,7 @@ fn boolean_check(
             check_id: check_id(input, code),
             status: ProviderPreflightStatus::Warning,
             code: code.into(),
-            message: format!("{unknown} Required check: {label}."),
+            message: format!("{} Required check: {label}.", messages.unknown),
             source: input.source,
             retryable: false,
         },
@@ -871,14 +1208,58 @@ fn openai_compatible_preflight_body(
         ]),
     );
     body.insert("stream".into(), json!(request.required_features.streaming));
+    if request.required_features.streaming
+        && openai_compatible_preflight_supports_stream_options(&request.provider_id)
+    {
+        body.insert("stream_options".into(), json!({ "include_usage": true }));
+    }
     if request.required_features.tool_calls {
         body.insert("tools".into(), json!([preflight_tool_schema()]));
         body.insert("tool_choice".into(), json!("none"));
+    }
+    if request.provider_id == DEEPSEEK_PROVIDER_ID {
+        body.insert("thinking".into(), json!({ "type": "enabled" }));
+        if request.required_features.reasoning_controls {
+            body.insert("reasoning_effort".into(), json!("high"));
+        }
+    } else if request.required_features.reasoning_controls {
+        body.insert("reasoning".into(), json!({ "effort": "low" }));
+    }
+    JsonValue::Object(body)
+}
+
+fn xai_preflight_body(request: &XaiProviderPreflightProbeRequest) -> JsonValue {
+    let mut body = JsonMap::new();
+    body.insert("model".into(), json!(&request.model_id));
+    body.insert(
+        "instructions".into(),
+        json!("You are verifying provider compatibility for Xero. Return a tiny acknowledgement."),
+    );
+    body.insert(
+        "input".into(),
+        json!([{ "role": "user", "content": "preflight" }]),
+    );
+    body.insert("stream".into(), json!(request.required_features.streaming));
+    body.insert("max_output_tokens".into(), json!(16));
+    if request.required_features.tool_calls {
+        body.insert("tools".into(), json!([xai_preflight_tool_schema()]));
+        body.insert("tool_choice".into(), json!("auto"));
     }
     if request.required_features.reasoning_controls {
         body.insert("reasoning".into(), json!({ "effort": "low" }));
     }
     JsonValue::Object(body)
+}
+
+fn openai_compatible_preflight_supports_stream_options(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        OPENAI_API_PROVIDER_ID
+            | OPENROUTER_PROVIDER_ID
+            | DEEPSEEK_PROVIDER_ID
+            | GITHUB_MODELS_PROVIDER_ID
+            | AZURE_OPENAI_PROVIDER_ID
+    )
 }
 
 fn preflight_tool_schema() -> JsonValue {
@@ -892,6 +1273,19 @@ fn preflight_tool_schema() -> JsonValue {
                 "properties": {},
                 "additionalProperties": false
             }
+        }
+    })
+}
+
+fn xai_preflight_tool_schema() -> JsonValue {
+    json!({
+        "type": "function",
+        "name": PREFLIGHT_PROBE_TOOL_NAME,
+        "description": "No-op compatibility probe. The model should not call this tool.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
         }
     })
 }
@@ -1110,6 +1504,45 @@ mod tests {
     }
 
     #[test]
+    fn xai_preflight_body_uses_responses_tool_schema_and_reasoning() {
+        let request = XaiProviderPreflightProbeRequest {
+            profile_id: "xai-default".into(),
+            provider_id: "xai".into(),
+            model_id: "grok-4.3".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            bearer_token: Some("test-key".into()),
+            timeout_ms: 1_000,
+            required_features: ProviderPreflightRequiredFeatures {
+                streaming: true,
+                tool_calls: true,
+                reasoning_controls: true,
+                attachments: false,
+            },
+            credential_proof: Some("app_data_profile".into()),
+            context_window_tokens: Some(1_000_000),
+            max_output_tokens: None,
+            context_limit_source: Some("built_in_registry".into()),
+            context_limit_confidence: Some("high".into()),
+            thinking_supported: true,
+            thinking_efforts: vec!["low".into(), "medium".into(), "high".into()],
+            thinking_default_effort: Some("medium".into()),
+        };
+
+        let body = xai_preflight_body(&request);
+
+        assert_eq!(body["model"], "grok-4.3");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["name"], PREFLIGHT_PROBE_TOOL_NAME);
+        assert!(body["tools"][0].get("function").is_none());
+        assert_eq!(body["reasoning"]["effort"], "low");
+        assert_eq!(
+            xai_preflight_responses_url("https://api.x.ai/v1").expect("url"),
+            "https://api.x.ai/v1/responses"
+        );
+    }
+
+    #[test]
     fn fresh_cached_probe_passes_when_required_features_match() {
         let live = provider_preflight_snapshot(ProviderPreflightInput {
             profile_id: "openrouter-work".into(),
@@ -1196,5 +1629,110 @@ mod tests {
         assert!(provider_preflight_blockers(&snapshot)
             .iter()
             .any(|check| { check.code == "provider_preflight_attachments" }));
+    }
+
+    #[test]
+    fn provider_preflight_cache_binding_changes_with_binding_inputs() {
+        let required = ProviderPreflightRequiredFeatures::owned_agent_text_turn();
+        let base = provider_preflight_cache_binding(
+            "openai_api",
+            "gpt-5.4",
+            "https://api.openai.com/v1",
+            "api_key:2026-05-05",
+            &required,
+        );
+        let different_endpoint = provider_preflight_cache_binding(
+            "openai_api",
+            "gpt-5.4",
+            "http://127.0.0.1:11434/v1",
+            "api_key:2026-05-05",
+            &required,
+        );
+        let different_account = provider_preflight_cache_binding(
+            "openai_api",
+            "gpt-5.4",
+            "https://api.openai.com/v1",
+            "api_key:2026-05-06",
+            &required,
+        );
+        let mut attachment_required = required.clone();
+        attachment_required.attachments = true;
+        let different_features = provider_preflight_cache_binding(
+            "openai_api",
+            "gpt-5.4",
+            "https://api.openai.com/v1",
+            "api_key:2026-05-05",
+            &attachment_required,
+        );
+
+        assert_ne!(base.cache_key, different_endpoint.cache_key);
+        assert_ne!(base.cache_key, different_account.cache_key);
+        assert_ne!(base.cache_key, different_features.cache_key);
+        assert_ne!(
+            base.required_features_fingerprint,
+            different_features.required_features_fingerprint
+        );
+    }
+
+    #[test]
+    fn deepseek_preflight_body_uses_thinking_controls_not_openai_reasoning() {
+        let mut required = ProviderPreflightRequiredFeatures::owned_agent_text_turn();
+        required.reasoning_controls = true;
+        let body =
+            openai_compatible_preflight_body(&OpenAiCompatibleProviderPreflightProbeRequest {
+                profile_id: "deepseek-default".into(),
+                provider_id: DEEPSEEK_PROVIDER_ID.into(),
+                model_id: "deepseek-v4-pro".into(),
+                base_url: "https://api.deepseek.com".into(),
+                api_key: Some("test-key".into()),
+                timeout_ms: 1_000,
+                required_features: required,
+                credential_proof: Some("test".into()),
+                context_window_tokens: Some(1_000_000),
+                max_output_tokens: Some(384_000),
+                context_limit_source: Some("built_in_registry".into()),
+                context_limit_confidence: Some("medium".into()),
+                thinking_supported: true,
+                thinking_efforts: vec!["high".into(), "x_high".into()],
+                thinking_default_effort: Some("high".into()),
+            });
+
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(
+            body["tools"][0]["function"]["name"],
+            PREFLIGHT_PROBE_TOOL_NAME
+        );
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn openrouter_preflight_body_keeps_openrouter_reasoning_shape() {
+        let mut required = ProviderPreflightRequiredFeatures::owned_agent_text_turn();
+        required.reasoning_controls = true;
+        let body =
+            openai_compatible_preflight_body(&OpenAiCompatibleProviderPreflightProbeRequest {
+                profile_id: "openrouter-default".into(),
+                provider_id: OPENROUTER_PROVIDER_ID.into(),
+                model_id: "deepseek/deepseek-v4-pro".into(),
+                base_url: "https://openrouter.ai/api/v1".into(),
+                api_key: Some("test-key".into()),
+                timeout_ms: 1_000,
+                required_features: required,
+                credential_proof: Some("test".into()),
+                context_window_tokens: Some(1_048_576),
+                max_output_tokens: Some(384_000),
+                context_limit_source: Some("live_catalog".into()),
+                context_limit_confidence: Some("high".into()),
+                thinking_supported: true,
+                thinking_efforts: vec!["high".into(), "x_high".into()],
+                thinking_default_effort: Some("high".into()),
+            });
+
+        assert_eq!(body["reasoning"]["effort"], "low");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
     }
 }

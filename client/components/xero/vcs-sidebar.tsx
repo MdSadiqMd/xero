@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils"
 import { createFrameCoalescer } from "@/lib/frame-governance"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { FloatingRightSidebarFrame } from "@/components/xero/floating-right-sidebar-frame"
 
 const MIN_WIDTH = 600
 const DEFAULT_WIDTH_RATIO = 0.7
@@ -65,6 +66,7 @@ const DIFF_PARSE_CACHE_MAX_ENTRIES = 80
 export const DIFF_PARSE_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 type ChangeKind = RepositoryStatusEntryView["staged"]
+type RepositoryDiffFileDto = RepositoryDiffResponseDto["files"][number]
 
 export type VcsCommitMessageModel = Omit<
   GitGenerateCommitMessageRequestDto,
@@ -105,6 +107,7 @@ interface FileEntry extends VcsDiffScopeEntry {
 }
 
 type DiffPatchCache = ByteBudgetCache<string, string>
+type DiffFileCache = ByteBudgetCache<string, RepositoryDiffFileDto>
 
 type ActionKind =
   | "stage"
@@ -124,6 +127,14 @@ function useDiffPatchCacheRef(): MutableRefObject<DiffPatchCache> {
     ref.current = createDiffPatchCache()
   }
   return ref as MutableRefObject<DiffPatchCache>
+}
+
+function useDiffFileCacheRef(): MutableRefObject<DiffFileCache> {
+  const ref = useRef<DiffFileCache | null>(null)
+  if (!ref.current) {
+    ref.current = createDiffFileCache()
+  }
+  return ref as MutableRefObject<DiffFileCache>
 }
 
 function getFileEntrySignature(entry: RepositoryStatusEntryView): string {
@@ -150,13 +161,15 @@ export const VcsSidebar = memo(function VcsSidebar(props: VcsSidebarProps) {
   const [width, setWidth] = useState<number>(() => defaultViewportWidth())
   const [isResizing, setIsResizing] = useState(false)
   const diffPatchCacheRef = useDiffPatchCacheRef()
+  const diffFileCacheRef = useDiffFileCacheRef()
   const widthRef = useRef(width)
   widthRef.current = width
   const renderedWidth = shouldRenderDiffPane ? width : FILE_LIST_WIDTH
 
   useEffect(() => {
     diffPatchCacheRef.current.clear()
-  }, [diffPatchCacheRef, projectId])
+    diffFileCacheRef.current.clear()
+  }, [diffFileCacheRef, diffPatchCacheRef, projectId])
 
   // Recompute the cap when the viewport resizes — keep the panel within
   // 95vw so users can always grab the resize handle.
@@ -234,58 +247,48 @@ export const VcsSidebar = memo(function VcsSidebar(props: VcsSidebarProps) {
     })
   }, [])
 
-  if (!open) {
-    return null
-  }
-
   // The panel overlays the main content area. `<main>` has `contain: paint`,
   // which makes it the containing block for fixed descendants, so `inset-y-0`
   // already fills exactly the area between the titlebar and the status footer.
   return (
-    <>
-      {/* Backdrop: dims the underlying app and dismisses the panel on click. */}
-      <div
-        aria-hidden="true"
-        className="fixed inset-0 z-40 bg-black/30"
-        onClick={handleClose}
-      />
-      <aside
-        aria-hidden="false"
-        aria-label="Source control panel"
-        className="fixed inset-y-0 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl"
-        style={{
-          width: renderedWidth,
-          contain: "layout paint style",
-        }}
-      >
-        {shouldRenderDiffPane ? (
-          <div
-            aria-label="Resize source control sidebar"
-            aria-orientation="vertical"
-            aria-valuemax={viewportMaxWidth()}
-            aria-valuemin={MIN_WIDTH}
-            aria-valuenow={width}
-            className={cn(
-              "absolute inset-y-0 -left-[3px] z-10 w-[6px] cursor-col-resize bg-transparent transition-colors",
-              "hover:bg-primary/30",
-              isResizing && "bg-primary/40",
-            )}
-            onKeyDown={handleResizeKey}
-            onPointerDown={handleResizeStart}
-            role="separator"
-            tabIndex={open ? 0 : -1}
-          />
-        ) : null}
+    <FloatingRightSidebarFrame
+      label="Source control panel"
+      onOverlayClick={handleClose}
+      open={open}
+      width={renderedWidth}
+    >
+      {shouldRenderDiffPane ? (
+        <div
+          aria-label="Resize source control sidebar"
+          aria-orientation="vertical"
+          aria-valuemax={viewportMaxWidth()}
+          aria-valuemin={MIN_WIDTH}
+          aria-valuenow={width}
+          className={cn(
+            "absolute inset-y-0 -left-[3px] z-10 w-[6px] cursor-col-resize bg-transparent transition-colors",
+            "hover:bg-primary/30",
+            isResizing && "bg-primary/40",
+          )}
+          onKeyDown={handleResizeKey}
+          onPointerDown={handleResizeStart}
+          role="separator"
+          tabIndex={open ? 0 : -1}
+        />
+      ) : null}
 
-        <div className="flex h-full min-w-0 flex-1 flex-col">
-          <VcsSidebarBody {...props} diffPatchCacheRef={diffPatchCacheRef} />
-        </div>
-      </aside>
-    </>
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <VcsSidebarBody
+          {...props}
+          diffFileCacheRef={diffFileCacheRef}
+          diffPatchCacheRef={diffPatchCacheRef}
+        />
+      </div>
+    </FloatingRightSidebarFrame>
   )
 })
 
 interface VcsSidebarBodyProps extends VcsSidebarProps {
+  diffFileCacheRef: MutableRefObject<DiffFileCache>
   diffPatchCacheRef: MutableRefObject<DiffPatchCache>
 }
 
@@ -305,9 +308,11 @@ function VcsSidebarBody({
   onFetch,
   onPull,
   onPush,
+  diffFileCacheRef,
   diffPatchCacheRef,
 }: VcsSidebarBodyProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [diffFile, setDiffFile] = useState<RepositoryDiffFileDto | null>(null)
   const [diffPatch, setDiffPatch] = useState<string>("")
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState<string | null>(null)
@@ -361,6 +366,7 @@ function VcsSidebarBody({
 
   useEffect(() => {
     if (!projectId || !selectedPath || !selectedScope) {
+      setDiffFile(null)
       setDiffPatch("")
       setDiffError(null)
       setDiffLoading(false)
@@ -368,8 +374,18 @@ function VcsSidebarBody({
     }
 
     const cacheKey = createDiffPatchCacheKey(projectId, repositoryRevision, selectedScope, selectedPath)
+    const cachedFile = diffFileCacheRef.current.get(cacheKey)
+    if (cachedFile) {
+      setDiffFile(cachedFile)
+      setDiffPatch(cachedFile.patch)
+      setDiffError(null)
+      setDiffLoading(false)
+      return
+    }
+
     const cachedPatch = diffPatchCacheRef.current.get(cacheKey)
     if (cachedPatch !== null) {
+      setDiffFile(null)
       setDiffPatch(cachedPatch)
       setDiffError(null)
       setDiffLoading(false)
@@ -383,6 +399,23 @@ function VcsSidebarBody({
     onLoadDiffRef.current(projectId, selectedScope)
       .then((response) => {
         if (cancelled) return
+        if (response.files.length > 0) {
+          cacheScopeDiffFiles(
+            diffFileCacheRef.current,
+            projectId,
+            repositoryRevision,
+            selectedScope,
+            response.files,
+          )
+          const file = findRepositoryDiffFile(response.files, selectedPath)
+          if (file) {
+            setCachedDiffFile(diffFileCacheRef.current, cacheKey, file)
+          }
+          setDiffFile(file ?? null)
+          setDiffPatch(file?.patch ?? "")
+          return
+        }
+
         cacheScopeDiffPatches(
           diffPatchCacheRef.current,
           projectId,
@@ -393,11 +426,13 @@ function VcsSidebarBody({
         )
         const patch = extractFilePatch(response.patch, selectedPath)
         setCachedDiffPatch(diffPatchCacheRef.current, cacheKey, patch)
+        setDiffFile(null)
         setDiffPatch(patch)
       })
       .catch((error: unknown) => {
         if (cancelled) return
         setDiffError(error instanceof Error ? error.message : "Failed to load diff.")
+        setDiffFile(null)
         setDiffPatch("")
       })
       .finally(() => {
@@ -409,7 +444,7 @@ function VcsSidebarBody({
     return () => {
       cancelled = true
     }
-  }, [diffPatchCacheRef, projectId, repositoryRevision, selectedPath, selectedScope])
+  }, [diffFileCacheRef, diffPatchCacheRef, projectId, repositoryRevision, selectedPath, selectedScope])
 
   useEffect(() => {
     if (selectedPath && allEntries.some((entry) => entry.path === selectedPath)) {
@@ -532,7 +567,7 @@ function VcsSidebarBody({
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
       {/* Header */}
-      <div className="flex h-10 items-center justify-between gap-2 border-b border-border/70 px-3">
+      <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/70 px-3">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
             Source Control
@@ -563,11 +598,11 @@ function VcsSidebarBody({
 
       {/* Action banner */}
       {actionError ? (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-[11px] text-destructive">
+        <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-[11px] text-destructive">
           {actionError}
         </div>
       ) : actionMessage ? (
-        <div className="border-b border-success/20 bg-success/10 px-3 py-1.5 text-[11px] text-success">
+        <div className="shrink-0 border-b border-success/20 bg-success/10 px-3 py-1.5 text-[11px] text-success">
           {actionMessage}
         </div>
       ) : null}
@@ -580,7 +615,7 @@ function VcsSidebarBody({
           style={{ width: FILE_LIST_WIDTH }}
         >
           {/* Branch + remote actions */}
-          <div className="flex h-9 items-center gap-1 border-b border-border/70 px-3">
+          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border/70 px-3">
             <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate text-[12px] font-medium text-foreground/90">
               {branchLabel ?? status?.branchLabel ?? "No branch"}
@@ -703,8 +738,8 @@ function VcsSidebarBody({
             <div className="min-h-0 flex-1">
               {diffError ? (
                 <div className="px-4 py-4 text-[12px] text-destructive">{diffError}</div>
-              ) : diffPatch ? (
-                <DiffView patch={diffPatch} path={selectedPath ?? ""} />
+              ) : diffFile || diffPatch ? (
+                <DiffView file={diffFile} patch={diffPatch} path={selectedPath ?? ""} />
               ) : (
                 <div className="px-4 py-4 text-[12px] text-muted-foreground/70">
                   {selectedPath ? "No diff available." : "Select a file to view its diff."}
@@ -837,7 +872,13 @@ const VcsFileList = memo(function VcsFileList({
       ref={virtualizer.scrollRef}
       role="listbox"
     >
-      {shouldVirtualize ? <div aria-hidden="true" style={{ height: virtualizer.range.beforeSize }} /> : null}
+      {shouldVirtualize ? (
+        <div
+          aria-hidden="true"
+          className="shrink-0"
+          style={{ height: virtualizer.range.beforeSize }}
+        />
+      ) : null}
       {renderedRowIndexes.map((rowIndex) => {
         const row = rows[rowIndex]
         if (row.kind === "group") {
@@ -859,7 +900,7 @@ const VcsFileList = memo(function VcsFileList({
 
           return (
             <div
-              className="group flex h-[28px] w-full items-center gap-2 border-b border-border/40 px-3 text-left"
+              className="group flex h-[28px] w-full shrink-0 items-center gap-2 border-b border-border/40 px-3 text-left"
               key={`${row.groupKind}:group`}
               role="presentation"
             >
@@ -895,7 +936,7 @@ const VcsFileList = memo(function VcsFileList({
         if (row.kind === "empty") {
           return (
             <div
-              className="flex h-[28px] items-center border-b border-border/40 px-7 text-[11px] text-muted-foreground/70"
+              className="flex h-[28px] shrink-0 items-center border-b border-border/40 px-7 text-[11px] text-muted-foreground/70"
               key={`${row.groupKind}:empty`}
               role="presentation"
             >
@@ -918,7 +959,13 @@ const VcsFileList = memo(function VcsFileList({
           />
         )
       })}
-      {shouldVirtualize ? <div aria-hidden="true" style={{ height: virtualizer.range.afterSize }} /> : null}
+      {shouldVirtualize ? (
+        <div
+          aria-hidden="true"
+          className="shrink-0"
+          style={{ height: virtualizer.range.afterSize }}
+        />
+      ) : null}
     </div>
   )
 })
@@ -945,7 +992,7 @@ function FileRow({ busy, entry, groupKind, onDiscard, onSelect, onToggle, select
     <div
       aria-selected={selected}
       className={cn(
-        "group/row flex h-[28px] cursor-pointer items-center gap-1.5 px-3 py-0 text-left transition-colors",
+        "group/row flex h-[28px] shrink-0 cursor-pointer items-center gap-1.5 px-3 py-0 text-left transition-colors",
         selected ? "bg-primary/10" : "hover:bg-secondary/40",
       )}
       onClick={() => onSelect(entry.path)}
@@ -960,9 +1007,9 @@ function FileRow({ busy, entry, groupKind, onDiscard, onSelect, onToggle, select
       tabIndex={0}
     >
       <ChangeBadge entry={entry} kind={kind} untracked={groupKind === "unstaged" && entry.untracked} />
-      <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/90">{fileName}</span>
+      <span className="min-w-0 shrink truncate text-[12px] text-foreground/90">{fileName}</span>
       {dir ? (
-        <span className="hidden min-w-0 truncate text-[10.5px] text-muted-foreground sm:inline">{dir}</span>
+        <span className="hidden min-w-0 flex-1 truncate text-[10.5px] text-muted-foreground sm:inline">{dir}</span>
       ) : null}
       <span className="invisible flex items-center gap-0.5 group-hover/row:visible">
         {groupKind === "unstaged" ? (
@@ -1342,11 +1389,15 @@ export function parseDiffLines(patch: string): DiffLine[] {
   return result
 }
 
-function DiffView({ patch, path }: { patch: string; path: string }) {
+function DiffView({ file, patch, path }: { file?: RepositoryDiffFileDto | null; patch: string; path: string }) {
   const { theme } = useTheme()
   const lang = useMemo(() => getLangFromPath(path), [path])
   const patchKey = useMemo(() => createDiffParseKey(path, patch), [path, patch])
-  const lines = useMemo(() => parseDiffLinesForPatchKey(patchKey, patch), [patchKey, patch])
+  const structuredLines = useMemo(() => (file ? createDiffLinesFromStructuredFile(file) : null), [file])
+  const lines = useMemo(
+    () => structuredLines ?? parseDiffLinesForPatchKey(patchKey, patch),
+    [patchKey, patch, structuredLines],
+  )
   const shouldVirtualize = shouldVirtualizeRows(lines.length, DIFF_VIRTUALIZATION_THRESHOLD)
   const virtualizer = useFixedVirtualizer({
     enabled: shouldVirtualize,
@@ -1467,6 +1518,52 @@ function DiffView({ patch, path }: { patch: string; path: string }) {
   )
 }
 
+function createDiffLinesFromStructuredFile(file: RepositoryDiffFileDto): DiffLine[] {
+  const lines: DiffLine[] = []
+  const oldPath = file.oldPath ? `a/${file.oldPath}` : "/dev/null"
+  const newPath = file.newPath ? `b/${file.newPath}` : "/dev/null"
+
+  lines.push({
+    kind: "header",
+    prefix: "",
+    text: `diff --git ${oldPath} ${newPath}`,
+    oldNo: null,
+    newNo: null,
+  })
+
+  for (const hunk of file.hunks) {
+    lines.push({
+      kind: "hunk",
+      prefix: "",
+      text: hunk.truncated ? `${hunk.header} (truncated)` : hunk.header,
+      oldNo: null,
+      newNo: null,
+    })
+
+    for (const row of hunk.rows) {
+      lines.push({
+        kind: row.kind === "add" ? "add" : row.kind === "remove" ? "remove" : "context",
+        prefix: row.prefix,
+        text: row.text,
+        oldNo: row.oldLineNumber ?? null,
+        newNo: row.newLineNumber ?? null,
+      })
+    }
+  }
+
+  if (file.truncated && !file.hunks.some((hunk) => hunk.truncated)) {
+    lines.push({
+      kind: "header",
+      prefix: "",
+      text: "Diff truncated",
+      oldNo: null,
+      newNo: null,
+    })
+  }
+
+  return lines
+}
+
 function DiffLineRow({ line, tokens }: { line: DiffLine; tokens: TokenizedLine | null }) {
   if (line.kind === "hunk") {
     return (
@@ -1491,15 +1588,15 @@ function DiffLineRow({ line, tokens }: { line: DiffLine; tokens: TokenizedLine |
   const lineNo = line.kind === "remove" ? line.oldNo : line.newNo
   const rowTone =
     line.kind === "add"
-      ? "bg-success/70"
+      ? "bg-success/15"
       : line.kind === "remove"
-        ? "bg-destructive/70"
+        ? "bg-destructive/15"
         : ""
   const gutterTone =
     line.kind === "add"
-      ? "border-r border-success/70 text-success"
+      ? "border-r border-success/40 text-success/80 bg-success/10"
       : line.kind === "remove"
-        ? "border-r border-destructive/70 text-destructive"
+        ? "border-r border-destructive/40 text-destructive/80 bg-destructive/10"
         : "text-muted-foreground/40 border-r border-border/40"
   const prefixClass =
     line.kind === "add"
@@ -1587,8 +1684,30 @@ export function createDiffPatchCache(): DiffPatchCache {
   })
 }
 
+function createDiffFileCache(): DiffFileCache {
+  return createByteBudgetCache<string, RepositoryDiffFileDto>({
+    maxBytes: DIFF_PATCH_CACHE_MAX_BYTES,
+    maxEntries: MAX_DIFF_CACHE_ENTRIES,
+  })
+}
+
 function estimateDiffPatchBytes(key: string, patch: string): number {
   return estimateUtf16Bytes(key) + estimateUtf16Bytes(patch) + 32
+}
+
+function estimateDiffFileBytes(key: string, file: RepositoryDiffFileDto): number {
+  let bytes = estimateDiffPatchBytes(key, file.patch)
+  bytes += estimateUtf16Bytes(file.displayPath)
+  bytes += estimateUtf16Bytes(file.oldPath ?? "")
+  bytes += estimateUtf16Bytes(file.newPath ?? "")
+  bytes += estimateUtf16Bytes(file.cacheKey)
+  for (const hunk of file.hunks) {
+    bytes += 48 + estimateUtf16Bytes(hunk.header)
+    for (const row of hunk.rows) {
+      bytes += 40 + estimateUtf16Bytes(row.prefix) + estimateUtf16Bytes(row.text)
+    }
+  }
+  return bytes
 }
 
 export function getDiffPatchCacheStats(cache: DiffPatchCache): ByteBudgetCacheStats {
@@ -1597,6 +1716,40 @@ export function getDiffPatchCacheStats(cache: DiffPatchCache): ByteBudgetCacheSt
 
 export function setCachedDiffPatch(cache: DiffPatchCache, key: string, patch: string): void {
   cache.set(key, patch, estimateDiffPatchBytes(key, patch))
+}
+
+function setCachedDiffFile(cache: DiffFileCache, key: string, file: RepositoryDiffFileDto): void {
+  cache.set(key, file, estimateDiffFileBytes(key, file))
+}
+
+function pathMatchesDiffFile(file: RepositoryDiffFileDto, path: string): boolean {
+  return file.displayPath === path || file.newPath === path || file.oldPath === path
+}
+
+function findRepositoryDiffFile(files: RepositoryDiffFileDto[], path: string): RepositoryDiffFileDto | null {
+  return files.find((file) => pathMatchesDiffFile(file, path)) ?? null
+}
+
+function cacheScopeDiffFiles(
+  cache: DiffFileCache,
+  projectId: string,
+  revision: string,
+  scope: RepositoryDiffScope,
+  files: RepositoryDiffFileDto[],
+): void {
+  for (const file of files) {
+    setCachedDiffFile(
+      cache,
+      createDiffPatchCacheKey(projectId, revision, scope, file.displayPath),
+      file,
+    )
+    if (file.newPath && file.newPath !== file.displayPath) {
+      setCachedDiffFile(cache, createDiffPatchCacheKey(projectId, revision, scope, file.newPath), file)
+    }
+    if (file.oldPath && file.oldPath !== file.displayPath && file.oldPath !== file.newPath) {
+      setCachedDiffFile(cache, createDiffPatchCacheKey(projectId, revision, scope, file.oldPath), file)
+    }
+  }
 }
 
 function cacheScopeDiffPatches(

@@ -1,29 +1,39 @@
+#[cfg(unix)]
+use std::process::Command;
 use std::{
     collections::BTreeMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
+};
+#[cfg(target_os = "macos")]
+use std::{
+    process::Stdio,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use regex::Regex;
+#[cfg(target_os = "macos")]
 use serde_json::Value as JsonValue;
 
+#[cfg(target_os = "macos")]
+use super::AutonomousSystemDiagnosticsLogLevel;
 use super::{
     policy::system_diagnostics_policy_trace, AutonomousSystemDiagnosticsAction,
     AutonomousSystemDiagnosticsArtifact, AutonomousSystemDiagnosticsArtifactMode,
     AutonomousSystemDiagnosticsDiagnostic, AutonomousSystemDiagnosticsFdKind,
-    AutonomousSystemDiagnosticsLogLevel, AutonomousSystemDiagnosticsOutput,
-    AutonomousSystemDiagnosticsPolicyTrace, AutonomousSystemDiagnosticsPreset,
-    AutonomousSystemDiagnosticsRequest, AutonomousSystemDiagnosticsRow,
-    AutonomousSystemDiagnosticsTarget, AutonomousToolOutput, AutonomousToolResult,
-    AutonomousToolRuntime, AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS,
+    AutonomousSystemDiagnosticsOutput, AutonomousSystemDiagnosticsPolicyTrace,
+    AutonomousSystemDiagnosticsPreset, AutonomousSystemDiagnosticsRequest,
+    AutonomousSystemDiagnosticsRow, AutonomousSystemDiagnosticsTarget, AutonomousToolOutput,
+    AutonomousToolResult, AutonomousToolRuntime, AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS,
 };
+#[cfg(target_os = "macos")]
+use crate::runtime::cancelled_error;
 use crate::{
     commands::{validate_non_empty, CommandError, CommandResult},
-    runtime::{cancelled_error, redaction::find_prohibited_persistence_content},
+    runtime::redaction::find_prohibited_persistence_content,
 };
 
 const DEFAULT_SYSTEM_DIAGNOSTICS_LIMIT: usize = 100;
@@ -34,9 +44,11 @@ const MAX_SYSTEM_DIAGNOSTICS_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SYSTEM_DIAGNOSTICS_DEPTH: usize = 8;
 const DEFAULT_PROCESS_SAMPLE_DURATION_MS: u64 = 2_000;
 const DEFAULT_PROCESS_SAMPLE_INTERVAL_MS: u64 = 10;
+#[cfg(target_os = "macos")]
 const PROCESS_SAMPLE_TIMEOUT_GRACE_MS: u64 = 3_000;
 const DEFAULT_SYSTEM_LOG_LAST_MS: u64 = 60_000;
 const MAX_SYSTEM_LOG_LAST_MS: u64 = 15 * 60_000;
+#[cfg(target_os = "macos")]
 const MAX_SYSTEM_LOG_MESSAGE_CHARS: usize = 320;
 const SYSTEM_DIAGNOSTICS_ARTIFACT_DIR: &str = "diagnostics-artifacts";
 
@@ -1430,7 +1442,9 @@ fn validate_system_diagnostics_request(
             if value.contains('\0') {
                 return Err(CommandError::user_fixable(
                     "system_diagnostics_input_invalid",
-                    format!("Xero refused system diagnostics field `{field}` because it contained a NUL byte."),
+                    format!(
+                        "Xero refused system diagnostics field `{field}` because it contained a NUL byte."
+                    ),
                 ));
             }
         }
@@ -2493,6 +2507,7 @@ fn platform_macos_accessibility_snapshot(
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn json_string_field(value: &JsonValue, field: &str) -> Option<String> {
     match value.get(field)? {
         JsonValue::String(value) => Some(value.clone()),
@@ -2503,6 +2518,7 @@ fn json_string_field(value: &JsonValue, field: &str) -> Option<String> {
     .filter(|value| !value.is_empty())
 }
 
+#[cfg(target_os = "macos")]
 fn json_u64_field(value: &JsonValue, field: &str) -> Option<u64> {
     match value.get(field)? {
         JsonValue::Number(value) => value.as_u64(),
@@ -2511,6 +2527,7 @@ fn json_u64_field(value: &JsonValue, field: &str) -> Option<u64> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn redact_json_strings_for_diagnostics(value: &mut JsonValue, redacted: &mut bool) {
     match value {
         JsonValue::String(text) => {
@@ -2593,13 +2610,9 @@ mod macos_accessibility {
             redacted: false,
             diagnostics: Vec::new(),
             include_children: request.include_children,
-            max_depth: request.max_depth.unwrap_or({
-                if request.include_children {
-                    2
-                } else {
-                    0
-                }
-            }),
+            max_depth: request
+                .max_depth
+                .unwrap_or(if request.include_children { 2 } else { 0 }),
             attributes,
         };
 
@@ -2881,7 +2894,9 @@ mod macos_accessibility {
             let Some(pid) = window.pid().ok() else {
                 return Err(CommandError::user_fixable(
                     "system_diagnostics_accessibility_window_pid_unavailable",
-                    format!("Xero found macOS window `{window_id}` but could not resolve its process id."),
+                    format!(
+                        "Xero found macOS window `{window_id}` but could not resolve its process id."
+                    ),
                 ));
             };
             let mut target = app_summaries
@@ -3399,6 +3414,17 @@ fn read_text_file_prefix(path: &Path, max_bytes: usize) -> CommandResult<(String
 }
 
 fn write_text_artifact(path: &Path, text: &str) -> CommandResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::system_fault(
+                "system_diagnostics_artifact_failed",
+                format!(
+                    "Xero could not create diagnostics artifact directory {}: {error}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
     fs::write(path, text.as_bytes()).map_err(|error| {
         CommandError::system_fault(
             "system_diagnostics_artifact_failed",
@@ -3433,6 +3459,7 @@ fn diagnostics_artifact_path(root: &Path, prefix: &str, extension: &str) -> Comm
     Ok(root.join(format!("{prefix}-{millis}.{extension}")))
 }
 
+#[cfg(target_os = "macos")]
 fn camel_to_snake(value: &str) -> String {
     let mut out = String::new();
     for (index, ch) in value.chars().enumerate() {
@@ -4110,6 +4137,8 @@ mod tests {
         runtime::{
             AutonomousSystemDiagnosticsFdKind, AutonomousToolAccessAction,
             AutonomousToolAccessRequest, AutonomousToolRequest,
+            AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE,
+            AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED,
         },
     };
 
@@ -4274,7 +4303,7 @@ mod tests {
         assert!(search_output
             .matches
             .iter()
-            .any(|tool_match| tool_match.tool_name == AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS));
+            .any(|tool_match| tool_match.tool_name == AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE));
 
         let access = runtime
             .tool_access(AutonomousToolAccessRequest {
@@ -4289,7 +4318,10 @@ mod tests {
         };
         assert_eq!(
             access_output.granted_tools,
-            vec![AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS.to_string()]
+            vec![
+                AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE.to_string(),
+                AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED.to_string()
+            ]
         );
         assert!(access_output.denied_tools.is_empty());
     }
@@ -4660,6 +4692,7 @@ mod tests {
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,
+                    auto_compact_enabled: true,
                     revision: 1,
                     applied_at: now_timestamp(),
                 },
