@@ -6,6 +6,7 @@ import {
   Apple,
   Loader2,
   Play,
+  RefreshCw,
   RotateCcw,
   Square,
   Smartphone,
@@ -28,7 +29,9 @@ import {
   type EmulatorPlatform,
 } from "@/src/features/emulator/use-emulator-session"
 import { EmulatorHardwareStrip } from "./emulator-hardware-strip"
+import { InspectorOverlay, InspectModeButton } from "./emulator-inspector-overlay"
 import { EmulatorMissingSdk } from "./emulator-missing-sdk"
+import { useInspector } from "@/src/features/emulator/use-inspector"
 
 interface EmulatorSidebarProps {
   open: boolean
@@ -334,6 +337,20 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
 
   const session = useEmulatorSession({ platform, active: sessionActive })
+  const inspector = useInspector()
+
+  // Auto-connect Metro inspector when streaming an iOS session.
+  useEffect(() => {
+    if (session.status.phase === "streaming" && platform === "ios" && !inspector.metroConnected) {
+      inspector.connect().catch(() => {
+        // Metro not running — silent, inspect button stays available.
+      })
+    }
+    if (session.status.phase !== "streaming" && inspector.metroConnected) {
+      inspector.disconnect()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.status.phase, platform])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -416,11 +433,34 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
   }, [meta.storageKey])
 
   const Icon = platform === "ios" ? Apple : Smartphone
+  const hasNoDevices =
+    session.hasLoadedDevices && !session.isLoadingDevices && session.devices.length === 0
+  const emptyDeviceCopy =
+    platform === "ios"
+      ? {
+          headline: "No iOS simulators found",
+          detail: "Install an iOS runtime in Xcode, then refresh the simulator list.",
+        }
+      : {
+          headline: "No Android emulators found",
+          detail: "Create an Android virtual device, then refresh the emulator list.",
+        }
 
   const handleStart = useCallback(() => {
-    if (!selectedDeviceId) return
-    void session.start(selectedDeviceId)
+    if (session.isLoadingDevices) return
+    // Use selected device, or auto-pick first available device.
+    const deviceId = selectedDeviceId ?? session.devices[0]?.id
+    if (!deviceId) {
+      // Force refresh devices then retry.
+      void session.refreshDevices()
+      return
+    }
+    void session.start(deviceId)
   }, [selectedDeviceId, session])
+
+  const handleRefreshDevices = useCallback(() => {
+    void session.refreshDevices()
+  }, [session])
 
   const handleStop = useCallback(() => {
     void session.stop()
@@ -537,7 +577,7 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
         <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
           {meta.label}
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           {session.devices.length > 0 ? (
             <Select
               disabled={isActive}
@@ -572,6 +612,12 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
               >
                 <RotateCcw className="h-3 w-3" />
               </button>
+              <InspectModeButton
+                active={inspector.inspectMode}
+                connected={inspector.metroConnected}
+                disabled={!isStreaming}
+                onClick={inspector.toggleInspect}
+              />
               <button
                 aria-label="Stop device"
                 className="flex h-6 items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 text-[11px] text-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-60"
@@ -589,31 +635,45 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
             </>
           ) : (
             <button
-              aria-label="Start device"
+              aria-label={hasNoDevices ? "Refresh devices" : "Start device"}
               className="flex h-6 items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 text-[11px] text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-60"
-              disabled={!selectedDeviceId || session.isStarting}
-              onClick={handleStart}
+              disabled={session.isStarting || session.isLoadingDevices}
+              onClick={hasNoDevices ? handleRefreshDevices : handleStart}
               type="button"
             >
-              {session.isStarting ? (
+              {session.isStarting || session.isLoadingDevices ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
+              ) : hasNoDevices ? (
+                <RefreshCw className="h-3 w-3" />
               ) : (
                 <Play className="h-3 w-3" />
               )}
-              Start
+              {session.isStarting
+                ? "Starting..."
+                : session.isLoadingDevices
+                  ? "Loading..."
+                  : hasNoDevices
+                    ? "Refresh"
+                    : "Start"}
             </button>
           )}
         </div>
       </div>
 
-      <EmulatorMissingSdk active={sessionActive} platform={platform} />
+      <EmulatorMissingSdk
+        active={sessionActive}
+        onProvisioned={session.refreshDevices}
+        platform={platform}
+      />
 
       <EmulatorViewport
         currentDevice={session.currentDevice}
         error={session.error}
         frameSeq={session.frame?.seq ?? null}
         inputError={session.inputError}
+        inspector={inspector}
         isStreaming={isStreaming}
+        noDevicesCopy={hasNoDevices ? emptyDeviceCopy : null}
         onDismissInputError={session.dismissInputError}
         onInput={(payload) => void session.sendInput(payload)}
         onKeyDown={handleKeyDown}
@@ -638,7 +698,9 @@ interface ViewportProps {
   error: string | null
   frameSeq: number | null
   inputError: string | null
+  inspector: ReturnType<typeof useInspector>
   isStreaming: boolean
+  noDevicesCopy: { headline: string; detail: string } | null
   onDismissInputError: () => void
   onInput: (input: { kind: EmulatorInputKind; x?: number; y?: number }) => void
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void
@@ -653,7 +715,9 @@ function EmulatorViewport({
   error,
   frameSeq,
   inputError,
+  inspector,
   isStreaming,
+  noDevicesCopy,
   onDismissInputError,
   onInput,
   onKeyDown,
@@ -726,6 +790,8 @@ function EmulatorViewport({
     const headline =
       status.phase === "booting" || status.phase === "connecting"
         ? `Starting ${platformLabel}…`
+        : noDevicesCopy
+          ? noDevicesCopy.headline
         : isStreaming && !currentDevice
           ? `${platformLabel} streaming`
           : isStreaming
@@ -735,7 +801,8 @@ function EmulatorViewport({
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 bg-background/40 px-6 text-center">
         <div className="text-[12px] font-medium text-foreground/85">{headline}</div>
         <div className="text-[11px] leading-relaxed text-muted-foreground">
-          {status.message ??
+          {noDevicesCopy?.detail ??
+            status.message ??
             `Pick a device above and hit Start to stream the ${platformLabel.toLowerCase()}.`}
         </div>
       </div>
@@ -802,6 +869,18 @@ function EmulatorViewport({
             onLoad={settleFrameRequest}
             src={frameSrc}
           />
+          {inspector.inspectMode && currentDevice && (
+            <InspectorOverlay
+              deviceWidth={currentDevice.width}
+              deviceHeight={currentDevice.height}
+              inspector={inspector}
+              onSearchProject={(query) => {
+                // TODO: Wire to editor search command when available.
+                // For now, copy to clipboard as a bridging affordance.
+                navigator.clipboard?.writeText(query).catch(() => {})
+              }}
+            />
+          )}
           {isIos && !isTablet ? <DynamicIsland /> : null}
           {isIos && !isTablet ? <HomeIndicator /> : null}
         </div>

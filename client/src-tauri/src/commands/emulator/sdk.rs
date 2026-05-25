@@ -38,6 +38,16 @@ pub struct IosSdkStatus {
     /// for `CGEventPostToPid` to deliver taps to Simulator.app. Always `false`
     /// on non-macOS hosts.
     pub ax_permission_granted: bool,
+    /// Xero has been granted Screen Recording permission (macOS) — required
+    /// by ScreenCaptureKit for the Swift helper's frame capture. Always
+    /// `false` on non-macOS hosts.
+    pub screen_recording_permission_granted: bool,
+    /// The Swift helper binary (`xero-ios-helper`) was found on disk.
+    pub helper_present: bool,
+    /// Installed and available iOS Simulator runtimes.
+    pub runtime_count: usize,
+    /// Created and available iOS Simulator devices.
+    pub device_count: usize,
 }
 
 pub fn probe_sdks<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> SdkStatus {
@@ -69,6 +79,20 @@ fn probe_ios_status<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> IosSdkStatu
             idb_companion_present: ios.idb_companion.is_some(),
             supported: true,
             ax_permission_granted: super::ios::cg_input::ax_permission_granted(),
+            screen_recording_permission_granted:
+                super::ios::cg_input::screen_recording_permission_granted(),
+            helper_present: super::ios::helper::resolve_helper_binary(app).is_some(),
+            runtime_count: super::ios::xcrun::list_runtimes()
+                .map(|runtimes| {
+                    runtimes
+                        .into_iter()
+                        .filter(|runtime| runtime.available && runtime.is_ios())
+                        .count()
+                })
+                .unwrap_or(0),
+            device_count: super::ios::xcrun::list_devices()
+                .map(|devices| devices.len())
+                .unwrap_or(0),
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -81,6 +105,10 @@ fn probe_ios_status<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> IosSdkStatu
             idb_companion_present: false,
             supported: false,
             ax_permission_granted: false,
+            screen_recording_permission_granted: false,
+            helper_present: false,
+            runtime_count: 0,
+            device_count: 0,
         }
     }
 }

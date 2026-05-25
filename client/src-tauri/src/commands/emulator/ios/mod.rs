@@ -6,11 +6,16 @@ pub mod sdk;
 #[cfg(target_os = "macos")]
 pub mod cg_input;
 #[cfg(target_os = "macos")]
+pub mod helper;
+#[cfg(target_os = "macos")]
+pub mod helper_client;
+#[cfg(target_os = "macos")]
 pub mod idb_client;
 #[cfg(target_os = "macos")]
 pub mod idb_companion;
 #[cfg(target_os = "macos")]
 pub mod input;
+pub mod provision;
 #[cfg(target_os = "macos")]
 pub mod session;
 #[cfg(target_os = "macos")]

@@ -15,6 +15,20 @@ use serde::Deserialize;
 
 use super::session::SimulatorDescriptor;
 
+#[derive(Debug, Clone)]
+pub struct SimulatorRuntimeDescriptor {
+    pub identifier: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub available: bool,
+}
+
+impl SimulatorRuntimeDescriptor {
+    pub fn is_ios(&self) -> bool {
+        self.identifier.contains(".SimRuntime.iOS-") || self.name.starts_with("iOS ")
+    }
+}
+
 /// Enumerate all *available* simulators across all installed runtimes, keeping
 /// only the ones that can actually boot (skipping the "unavailable" entries
 /// simctl lists when a runtime is missing).
@@ -53,6 +67,36 @@ pub fn list_devices() -> Result<Vec<SimulatorDescriptor>> {
         }
     }
     Ok(out)
+}
+
+/// Enumerate installed simulator runtimes. An empty list means Xcode is
+/// present but CoreSimulator has no OS images to boot.
+pub fn list_runtimes() -> Result<Vec<SimulatorRuntimeDescriptor>> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "list", "runtimes", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        return Err(io_other(format!(
+            "xcrun simctl list runtimes failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let dump: SimctlListRuntimesDump = serde_json::from_slice(&output.stdout)
+        .map_err(|e| io_other(format!("failed to parse simctl runtimes JSON: {e}")))?;
+
+    Ok(dump
+        .runtimes
+        .into_iter()
+        .map(|runtime| SimulatorRuntimeDescriptor {
+            identifier: runtime.identifier,
+            name: runtime.name,
+            version: runtime.version,
+            available: runtime.is_available.unwrap_or(true),
+        })
+        .collect())
 }
 
 /// Boot a simulator, waiting up to `timeout` for it to reach `Booted` state.
@@ -325,6 +369,9 @@ pub mod hid_fallback {
 /// follow up with an activate in the caller for keystrokes that need
 /// focus.
 pub fn focus_simulator(udid: &str) -> Result<()> {
+    // Do NOT use -j (hide) — iOS 26 needs the display pipeline active
+    // to finish booting. The window opens in background (-g) so Xero
+    // stays frontmost.
     let status = Command::new("open")
         .args([
             "-g",
@@ -340,9 +387,8 @@ pub fn focus_simulator(udid: &str) -> Result<()> {
             "could not launch Simulator.app: open exited {status}"
         )));
     }
-    // Give Simulator.app a brief moment to claim the window when we just
-    // launched it; System Events can't target a process that hasn't
-    // registered yet.
+    // Give Simulator.app a moment to register its window for
+    // ScreenCaptureKit / CGEvent targeting.
     std::thread::sleep(Duration::from_millis(150));
     Ok(())
 }
@@ -468,6 +514,22 @@ fn io_other(msg: String) -> Error {
 #[derive(Debug, Deserialize)]
 struct SimctlListDevicesDump {
     devices: std::collections::BTreeMap<String, Vec<SimctlDevice>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SimctlListRuntimesDump {
+    runtimes: Vec<SimctlRuntime>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SimctlRuntime {
+    identifier: String,
+    name: String,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    is_available: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

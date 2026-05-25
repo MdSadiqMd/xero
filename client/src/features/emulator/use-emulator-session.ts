@@ -71,6 +71,8 @@ export interface UseEmulatorSession {
   frame: EmulatorFrameInfo | null
   currentDevice: DeviceDescriptor | null
   devices: DeviceDescriptor[]
+  isLoadingDevices: boolean
+  hasLoadedDevices: boolean
   isStarting: boolean
   isStopping: boolean
   /** Session-level error (boot failure, broken stream) — the canvas
@@ -100,11 +102,6 @@ interface Options {
   active: boolean
 }
 
-function asTauri<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
-  if (!isTauri()) return Promise.resolve(null)
-  return invoke<T>(command, args).catch(() => null)
-}
-
 function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message
@@ -118,6 +115,8 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
   const [status, setStatus] = useState<EmulatorStatus>({ phase: "idle" })
   const [frame, setFrame] = useState<EmulatorFrameInfo | null>(null)
   const [devices, setDevices] = useState<DeviceDescriptor[]>([])
+  const [isLoadingDevices, setIsLoadingDevices] = useState(false)
+  const [hasLoadedDevices, setHasLoadedDevices] = useState(false)
   const [currentDevice, setCurrentDevice] = useState<DeviceDescriptor | null>(null)
   const [isStarting, setIsStarting] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
@@ -134,7 +133,7 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
   const frameCoalescerRef = useRef<FrameCoalescer<EmulatorFrameInfo> | null>(null)
   if (!frameCoalescerRef.current) {
     frameCoalescerRef.current = createFrameCoalescer<EmulatorFrameInfo>({
-      getEnabled: () => activeRef.current && !isDocumentHidden(),
+      getEnabled: () => activeRef.current,
       onFlush: (nextFrame) => setFrame(nextFrame),
     })
   }
@@ -181,7 +180,7 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
 
     void listen<EmulatorFrameInfo>(EMULATOR_FRAME_EVENT, (event) => {
       if (cancelled) return
-      frameCoalescerRef.current?.schedule(event.payload)
+      setFrame(event.payload)
     }).then((unsub) => {
       const safeUnsub = createSafeTauriUnlisten(unsub)
       if (cancelled) {
@@ -233,13 +232,26 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
 
   const refreshDevices = useCallback(async (): Promise<DeviceDescriptor[]> => {
     setError(null)
-    const list = await asTauri<DeviceDescriptor[]>("emulator_list_devices", { request: { platform: platformTag } })
-    if (!list) {
+    setIsLoadingDevices(true)
+    try {
+      if (!isTauri()) {
+        setDevices([])
+        return []
+      }
+      const list = await invoke<DeviceDescriptor[]>("emulator_list_devices", {
+        request: { platform: platformTag },
+      })
+      setDevices(list)
+      return list
+    } catch (err) {
+      console.error("[emulator] emulator_list_devices failed:", err)
+      setError(errorMessage(err))
       setDevices([])
       return []
+    } finally {
+      setHasLoadedDevices(true)
+      setIsLoadingDevices(false)
     }
-    setDevices(list)
-    return list
   }, [platformTag])
 
   useEffect(() => {
@@ -265,6 +277,27 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
           devicePixelRatio: response.devicePixelRatio,
         }
         setCurrentDevice(descriptor)
+        // The backend emits status/frame events during spawn, but the
+        // async listener may not have resolved in time. Force-sync now.
+        setStatus({
+          phase: "streaming",
+          platform: platformTag,
+          deviceId,
+          message: `streaming at ${response.width}x${response.height}`,
+        })
+        // Fetch the latest frame snapshot so we don't show a stale/empty
+        // viewport while waiting for the next emulator:frame event.
+        try {
+          const snapshot = await invoke<{
+            status: { phase: string }
+            frame: EmulatorFrameInfo | null
+          }>("emulator_subscribe_ready")
+          if (snapshot.frame) {
+            setFrame(snapshot.frame)
+          }
+        } catch {
+          // best-effort
+        }
         return response
       } catch (err) {
         setError(errorMessage(err))
@@ -287,6 +320,7 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
       setIsStopping(false)
       setCurrentDevice(null)
       setFrame(null)
+      setStatus({ phase: "idle", platform: null, deviceId: null, message: null })
     }
   }, [])
 
@@ -372,6 +406,8 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
     frame,
     currentDevice,
     devices,
+    isLoadingDevices,
+    hasLoadedDevices,
     isStarting,
     isStopping,
     error,

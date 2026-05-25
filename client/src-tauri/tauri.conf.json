@@ -34,7 +34,7 @@
         "script-src": ["'self'"],
         "style-src": ["'self'", "'unsafe-inline'"],
         "font-src": ["'self'", "data:"],
-        "img-src": ["'self'", "data:", "blob:", "project-asset:", "https:", "http:"],
+        "img-src": ["'self'", "data:", "blob:", "project-asset:", "emulator:", "https:", "http:"],
         "media-src": ["'self'", "blob:", "project-asset:"],
         "object-src": ["'self'", "blob:", "project-asset:"],
         "frame-src": ["'self'", "blob:", "project-asset:"],
@@ -46,7 +46,7 @@
         "script-src": ["'self'", "'unsafe-eval'", "http://localhost:3000"],
         "style-src": ["'self'", "'unsafe-inline'", "http://localhost:3000"],
         "font-src": ["'self'", "data:", "http://localhost:3000"],
-        "img-src": ["'self'", "data:", "blob:", "project-asset:", "https:", "http:"],
+        "img-src": ["'self'", "data:", "blob:", "project-asset:", "emulator:", "https:", "http:"],
         "media-src": ["'self'", "blob:", "project-asset:"],
         "object-src": ["'self'", "blob:", "project-asset:"],
         "frame-src": ["'self'", "blob:", "project-asset:"],
@@ -88,7 +88,8 @@
     ],
     "resources": [
       "resources/scrcpy-server-v2.7.jar",
-      "resources/solana-toolchain/**/*"
+      "resources/solana-toolchain/**/*",
+      "resources/xero-ios-helper"
     ]
   }
 }

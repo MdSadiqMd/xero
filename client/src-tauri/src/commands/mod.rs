@@ -172,9 +172,9 @@ pub use editor_workflows::{
 };
 pub use emulator::{
     emulator_android_provision, emulator_android_provision_status, emulator_input,
-    emulator_ios_open_accessibility_settings, emulator_ios_request_ax_permission,
-    emulator_list_devices, emulator_rotate, emulator_sdk_status, emulator_start, emulator_stop,
-    emulator_subscribe_ready, EmulatorState,
+    emulator_ios_open_accessibility_settings, emulator_ios_provision,
+    emulator_ios_request_ax_permission, emulator_list_devices, emulator_rotate,
+    emulator_sdk_status, emulator_start, emulator_stop, emulator_subscribe_ready, EmulatorState,
 };
 pub use environment_discovery::{
     get_environment_discovery_status, get_environment_profile_summary,
