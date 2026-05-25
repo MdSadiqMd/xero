@@ -35,6 +35,7 @@ pub use events::{
     EMULATOR_SDK_STATUS_CHANGED_EVENT, EMULATOR_STATUS_EVENT,
 };
 pub use frame_bus::{Frame, FrameBus};
+pub use ios::provision::{emulator_ios_provision, EMULATOR_IOS_PROVISION_EVENT};
 pub use sdk::{probe_sdks, AndroidSdkStatus, IosSdkStatus, SdkStatus};
 pub use uri_scheme::{handle as handle_uri_scheme, URI_SCHEME};
 

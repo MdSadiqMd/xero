@@ -25,6 +25,8 @@ interface SdkStatus {
     axPermissionGranted: boolean
     screenRecordingPermissionGranted: boolean
     helperPresent: boolean
+    runtimeCount: number
+    deviceCount: number
   }
 }
 
@@ -38,6 +40,10 @@ type ProvisionPhase =
   | "accepting_licenses"
   | "installing_packages"
   | "creating_avd"
+  | "running_first_launch"
+  | "downloading_runtime"
+  | "mounting_runtime"
+  | "creating_device"
   | "completed"
   | "failed"
 
@@ -65,6 +71,7 @@ const IDLE_STATE: ProvisionState = {
 }
 
 const PROVISION_EVENT = "emulator:android_provision"
+const IOS_PROVISION_EVENT = "emulator:ios_provision"
 const SDK_STATUS_CHANGED_EVENT = "emulator:sdk_status_changed"
 
 const PHASE_LABELS: Record<ProvisionPhase, string> = {
@@ -77,6 +84,10 @@ const PHASE_LABELS: Record<ProvisionPhase, string> = {
   accepting_licenses: "Accepting SDK licenses",
   installing_packages: "Installing platform-tools + emulator + system image",
   creating_avd: "Creating default AVD",
+  running_first_launch: "Running Xcode first-launch tasks",
+  downloading_runtime: "Installing iOS Simulator runtime",
+  mounting_runtime: "Registering iOS Simulator runtime",
+  creating_device: "Creating iPhone simulator",
   completed: "Finished",
   failed: "Failed",
 }
@@ -85,6 +96,7 @@ interface Props {
   active?: boolean
   platform: EmulatorPlatform
   onDismiss?: () => void
+  onProvisioned?: () => void
 }
 
 /// Panel shown above the device picker when the host is missing the
@@ -96,12 +108,16 @@ interface Props {
 /// - iOS (macOS): Xcode / `xcrun` not found.
 /// - iOS (non-macOS): hidden entirely — the shell already hides the
 ///   titlebar button on those hosts.
-export function EmulatorMissingSdk({ active = true, platform, onDismiss }: Props) {
+export function EmulatorMissingSdk({ active = true, platform, onDismiss, onProvisioned }: Props) {
   const [status, setStatus] = useState<SdkStatus | null>(null)
   const [isProbing, setIsProbing] = useState(false)
   const [provision, setProvision] = useState<ProvisionState>(IDLE_STATE)
+  const [iosProvision, setIosProvision] = useState<ProvisionState>(IDLE_STATE)
   const onDismissRef = useRef(onDismiss)
+  const onProvisionedRef = useRef(onProvisioned)
+  const iosAutoProvisionAttemptedRef = useRef(false)
   onDismissRef.current = onDismiss
+  onProvisionedRef.current = onProvisioned
 
   const probe = useCallback(async () => {
     if (!active || !isTauri()) return
@@ -142,6 +158,7 @@ export function EmulatorMissingSdk({ active = true, platform, onDismiss }: Props
       if (payload.phase === "completed") {
         void probe().then(() => {
           if (!cancelled) {
+            onProvisionedRef.current?.()
             onDismissRef.current?.()
           }
         })
@@ -157,6 +174,32 @@ export function EmulatorMissingSdk({ active = true, platform, onDismiss }: Props
 
     void listen(SDK_STATUS_CHANGED_EVENT, () => {
       if (!cancelled) void probe()
+    }).then((fn) => {
+      const safeUnlisten = createSafeTauriUnlisten(fn)
+      if (cancelled) {
+        safeUnlisten()
+      } else {
+        unlisten.push(safeUnlisten)
+      }
+    })
+
+    void listen<ProvisionEvent>(IOS_PROVISION_EVENT, (event) => {
+      if (cancelled) return
+      const payload = event.payload
+      setIosProvision((prev) => ({
+        phase: payload.phase,
+        message: payload.message ?? prev.message,
+        progress: payload.progress ?? null,
+        error: payload.error,
+        active: payload.phase !== "completed" && payload.phase !== "failed",
+      }))
+      if (payload.phase === "completed") {
+        void probe().then(() => {
+          if (!cancelled) {
+            onProvisionedRef.current?.()
+          }
+        })
+      }
     }).then((fn) => {
       const safeUnlisten = createSafeTauriUnlisten(fn)
       if (cancelled) {
@@ -189,11 +232,61 @@ export function EmulatorMissingSdk({ active = true, platform, onDismiss }: Props
     }
   }, [active])
 
+  const iosProvisionStart = useCallback(async () => {
+    if (!active || !isTauri()) return
+    setIosProvision({ ...IDLE_STATE, active: true, phase: "starting" })
+    try {
+      await invoke("emulator_ios_provision")
+      setIosProvision({
+        phase: "completed",
+        message: "iOS Simulator setup is ready.",
+        progress: 1,
+        error: null,
+        active: false,
+      })
+      await probe()
+      onProvisionedRef.current?.()
+    } catch (err) {
+      const message = errorMessage(err)
+      setIosProvision({
+        phase: "failed",
+        message: null,
+        progress: null,
+        error: message,
+        active: false,
+      })
+    }
+  }, [active, probe])
+
+  useEffect(() => {
+    const iosNeedsProvision =
+      active &&
+      platform === "ios" &&
+      status?.ios.supported &&
+      status.ios.present &&
+      (status.ios.runtimeCount === 0 || status.ios.deviceCount === 0)
+    if (!iosNeedsProvision || iosProvision.active || iosProvision.phase === "failed") return
+    if (iosAutoProvisionAttemptedRef.current) return
+    iosAutoProvisionAttemptedRef.current = true
+    void iosProvisionStart()
+  }, [active, iosProvision.active, iosProvision.phase, iosProvisionStart, platform, status])
+
   if (!active || !status) return null
+
+  const iosNeedsProvision =
+    platform === "ios" &&
+    status.ios.supported &&
+    status.ios.present &&
+    (status.ios.runtimeCount === 0 || status.ios.deviceCount === 0)
 
   const shouldShowProvisionStream = platform === "android" && provision.active
   if (shouldShowProvisionStream) {
     return <ProvisionProgressCard state={provision} />
+  }
+
+  const shouldShowIosProvisionStream = platform === "ios" && iosProvision.active
+  if (shouldShowIosProvisionStream) {
+    return <ProvisionProgressCard state={iosProvision} />
   }
 
   if (platform === "android") {
@@ -207,6 +300,18 @@ export function EmulatorMissingSdk({ active = true, platform, onDismiss }: Props
         onProbe={probe}
         onProvision={provisionStart}
         panel={panel}
+      />
+    )
+  }
+
+  if (iosNeedsProvision) {
+    return (
+      <IosProvisionCard
+        failure={iosProvision.error}
+        isProbing={isProbing}
+        needsRuntime={status.ios.runtimeCount === 0}
+        onProbe={probe}
+        onProvision={iosProvisionStart}
       />
     )
   }
@@ -454,7 +559,7 @@ function errorMessage(err: unknown): string {
     if (typeof message === "string" && message.length > 0) return message
   }
   if (typeof err === "string" && err.length > 0) return err
-  return "Android SDK provisioning failed"
+  return "Emulator setup failed"
 }
 
 interface AndroidPanel {
@@ -477,6 +582,66 @@ function androidPanel(status: SdkStatus): AndroidPanel | null {
       },
     ],
   }
+}
+
+function IosProvisionCard({
+  failure,
+  isProbing,
+  needsRuntime,
+  onProbe,
+  onProvision,
+}: {
+  failure: string | null
+  isProbing: boolean
+  needsRuntime: boolean
+  onProbe: () => void
+  onProvision: () => void
+}) {
+  return (
+    <div
+      aria-live="polite"
+      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-warning/10 px-3 py-2 text-[11px] leading-relaxed"
+      role="region"
+    >
+      <div className="font-medium text-warning">
+        {needsRuntime ? "iOS Simulator runtime missing" : "No iOS simulator device found"}
+      </div>
+      <div className="text-muted-foreground">
+        {needsRuntime
+          ? "Xero can install the iOS Simulator runtime using Xcode's command-line tools, then create a default iPhone simulator."
+          : "Xero can create a default iPhone simulator from the installed runtime."}
+      </div>
+      {failure ? (
+        <div className="flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-destructive">
+          <XCircle className="mt-[2px] h-3 w-3 shrink-0" />
+          <span className="break-words">{failure}</span>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border border-warning/60 bg-warning/20 px-2 py-0.5",
+            "font-medium text-[11px] text-warning transition-colors hover:border-warning hover:bg-warning/30",
+          )}
+          onClick={onProvision}
+          type="button"
+        >
+          <Download className="h-3 w-3" />
+          {needsRuntime ? "Set up iOS Simulator" : "Create iPhone simulator"}
+        </button>
+        <button
+          aria-label="Re-detect iOS Simulator setup"
+          className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 py-0.5 text-[11px] text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-60"
+          disabled={isProbing}
+          onClick={onProbe}
+          type="button"
+        >
+          <RefreshCw className={cn("h-3 w-3", isProbing && "animate-spin")} />
+          Re-check
+        </button>
+      </div>
+    </div>
+  )
 }
 
 function iosPanel(status: SdkStatus): AndroidPanel | null {

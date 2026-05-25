@@ -487,6 +487,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::emulator::emulator_ios_open_accessibility_settings,
             commands::emulator::emulator_ios_request_screen_recording_permission,
             commands::emulator::emulator_ios_open_screen_recording_settings,
+            commands::emulator::ios::provision::emulator_ios_provision,
             commands::emulator::android::provision::emulator_android_provision,
             commands::emulator::android::provision::emulator_android_provision_status,
             commands::emulator::emulator_list_devices,

@@ -15,6 +15,7 @@ pub mod idb_client;
 pub mod idb_companion;
 #[cfg(target_os = "macos")]
 pub mod input;
+pub mod provision;
 #[cfg(target_os = "macos")]
 pub mod session;
 #[cfg(target_os = "macos")]

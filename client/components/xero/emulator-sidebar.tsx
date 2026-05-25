@@ -660,7 +660,11 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
         </div>
       </div>
 
-      <EmulatorMissingSdk active={sessionActive} platform={platform} />
+      <EmulatorMissingSdk
+        active={sessionActive}
+        onProvisioned={session.refreshDevices}
+        platform={platform}
+      />
 
       <EmulatorViewport
         currentDevice={session.currentDevice}
