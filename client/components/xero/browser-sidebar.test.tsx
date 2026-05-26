@@ -104,6 +104,7 @@ afterEach(() => {
   resetBridge()
   vi.restoreAllMocks()
   document.documentElement.removeAttribute("style")
+  document.body.removeAttribute("style")
   cookieStorage?.clear()
 })
 
@@ -222,6 +223,119 @@ describe("BrowserSidebar", () => {
 
     await waitFor(() => {
       expect(shownUrls).toEqual(["https://example.com"])
+    })
+  })
+
+  it("opens a detected project app from the browser header", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    const shownUrls: string[] = []
+    registerInvoke("browser_show", async (args) => {
+      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      return {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: null,
+        url: String((args as { url?: string })?.url ?? ""),
+        loading: true,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      }
+    })
+
+    render(
+      <BrowserSidebar
+        open
+        projectBrowserTargets={[
+          {
+            id: "browser-app:http://localhost:5173/",
+            label: "web · localhost:5173",
+            url: "http://localhost:5173/",
+            source: "web",
+            detectedAt: 1,
+          },
+        ]}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open project app in browser" }))
+
+    await waitFor(() => {
+      expect(shownUrls).toEqual(["http://localhost:5173/"])
+    })
+  })
+
+  it("opens a pending in-app browser URL request", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    const shownUrls: string[] = []
+    registerInvoke("browser_show", async (args) => {
+      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      return {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: null,
+        url: String((args as { url?: string })?.url ?? ""),
+        loading: true,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      }
+    })
+    const onConsumed = vi.fn()
+
+    render(
+      <BrowserSidebar
+        open
+        pendingOpenUrl={{ id: "open-1", url: "http://localhost:5173/" }}
+        onPendingOpenUrlConsumed={onConsumed}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(shownUrls).toEqual(["http://localhost:5173/"])
+      expect(onConsumed).toHaveBeenCalledWith("open-1")
+    })
+  })
+
+  it("waits for the opening sidebar geometry before opening a pending URL", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    const shownUrls: string[] = []
+    registerInvoke("browser_show", async (args) => {
+      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      return {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: null,
+        url: String((args as { url?: string })?.url ?? ""),
+        loading: true,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      }
+    })
+    const pendingOpenUrl = { id: "open-while-closed", url: "http://localhost:5173/" }
+    const onConsumed = vi.fn()
+    const { rerender } = render(
+      <BrowserSidebar
+        open={false}
+        pendingOpenUrl={pendingOpenUrl}
+        onPendingOpenUrlConsumed={onConsumed}
+      />,
+    )
+
+    rerender(
+      <BrowserSidebar
+        open
+        pendingOpenUrl={pendingOpenUrl}
+        onPendingOpenUrlConsumed={onConsumed}
+      />,
+    )
+
+    expect(shownUrls).toEqual([])
+
+    await waitFor(() => {
+      expect(shownUrls).toEqual(["http://localhost:5173/"])
+      expect(onConsumed).toHaveBeenCalledWith("open-while-closed")
     })
   })
 
@@ -374,6 +488,348 @@ describe("BrowserSidebar", () => {
     await waitFor(() => expect(recordedArgs).not.toBeNull())
     // The inset is 6px; the webview must start at least that far from the sidebar's left edge.
     expect(Number(recordedArgs!.x)).toBeGreaterThanOrEqual(6)
+  })
+
+  it("starts native drag tracking without sending stale pointermove resize IPC", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    registerInvoke("browser_resize", async () => null)
+    registerInvoke("browser_resize_drag_start", async () => null)
+    registerInvoke("browser_resize_drag_end", async () => null)
+    registerInvoke("browser_show", async (args) => ({
+      id: "tab-1",
+      label: "xero-browser-tab-1",
+      title: null,
+      url: String((args as { url?: string })?.url ?? ""),
+      loading: true,
+      canGoBack: false,
+      canGoForward: false,
+      active: true,
+    }))
+
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600,
+    })
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 760,
+      y: 100,
+      left: 760,
+      top: 100,
+      right: 1400,
+      bottom: 900,
+      width: 640,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    try {
+      render(<BrowserSidebar open />)
+      const input = await screen.findByLabelText("Address")
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: "https://example.com" } })
+      fireEvent.submit(input.closest("form")!)
+
+      await act(async () => {
+        emitEvent("browser:tab_updated", {
+          tabs: [
+            {
+              id: "tab-1",
+              label: "xero-browser-tab-1",
+              title: null,
+              url: "https://example.com",
+              loading: true,
+              canGoBack: false,
+              canGoForward: false,
+              active: true,
+            },
+          ],
+        })
+      })
+
+      await waitFor(() =>
+        expect(invokeCalls.some((call) => call.command === "browser_show")).toBe(true),
+      )
+      invokeCalls.length = 0
+
+      const separator = screen.getByRole("separator", {
+        name: "Resize browser sidebar",
+      })
+      fireEvent.pointerDown(separator, { button: 0, clientX: 760 })
+      await waitFor(() => {
+        const dragStart = invokeCalls.find(
+          (call) => call.command === "browser_resize_drag_start",
+        )
+        expect(dragStart?.args).toMatchObject({
+          startClientX: 760,
+          startWidth: 640,
+          right: 1400,
+          top: 100,
+          height: 800,
+          minWidth: 320,
+          maxWidth: 1400,
+          inset: 6,
+          tabId: "tab-1",
+        })
+      })
+      await screen.findByTitle("https://example.com")
+      invokeCalls.length = 0
+
+      fireEvent.pointerMove(window, { clientX: 680 })
+
+      expect(invokeCalls.some((call) => call.command === "browser_resize")).toBe(false)
+
+      fireEvent.pointerUp(window)
+
+      await waitFor(() => {
+        const dragEnd = invokeCalls.find(
+          (call) => call.command === "browser_resize_drag_end",
+        )
+        expect(dragEnd?.args).toMatchObject({
+          x: 686,
+          y: 100,
+          width: 714,
+          height: 800,
+          tabId: "tab-1",
+        })
+      })
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalInnerWidth,
+      })
+    }
+  })
+
+  it("resizes hydrated browser tabs that were already open", async () => {
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Example",
+        url: "https://example.com/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    registerInvoke("browser_resize", async () => null)
+    registerInvoke("browser_resize_drag_start", async () => null)
+    registerInvoke("browser_resize_drag_end", async () => null)
+
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600,
+    })
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 760,
+      y: 100,
+      left: 760,
+      top: 100,
+      right: 1400,
+      bottom: 900,
+      width: 640,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    try {
+      render(<BrowserSidebar open />)
+      const input = (await screen.findByLabelText("Address")) as HTMLInputElement
+      await waitFor(() => expect(input.value).toBe("https://example.com/"))
+      invokeCalls.length = 0
+
+      const separator = screen.getByRole("separator", {
+        name: "Resize browser sidebar",
+      })
+      fireEvent.pointerDown(separator, { button: 0, clientX: 760 })
+      await waitFor(() =>
+        expect(
+          invokeCalls.some((call) => call.command === "browser_resize_drag_start"),
+        ).toBe(true),
+      )
+      invokeCalls.length = 0
+
+      fireEvent.pointerMove(window, { clientX: 680 })
+
+      expect(invokeCalls.some((call) => call.command === "browser_resize")).toBe(false)
+
+      fireEvent.pointerUp(window)
+      await waitFor(() => {
+        const dragEnd = invokeCalls.find(
+          (call) => call.command === "browser_resize_drag_end",
+        )
+        expect(dragEnd?.args).toMatchObject({
+          x: 686,
+          width: 714,
+          tabId: "tab-1",
+        })
+      })
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalInnerWidth,
+      })
+    }
+  })
+
+  it("starts native drag tracking for tabs announced by backend events", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    registerInvoke("browser_resize", async () => null)
+    registerInvoke("browser_resize_drag_start", async () => null)
+    registerInvoke("browser_resize_drag_end", async () => null)
+
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600,
+    })
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 760,
+      y: 100,
+      left: 760,
+      top: 100,
+      right: 1400,
+      bottom: 900,
+      width: 640,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    try {
+      render(<BrowserSidebar open />)
+      await screen.findByLabelText("Address")
+
+      await act(async () => {
+        emitEvent("browser:tab_updated", {
+          tabs: [
+            {
+              id: "tab-1",
+              label: "xero-browser-tab-1",
+              title: null,
+              url: "https://example.com",
+              loading: false,
+              canGoBack: false,
+              canGoForward: false,
+              active: true,
+            },
+          ],
+        })
+      })
+      await screen.findByTitle("https://example.com")
+      invokeCalls.length = 0
+
+      const separator = screen.getByRole("separator", {
+        name: "Resize browser sidebar",
+      })
+      fireEvent.pointerDown(separator, { button: 0, clientX: 760 })
+
+      await waitFor(() => {
+        const dragStart = invokeCalls.find(
+          (call) => call.command === "browser_resize_drag_start",
+        )
+        expect(dragStart?.args).toMatchObject({
+          tabId: "tab-1",
+          startClientX: 760,
+          startWidth: 640,
+        })
+      })
+      invokeCalls.length = 0
+
+      fireEvent.pointerMove(window, { clientX: 680 })
+      expect(invokeCalls.some((call) => call.command === "browser_resize")).toBe(false)
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalInnerWidth,
+      })
+    }
+  })
+
+  it("applies native resize drag events when the webview swallows pointerup", async () => {
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Example",
+        url: "https://example.com/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    registerInvoke("browser_resize", async () => null)
+    registerInvoke("browser_resize_drag_start", async () => null)
+    registerInvoke("browser_resize_drag_end", async () => null)
+
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600,
+    })
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 760,
+      y: 100,
+      left: 760,
+      top: 100,
+      right: 1400,
+      bottom: 900,
+      width: 640,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    try {
+      render(<BrowserSidebar open />)
+      const input = (await screen.findByLabelText("Address")) as HTMLInputElement
+      await waitFor(() => expect(input.value).toBe("https://example.com/"))
+
+      const separator = screen.getByRole("separator", {
+        name: "Resize browser sidebar",
+      })
+      fireEvent.pointerDown(separator, { button: 0, clientX: 760 })
+      await waitFor(() =>
+        expect(
+          invokeCalls.some((call) => call.command === "browser_resize_drag_start"),
+        ).toBe(true),
+      )
+      invokeCalls.length = 0
+
+      await act(async () => {
+        emitEvent("browser:resize_drag", {
+          tabId: "tab-1",
+          sidebarWidth: 720,
+          x: 686,
+          y: 100,
+          width: 714,
+          height: 800,
+          complete: true,
+        })
+      })
+
+      await waitFor(() => {
+        const dragEnd = invokeCalls.find(
+          (call) => call.command === "browser_resize_drag_end",
+        )
+        expect(dragEnd?.args).toMatchObject({
+          tabId: "tab-1",
+          x: 686,
+          y: 100,
+          width: 714,
+          height: 800,
+        })
+      })
+      expect(invokeCalls.some((call) => call.command === "browser_resize")).toBe(false)
+      expect(document.body.style.cursor).toBe("")
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalInnerWidth,
+      })
+    }
   })
 
   it("shows the cookie-import banner once a tab exists and a source is available, then dispatches browser_import_cookies", async () => {

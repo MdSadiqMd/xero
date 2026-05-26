@@ -19,6 +19,7 @@ export const startTargetSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   command: z.string().min(1),
+  browserSupported: z.boolean().optional(),
 })
 export type StartTargetDto = z.infer<typeof startTargetSchema>
 

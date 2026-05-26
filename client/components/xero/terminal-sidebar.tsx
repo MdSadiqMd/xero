@@ -17,6 +17,13 @@ import type {
   TerminalTitleEventPayload,
 } from "@/src/lib/xero-desktop"
 import { useTheme } from "@/src/features/theme/theme-provider"
+import {
+  browserLaunchTargetLabel,
+  extractBrowserSupportedDevServerUrls,
+  isBrowserSupportedDevServerUrl,
+  makeBrowserLaunchTarget,
+  type BrowserLaunchTarget,
+} from "./browser-launch-targets"
 import type {
   EditorPalette,
   ThemeDefinition,
@@ -41,6 +48,10 @@ const MAX_TAB_LABEL_LENGTH = 48
  * carry. The result feels like the terminal is part of the same workspace
  * instead of a chrome-dark island bolted onto the side.
  */
+function withAlpha(color: string, alpha: string): string {
+  return /^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color
+}
+
 function buildXTermTheme(theme: ThemeDefinition): IXTermTheme {
   const p: EditorPalette = theme.editor
   const c = theme.colors
@@ -67,6 +78,9 @@ function buildXTermTheme(theme: ThemeDefinition): IXTermTheme {
     brightCyan: p.attribute,
     white: p.foreground,
     brightWhite: p.variableDef,
+    scrollbarSliderBackground: withAlpha(p.foreground, "26"),
+    scrollbarSliderHoverBackground: withAlpha(p.foreground, "3d"),
+    scrollbarSliderActiveBackground: withAlpha(p.foreground, "52"),
   }
 }
 
@@ -84,6 +98,7 @@ export interface TerminalSidebarHandle {
 
 export interface TerminalSpawnOptions {
   label?: string
+  browserSupported?: boolean
   exitWhenDone?: boolean
   onData?: (data: string) => void
   onExit?: (event: EditorTerminalTaskExit) => void
@@ -96,12 +111,15 @@ interface TerminalSidebarProps {
   registerHandle?: (handle: TerminalSidebarHandle | null) => void
   /** Called when the user opens this sidebar via the titlebar icon. */
   onOpen?: () => void
+  onOpenBrowserUrl?: (url: string) => void
+  onBrowserLaunchTargetDetected?: (target: BrowserLaunchTarget) => void
 }
 
 interface TerminalTab {
   id: string
   label: string
   labelLocked?: boolean
+  browserSupported?: boolean | null
   terminal: XTerm
   fit: FitAddon
 }
@@ -116,7 +134,21 @@ function viewportMaxWidth(): number {
   return Math.max(MIN_WIDTH, window.innerWidth - RIGHT_PADDING)
 }
 
-function createXTerm(xtermTheme: IXTermTheme): { terminal: XTerm; fit: FitAddon } {
+function openExternalLink(uri: string): void {
+  const nextWindow = window.open()
+  if (!nextWindow) return
+  try {
+    nextWindow.opener = null
+  } catch {
+    // Best effort.
+  }
+  nextWindow.location.href = uri
+}
+
+function createXTerm(
+  xtermTheme: IXTermTheme,
+  handleLink: (uri: string) => void,
+): { terminal: XTerm; fit: FitAddon } {
   const terminal = new XTerm({
     fontFamily: TERMINAL_FONT_FAMILY,
     fontSize: TERMINAL_FONT_SIZE,
@@ -129,7 +161,12 @@ function createXTerm(xtermTheme: IXTermTheme): { terminal: XTerm; fit: FitAddon 
   })
   const fit = new FitAddon()
   terminal.loadAddon(fit)
-  terminal.loadAddon(new WebLinksAddon())
+  terminal.loadAddon(
+    new WebLinksAddon((event, uri) => {
+      event.preventDefault()
+      handleLink(uri)
+    }),
+  )
   return { terminal, fit }
 }
 
@@ -163,6 +200,8 @@ export function TerminalSidebar({
   open,
   projectId,
   registerHandle,
+  onOpenBrowserUrl,
+  onBrowserLaunchTargetDetected,
 }: TerminalSidebarProps) {
   const [width, setWidth] = useState(viewportDefaultWidth)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
@@ -176,6 +215,10 @@ export function TerminalSidebar({
   const xtermTheme = useMemo(() => buildXTermTheme(theme), [theme])
   const xtermThemeRef = useRef(xtermTheme)
   xtermThemeRef.current = xtermTheme
+  const onOpenBrowserUrlRef = useRef(onOpenBrowserUrl)
+  const onBrowserLaunchTargetDetectedRef = useRef(onBrowserLaunchTargetDetected)
+  onOpenBrowserUrlRef.current = onOpenBrowserUrl
+  onBrowserLaunchTargetDetectedRef.current = onBrowserLaunchTargetDetected
 
   const widthRef = useRef(width)
   widthRef.current = width
@@ -193,6 +236,28 @@ export function TerminalSidebar({
   const taskHandlersRef = useRef<Map<string, Pick<TerminalSpawnOptions, "onData" | "onExit">>>(new Map())
   const autoOpeningTerminalRef = useRef(false)
   const lastTabReplacementPendingRef = useRef(false)
+
+  const handleTerminalLink = useCallback((uri: string) => {
+    if (isBrowserSupportedDevServerUrl(uri)) {
+      onOpenBrowserUrlRef.current?.(uri)
+      return
+    }
+    openExternalLink(uri)
+  }, [])
+
+  const detectBrowserLaunchTargets = useCallback((tab: TerminalTab | undefined, data: string) => {
+    if (!tab) return
+    if (tab.browserSupported === false) return
+    const urls = extractBrowserSupportedDevServerUrls(data)
+    for (const url of urls) {
+      const target = makeBrowserLaunchTarget({
+        label: browserLaunchTargetLabel(url, tab.label),
+        url,
+        source: tab.label,
+      })
+      if (target) onBrowserLaunchTargetDetectedRef.current?.(target)
+    }
+  }, [])
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? null,
@@ -224,6 +289,7 @@ export function TerminalSidebar({
       taskHandlersRef.current.get(terminalId)?.onData?.(data)
       const tab = tabsRef.current.find((entry) => entry.id === terminalId)
       if (tab) {
+        detectBrowserLaunchTargets(tab, data)
         tab.terminal.write(data)
         return
       }
@@ -353,7 +419,7 @@ export function TerminalSidebar({
           rows,
         })
         if (!response) return null
-        const { terminal, fit } = createXTerm(xtermThemeRef.current)
+        const { terminal, fit } = createXTerm(xtermThemeRef.current, handleTerminalLink)
         terminal.attachCustomKeyEventHandler((event) => {
           if (!isPlainShiftEnter(event)) return true
 
@@ -387,6 +453,7 @@ export function TerminalSidebar({
           id: response.terminalId,
           label: initialLabel,
           labelLocked: !!options?.label,
+          browserSupported: options?.browserSupported ?? null,
           terminal,
           fit,
         }
@@ -416,7 +483,7 @@ export function TerminalSidebar({
         return null
       }
     },
-    [updateTabLabel],
+    [handleTerminalLink, updateTabLabel],
   )
 
   const ensureTerminalTab = useCallback(() => {
@@ -630,12 +697,27 @@ export function TerminalSidebar({
 
         <div
           ref={terminalViewportRef}
-          className="relative min-h-0 flex-1 overflow-hidden px-3 pb-3 pt-3"
+          className="xero-terminal-viewport relative min-h-0 flex-1 overflow-hidden px-3 pb-3 pt-3"
           onClick={() => {
             activeTab?.terminal.focus()
           }}
           style={{ backgroundColor: xtermTheme.background }}
         >
+          <style>{`
+            .xero-terminal-viewport .xterm .xterm-scrollable-element > .scrollbar {
+              width: 8px !important;
+              background: transparent !important;
+            }
+            .xero-terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider {
+              left: 1px !important;
+              width: 6px !important;
+              border-radius: 999px !important;
+              background: var(--scrollbar-thumb) !important;
+            }
+            .xero-terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
+              background: var(--scrollbar-thumb-hover) !important;
+            }
+          `}</style>
           {tabs.map((tab) => (
             <div
               key={tab.id}

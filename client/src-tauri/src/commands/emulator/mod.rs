@@ -39,13 +39,11 @@ pub use ios::provision::{emulator_ios_provision, EMULATOR_IOS_PROVISION_EVENT};
 pub use sdk::{probe_sdks, AndroidSdkStatus, IosSdkStatus, SdkStatus};
 pub use uri_scheme::{handle as handle_uri_scheme, URI_SCHEME};
 
+use automation::metro_inspector::{ElementInfo, MetroInspector, MetroStatus, METRO_PORT_RANGE};
 use automation::{
     AppDescriptor, BundleIdRequest, HardwareKeyRequest, InstallAppRequest, LaunchAppRequest,
     LocationRequest, LogSubscribeRequest, PushNotificationRequest, ScreenshotResponse, Selector,
     SubscriptionToken, SwipeRequest, TapTarget, TypeRequest, UiTree,
-};
-use automation::metro_inspector::{
-    ElementInfo, MetroInspector, MetroStatus, METRO_PORT_RANGE,
 };
 
 const EMULATOR_FRAME_TRANSPORT_URL: &str = "ipc://emulator_frame";
@@ -871,10 +869,7 @@ pub fn emulator_ui_dump(state: State<'_, EmulatorState>) -> CommandResult<UiTree
         Some(ActiveDevice::Ios { session, .. }) => {
             let helper = session.helper_client();
             let idb = session.client();
-            automation::ios_ui::dump(
-                helper.as_deref(),
-                idb.as_deref(),
-            )
+            automation::ios_ui::dump(helper.as_deref(), idb.as_deref())
         }
         #[cfg(feature = "emulator-synthetic")]
         Some(ActiveDevice::Synthetic { .. }) => Err(CommandError::user_fixable(
@@ -1346,9 +1341,7 @@ pub fn emulator_inspector_connect(
 
 /// Disconnect from the Metro inspector.
 #[tauri::command]
-pub fn emulator_inspector_disconnect(
-    state: State<'_, EmulatorState>,
-) -> CommandResult<()> {
+pub fn emulator_inspector_disconnect(state: State<'_, EmulatorState>) -> CommandResult<()> {
     let _ = state.metro_inspector.lock().unwrap().take();
     Ok(())
 }
@@ -1377,14 +1370,18 @@ pub fn emulator_inspector_element_at(
         let active = state.active.lock().expect("emulator active mutex poisoned");
         if let Some(ActiveDevice::Ios { session, .. }) = active.as_ref() {
             if let Some(hc) = session.helper_client() {
-                let resp = hc.send_request_raw("accessibility_element_at", serde_json::json!({
-                    "x": request.x,
-                    "y": request.y,
-                }))?;
+                let resp = hc.send_request_raw(
+                    "accessibility_element_at",
+                    serde_json::json!({
+                        "x": request.x,
+                        "y": request.y,
+                    }),
+                )?;
                 if let Some(element) = resp.get("element") {
                     let bounds_obj = element.get("frame").or(element.get("bounds"));
                     return Ok(ElementInfo {
-                        component_name: element["label"].as_str()
+                        component_name: element["label"]
+                            .as_str()
                             .filter(|s| !s.is_empty())
                             .or_else(|| element["type"].as_str())
                             .map(|s| s.to_string()),
@@ -1392,8 +1389,12 @@ pub fn emulator_inspector_element_at(
                         bounds: automation::Bounds {
                             x: bounds_obj.and_then(|b| b["x"].as_f64()).unwrap_or(0.0) as i32,
                             y: bounds_obj.and_then(|b| b["y"].as_f64()).unwrap_or(0.0) as i32,
-                            w: bounds_obj.and_then(|b| b["w"].as_f64().or(b["width"].as_f64())).unwrap_or(0.0) as i32,
-                            h: bounds_obj.and_then(|b| b["h"].as_f64().or(b["height"].as_f64())).unwrap_or(0.0) as i32,
+                            w: bounds_obj
+                                .and_then(|b| b["w"].as_f64().or(b["width"].as_f64()))
+                                .unwrap_or(0.0) as i32,
+                            h: bounds_obj
+                                .and_then(|b| b["h"].as_f64().or(b["height"].as_f64()))
+                                .unwrap_or(0.0) as i32,
                         },
                         props: serde_json::Value::Object(Default::default()),
                         source: None, // AX doesn't provide source location.
@@ -1406,7 +1407,8 @@ pub fn emulator_inspector_element_at(
     Err(CommandError::user_fixable(
         "inspector_no_source",
         "No inspection source available. For React Native apps, ensure Metro is running. \
-         For native apps, the Swift helper must be active.".to_string(),
+         For native apps, the Swift helper must be active."
+            .to_string(),
     ))
 }
 

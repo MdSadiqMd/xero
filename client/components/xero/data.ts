@@ -20,6 +20,7 @@ export interface StartTarget {
   id: string
   name: string
   command: string
+  browserSupported?: boolean
 }
 
 export interface Project {

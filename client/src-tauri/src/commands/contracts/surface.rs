@@ -601,6 +601,8 @@ pub struct StartTargetDto {
     pub id: String,
     pub name: String,
     pub command: String,
+    #[serde(default)]
+    pub browser_supported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

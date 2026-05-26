@@ -66,7 +66,7 @@ const MAX_TERMINAL_BUFFER_BYTES: usize = 256 * 1024;
 const DEFAULT_TERMINAL_READ_BYTES: usize = 64 * 1024;
 const MAX_TERMINAL_READ_BYTES: usize = 512 * 1024;
 
-const SUGGEST_SYSTEM_PROMPT: &str = "You suggest the shell commands a developer would run to start this project locally. Return a JSON array of {\"name\": \"...\", \"command\": \"...\"} objects and nothing else. No markdown fences, no prose, no explanation.\n\nIMPORTANT — root orchestrator detection: if the root `package.json` (or `Makefile`/`Procfile`/`mprocs.yaml`/`turbo.json` task) defines a script that fans out to multiple services in one command (via `concurrently`, `npm-run-all`, `turbo run dev`, `nx run-many`, `pnpm -r run`, `make -j`, `mprocs`, `overmind`, `foreman`, `honcho`, etc.), include it as the FIRST target named `all` (or `dev` if that matches the script name). This is the single-command \"run everything\" entry the user reaches for most often.\n\nIn addition to (not instead of) the orchestrator, for monorepos (pnpm/yarn/npm workspaces, Turborepo, Nx, Lerna, Rush, Cargo workspaces, Go workspaces) propose one target per runnable service or app so users can launch them individually. Name each per-service target after the package (e.g. `web`, `api`, `worker`) and inline a `cd <relative-path> && <cmd>` so each command runs from the project root.\n\nFor single-app projects, return one target named `start`.\n\nEach `name` must be short, lowercase, unique, and filename-safe. Each `command` must be a single line of shell.";
+const SUGGEST_SYSTEM_PROMPT: &str = "You suggest the shell commands a developer would run to start this project locally. Return a JSON array of {\"name\": \"...\", \"command\": \"...\", \"browserSupported\": true/false} objects and nothing else. No markdown fences, no prose, no explanation.\n\nSet `browserSupported` to true only for commands that start a user-facing web app or dev server that should open in a browser, such as Vite, Next.js, Remix, Astro, SvelteKit, Nuxt, Storybook, Rails/Phoenix/Django/Laravel web servers, or a package named web/client/app/site/docs. Set it to false for backend APIs, workers, CLIs, database services, Tauri/native/mobile dev commands, test runners, codegen, queues, and generic orchestrators unless the command itself clearly launches a browser-served web UI.\n\nIMPORTANT — root orchestrator detection: if the root `package.json` (or `Makefile`/`Procfile`/`mprocs.yaml`/`turbo.json` task) defines a script that fans out to multiple services in one command (via `concurrently`, `npm-run-all`, `turbo run dev`, `nx run-many`, `pnpm -r run`, `make -j`, `mprocs`, `overmind`, `foreman`, `honcho`, etc.), include it as the FIRST target named `all` (or `dev` if that matches the script name). This is the single-command \"run everything\" entry the user reaches for most often.\n\nIn addition to (not instead of) the orchestrator, for monorepos (pnpm/yarn/npm workspaces, Turborepo, Nx, Lerna, Rush, Cargo workspaces, Go workspaces) propose one target per runnable service or app so users can launch them individually. Name each per-service target after the package (e.g. `web`, `api`, `worker`) and inline a `cd <relative-path> && <cmd>` so each command runs from the project root.\n\nFor single-app projects, return one target named `start`.\n\nEach `name` must be short, lowercase, unique, and filename-safe. Each `command` must be a single line of shell.";
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -79,6 +79,8 @@ pub struct StartTargetInputDto {
     pub id: Option<String>,
     pub name: String,
     pub command: String,
+    #[serde(default)]
+    pub browser_supported: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,6 +119,7 @@ pub struct SuggestProjectStartTargetsRequestDto {
 pub struct SuggestedStartTargetDto {
     pub name: String,
     pub command: String,
+    pub browser_supported: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1306,6 +1309,7 @@ fn normalize_start_target_inputs(
             id,
             name: name.to_owned(),
             command: command.to_owned(),
+            browser_supported: input.browser_supported,
         });
     }
     Ok(targets)
@@ -1434,6 +1438,8 @@ fn sanitize_suggested_targets(message: &str) -> Result<Vec<SuggestedStartTargetD
         name: String,
         #[serde(default)]
         command: String,
+        #[serde(default, rename = "browserSupported")]
+        browser_supported: bool,
     }
 
     let raw: Vec<RawTarget> = serde_json::from_str(body).map_err(|error| {
@@ -1458,6 +1464,7 @@ fn sanitize_suggested_targets(message: &str) -> Result<Vec<SuggestedStartTargetD
         targets.push(SuggestedStartTargetDto {
             name: name.to_owned(),
             command: command.to_owned(),
+            browser_supported: entry.browser_supported,
         });
     }
 
@@ -1644,7 +1651,19 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].name, "web");
         assert_eq!(targets[0].command, "pnpm dev");
+        assert!(!targets[0].browser_supported);
         assert_eq!(targets[1].name, "api");
+    }
+
+    #[test]
+    fn sanitize_targets_preserves_browser_support_classification() {
+        let targets = sanitize_suggested_targets(
+            r#"[{"name":"web","command":"pnpm dev","browserSupported":true},{"name":"api","command":"cargo run","browserSupported":false}]"#,
+        )
+        .expect("classified json should parse");
+        assert_eq!(targets.len(), 2);
+        assert!(targets[0].browser_supported);
+        assert!(!targets[1].browser_supported);
     }
 
     #[test]
@@ -1688,16 +1707,19 @@ mod tests {
                 id: None,
                 name: "web".into(),
                 command: "pnpm dev".into(),
+                browser_supported: true,
             },
             StartTargetInputDto {
                 id: Some("tgt-existing".into()),
                 name: "api".into(),
                 command: "cargo run".into(),
+                browser_supported: false,
             },
         ];
         let targets = normalize_start_target_inputs(inputs).expect("should normalize");
         assert_eq!(targets.len(), 2);
         assert!(targets[0].id.starts_with("tgt-"));
+        assert!(targets[0].browser_supported);
         assert_eq!(targets[1].id, "tgt-existing");
     }
 
@@ -1708,11 +1730,13 @@ mod tests {
                 id: None,
                 name: "web".into(),
                 command: "pnpm dev".into(),
+                browser_supported: true,
             },
             StartTargetInputDto {
                 id: None,
                 name: "Web".into(),
                 command: "echo".into(),
+                browser_supported: false,
             },
         ];
         let err = normalize_start_target_inputs(inputs).expect_err("should reject");
@@ -1726,16 +1750,19 @@ mod tests {
                 id: None,
                 name: "  ".into(),
                 command: "x".into(),
+                browser_supported: true,
             },
             StartTargetInputDto {
                 id: None,
                 name: "good".into(),
                 command: "  ".into(),
+                browser_supported: true,
             },
             StartTargetInputDto {
                 id: None,
                 name: "ok".into(),
                 command: "ls".into(),
+                browser_supported: false,
             },
         ];
         let targets = normalize_start_target_inputs(inputs).expect("should normalize");

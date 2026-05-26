@@ -134,14 +134,14 @@ pub use browser::{
     browser_cookies_get, browser_cookies_set, browser_current_url, browser_eval,
     browser_eval_fire_and_forget, browser_forward, browser_hide, browser_history_state,
     browser_internal_event, browser_internal_reply, browser_navigate, browser_press_key,
-    browser_query, browser_read_text, browser_reload, browser_resize, browser_screenshot,
-    browser_scroll, browser_show, browser_stop, browser_storage_clear, browser_storage_read,
-    browser_storage_write, browser_tab_close, browser_tab_focus, browser_tab_list, browser_type,
-    browser_wait_for_load, browser_wait_for_selector, BrowserControlPreferenceDto,
-    BrowserControlSettingsDto, BrowserState, BrowserTabMetadata,
-    UpsertBrowserControlSettingsRequestDto, BROWSER_CONSOLE_EVENT, BROWSER_DIALOG_EVENT,
-    BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT, BROWSER_TAB_PREFIX,
-    BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
+    browser_query, browser_read_text, browser_reload, browser_resize, browser_resize_drag_end,
+    browser_resize_drag_start, browser_screenshot, browser_scroll, browser_show, browser_stop,
+    browser_storage_clear, browser_storage_read, browser_storage_write, browser_tab_close,
+    browser_tab_focus, browser_tab_list, browser_type, browser_wait_for_load,
+    browser_wait_for_selector, BrowserControlPreferenceDto, BrowserControlSettingsDto,
+    BrowserState, BrowserTabMetadata, UpsertBrowserControlSettingsRequestDto,
+    BROWSER_CONSOLE_EVENT, BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT,
+    BROWSER_TAB_PREFIX, BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use cancel_autonomous_run::cancel_autonomous_run;
 pub use code_rollback::{apply_selective_undo, apply_session_rollback};

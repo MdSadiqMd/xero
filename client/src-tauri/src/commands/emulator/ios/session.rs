@@ -160,7 +160,14 @@ impl IosSession {
                     }
                 }
                 if let Some(client) = self.client.as_ref() {
-                    if client.send_hid(HidEvent::Touch { phase, x: px, y: py }).is_ok() {
+                    if client
+                        .send_hid(HidEvent::Touch {
+                            phase,
+                            x: px,
+                            y: py,
+                        })
+                        .is_ok()
+                    {
                         return Ok(());
                     }
                 }
@@ -175,7 +182,11 @@ impl IosSession {
                     }
                 }
                 if let Some(client) = self.client.as_ref() {
-                    return client.send_hid(HidEvent::Touch { phase, x: px, y: py });
+                    return client.send_hid(HidEvent::Touch {
+                        phase,
+                        x: px,
+                        y: py,
+                    });
                 }
                 // No helper or idb available — silent no-op (same as before).
                 Ok(())
@@ -235,7 +246,10 @@ impl IosSession {
                 HidEvent::Button { button } => hc.send_button(*button),
                 HidEvent::Text { text } => hc.send_text(text),
                 HidEvent::Home => hc.send_button(input::HardwareButton::Home),
-                _ => Err(CommandError::system_fault("unsupported_helper_event", "event type not supported by helper")),
+                _ => Err(CommandError::system_fault(
+                    "unsupported_helper_event",
+                    "event type not supported by helper",
+                )),
             };
             if helper_result.is_ok() {
                 return helper_result;
@@ -446,9 +460,17 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         }
         None => (None, None),
     };
-    eprintln!("[ios-session] helper result: helper={}, client={}", ios_helper.is_some(), ios_helper_client.is_some());
+    eprintln!(
+        "[ios-session] helper result: helper={}, client={}",
+        ios_helper.is_some(),
+        ios_helper_client.is_some()
+    );
 
-    eprintln!("[ios-session] helper result: helper={}, client={}", ios_helper.is_some(), ios_helper_client.is_some());
+    eprintln!(
+        "[ios-session] helper result: helper={}, client={}",
+        ios_helper.is_some(),
+        ios_helper_client.is_some()
+    );
 
     // `idb_companion` is best-effort: when it starts, HID input uses idb's
     // real simulator surface; when it does not, the session can still render
@@ -482,7 +504,11 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         .as_ref()
         .map(|c| Arc::new(IdbClient::new(c.grpc_port, device_id.clone())));
 
-    eprintln!("[ios-session] idb companion={}, client={}", companion.is_some(), client.is_some());
+    eprintln!(
+        "[ios-session] idb companion={}, client={}",
+        companion.is_some(),
+        client.is_some()
+    );
     eprintln!("[ios-session] starting frame pump...");
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -529,7 +555,11 @@ fn start_frame_pump<R: Runtime + 'static>(
     device_id: &str,
     shutdown: Arc<AtomicBool>,
 ) -> Result<FramePumpStart, CommandError> {
-    eprintln!("[frame-pump] helper={}, idb={}", helper_client.is_some(), idb_client.is_some());
+    eprintln!(
+        "[frame-pump] helper={}, idb={}",
+        helper_client.is_some(),
+        idb_client.is_some()
+    );
 
     // NOTE: ScreenCaptureKit requires a window-server connection that
     // sidecar binaries don't have (CGS_REQUIRE_INIT crash). The helper
@@ -688,7 +718,10 @@ fn spawn_screenshot_fallback<R: Runtime + 'static>(
                 Ok(png) => {
                     frame_count += 1;
                     if frame_count <= 3 || frame_count % 20 == 0 {
-                        eprintln!("[screenshot-poll] frame #{frame_count}, {} bytes", png.len());
+                        eprintln!(
+                            "[screenshot-poll] frame #{frame_count}, {} bytes",
+                            png.len()
+                        );
                     }
                     publish_png(&app, &bus, png, width, height);
                 }

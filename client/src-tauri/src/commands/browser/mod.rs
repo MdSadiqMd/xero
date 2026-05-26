@@ -8,17 +8,32 @@ mod script;
 pub mod settings;
 pub mod tabs;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use tauri::{
     webview::{PageLoadEvent, WebviewBuilder},
-    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, State, WebviewUrl,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Runtime, State, Webview, WebviewUrl,
 };
 use url::Url;
 
 use crate::commands::{CommandError, CommandResult};
+
+#[cfg(target_os = "macos")]
+use {
+    block2::{Block, RcBlock},
+    objc2::rc::Retained,
+    objc2_app_kit::{NSEvent, NSEventTrackingRunLoopMode, NSView, NSWindow},
+    objc2_foundation::{NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSTimer},
+    std::ptr::NonNull,
+};
 
 pub use actions::{StorageArea, TypingMode};
 pub use diagnostics::{
@@ -27,9 +42,10 @@ pub use diagnostics::{
 };
 pub use events::{
     BrowserConsolePayload, BrowserDialogPayload, BrowserDownloadPayload, BrowserLoadStatePayload,
-    BrowserTabUpdatedPayload, BrowserToolClosedPayload, BrowserToolContextPayload,
-    BrowserUrlChangedPayload, BROWSER_CONSOLE_EVENT, BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT,
-    BROWSER_LOAD_STATE_EVENT, BROWSER_TAB_UPDATED_EVENT, BROWSER_TOOL_CLOSED_EVENT,
+    BrowserResizeDragPayload, BrowserTabUpdatedPayload, BrowserToolClosedPayload,
+    BrowserToolContextPayload, BrowserUrlChangedPayload, BROWSER_CONSOLE_EVENT,
+    BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT,
+    BROWSER_RESIZE_DRAG_EVENT, BROWSER_TAB_UPDATED_EVENT, BROWSER_TOOL_CLOSED_EVENT,
     BROWSER_TOOL_CONTEXT_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use screenshot::capture_webview as screenshot_webview;
@@ -47,6 +63,22 @@ use tabs::{BrowserTabs, BROWSER_MAIN_WINDOW_LABEL};
 const HIDDEN_OFFSET: f64 = -32_000.0;
 const DEFAULT_AUTONOMOUS_BROWSER_WIDTH: f64 = 1_280.0;
 const DEFAULT_AUTONOMOUS_BROWSER_HEIGHT: f64 = 720.0;
+const RESIZE_DRAG_MAX_DURATION: Duration = Duration::from_secs(30);
+const BROWSER_RESIZE_NUDGE_SCRIPT: &str = r#"
+(() => {
+  try {
+    window.dispatchEvent(new Event("resize"));
+    if (window.visualViewport) {
+      window.visualViewport.dispatchEvent(new Event("resize"));
+    }
+    requestAnimationFrame(() => {
+      try {
+        window.dispatchEvent(new Event("resize"));
+      } catch (_) {}
+    });
+  } catch (_) {}
+})();
+"#;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrowserViewport {
@@ -65,10 +97,20 @@ impl BrowserViewport {
             height: self.height.max(1.0),
         }
     }
+
+    fn as_rect(self) -> Rect {
+        let viewport = self.sanitize();
+        Rect {
+            position: LogicalPosition::new(viewport.x, viewport.y).into(),
+            size: LogicalSize::new(viewport.width, viewport.height).into(),
+        }
+    }
 }
 
 pub struct BrowserState {
     creation_lock: Mutex<()>,
+    resize_coalescer: Arc<BrowserResizeCoalescer>,
+    resize_drag: Arc<BrowserResizeDragState>,
     waiters: Arc<BridgeWaiters>,
     tabs: Arc<BrowserTabs>,
     diagnostics: Arc<BrowserDiagnostics>,
@@ -78,10 +120,127 @@ impl Default for BrowserState {
     fn default() -> Self {
         Self {
             creation_lock: Mutex::new(()),
+            resize_coalescer: Arc::new(BrowserResizeCoalescer::default()),
+            resize_drag: Arc::new(BrowserResizeDragState::default()),
             waiters: Arc::new(BridgeWaiters::new()),
             tabs: Arc::new(BrowserTabs::new()),
             diagnostics: Arc::new(BrowserDiagnostics::default()),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BrowserResizeDragSession {
+    id: u64,
+    labels: Vec<String>,
+    tab_id: Option<String>,
+    start_client_x: f64,
+    start_width: f64,
+    right: f64,
+    top: f64,
+    height: f64,
+    min_width: f64,
+    max_width: f64,
+    inset: f64,
+}
+
+impl BrowserResizeDragSession {
+    fn width_for_cursor(self: &Self, cursor_client_x: f64) -> f64 {
+        let delta = self.start_client_x - cursor_client_x;
+        (self.start_width + delta).clamp(self.min_width, self.max_width)
+    }
+
+    fn viewport_for_width(self: &Self, width: f64) -> BrowserViewport {
+        BrowserViewport {
+            x: self.right - width + self.inset,
+            y: self.top,
+            width: (width - self.inset).max(1.0),
+            height: self.height,
+        }
+    }
+
+    fn viewport_for_cursor(self: &Self, cursor_client_x: f64) -> BrowserViewport {
+        self.viewport_for_width(self.width_for_cursor(cursor_client_x))
+    }
+}
+
+#[cfg(target_os = "macos")]
+type BrowserNativeResizeDragTimerHandler = dyn Fn(NonNull<NSTimer>);
+
+#[cfg(target_os = "macos")]
+struct BrowserNativeResizeDragMonitor {
+    timer: usize,
+    block: usize,
+}
+
+#[derive(Default)]
+struct BrowserResizeDragState {
+    active: Mutex<Option<BrowserResizeDragSession>>,
+    #[cfg(target_os = "macos")]
+    native_monitor: Mutex<Option<BrowserNativeResizeDragMonitor>>,
+    next_id: AtomicU64,
+}
+
+impl BrowserResizeDragState {
+    fn begin(&self, mut session: BrowserResizeDragSession) -> CommandResult<u64> {
+        let id = self.next_id.fetch_add(1, Ordering::AcqRel) + 1;
+        session.id = id;
+        let mut active = self.active.lock().map_err(|_| {
+            CommandError::system_fault(
+                "browser_resize_drag_lock_poisoned",
+                "Browser resize drag state lock poisoned.",
+            )
+        })?;
+        *active = Some(session);
+        Ok(id)
+    }
+
+    fn end(&self) -> CommandResult<Option<BrowserResizeDragSession>> {
+        let mut active = self.active.lock().map_err(|_| {
+            CommandError::system_fault(
+                "browser_resize_drag_lock_poisoned",
+                "Browser resize drag state lock poisoned.",
+            )
+        })?;
+        Ok(active.take())
+    }
+
+    fn take_if_current(&self, id: u64) -> Option<BrowserResizeDragSession> {
+        if let Ok(mut active) = self.active.lock() {
+            if active.as_ref().is_some_and(|session| session.id == id) {
+                return active.take();
+            }
+        }
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn replace_native_monitor_if_current(
+        &self,
+        id: u64,
+        monitor: BrowserNativeResizeDragMonitor,
+    ) -> Option<BrowserNativeResizeDragMonitor> {
+        let is_current = self
+            .active
+            .lock()
+            .map(|active| active.as_ref().is_some_and(|session| session.id == id))
+            .unwrap_or(false);
+        if !is_current {
+            return Some(monitor);
+        }
+
+        match self.native_monitor.lock() {
+            Ok(mut active) => active.replace(monitor),
+            Err(_) => Some(monitor),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn take_native_monitor(&self) -> Option<BrowserNativeResizeDragMonitor> {
+        self.native_monitor
+            .lock()
+            .ok()
+            .and_then(|mut active| active.take())
     }
 }
 
@@ -96,6 +255,80 @@ impl BrowserState {
 
     pub fn diagnostics(&self) -> Arc<BrowserDiagnostics> {
         Arc::clone(&self.diagnostics)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BrowserResizeJob {
+    labels: Vec<String>,
+    viewport: BrowserViewport,
+}
+
+#[derive(Default)]
+struct BrowserResizeCoalescer {
+    pending: Mutex<Option<BrowserResizeJob>>,
+    scheduled: AtomicBool,
+}
+
+impl BrowserResizeCoalescer {
+    fn schedule<R: Runtime>(
+        self: &Arc<Self>,
+        app: AppHandle<R>,
+        job: BrowserResizeJob,
+    ) -> CommandResult<()> {
+        {
+            let mut pending = self.pending.lock().map_err(|_| {
+                CommandError::system_fault(
+                    "browser_resize_lock_poisoned",
+                    "Browser resize state lock poisoned.",
+                )
+            })?;
+            *pending = Some(job);
+        }
+
+        if self.scheduled.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let coalescer = Arc::clone(self);
+        app.clone()
+            .run_on_main_thread(move || coalescer.flush_on_main(app))
+            .map_err(|error| {
+                CommandError::system_fault(
+                    "browser_resize_schedule_failed",
+                    format!("Xero could not schedule the browser webview resize: {error}"),
+                )
+            })?;
+        Ok(())
+    }
+
+    fn flush_on_main<R: Runtime>(self: Arc<Self>, app: AppHandle<R>) {
+        loop {
+            let job = self
+                .pending
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.take());
+
+            let Some(job) = job else {
+                self.scheduled.store(false, Ordering::Release);
+                let has_pending = self
+                    .pending
+                    .lock()
+                    .map(|pending| pending.is_some())
+                    .unwrap_or(false);
+                if has_pending && !self.scheduled.swap(true, Ordering::AcqRel) {
+                    continue;
+                }
+                return;
+            };
+
+            for label in job.labels {
+                if let Some(webview) = app.get_webview(&label) {
+                    let _ = set_browser_webview_bounds(&webview, job.viewport);
+                }
+            }
+        }
     }
 }
 
@@ -226,22 +459,12 @@ fn ensure_browser_webview<R: Runtime>(
 ) -> CommandResult<()> {
     let viewport = viewport.sanitize();
     if let Some(existing) = app.get_webview(label) {
-        existing
-            .set_position(LogicalPosition::new(viewport.x, viewport.y))
-            .map_err(|error| {
-                CommandError::system_fault(
-                    "browser_set_position_failed",
-                    format!("Xero could not move the browser webview: {error}"),
-                )
-            })?;
-        existing
-            .set_size(LogicalSize::new(viewport.width, viewport.height))
-            .map_err(|error| {
-                CommandError::system_fault(
-                    "browser_set_size_failed",
-                    format!("Xero could not resize the browser webview: {error}"),
-                )
-            })?;
+        set_browser_webview_bounds(&existing, viewport).map_err(|error| {
+            CommandError::system_fault(
+                "browser_set_bounds_failed",
+                format!("Xero could not position the browser webview: {error}"),
+            )
+        })?;
         existing.navigate(target.clone()).map_err(|error| {
             CommandError::system_fault(
                 "browser_navigate_failed",
@@ -324,6 +547,162 @@ fn ensure_browser_webview<R: Runtime>(
     Ok(())
 }
 
+fn set_browser_webview_bounds<R: Runtime>(
+    webview: &Webview<R>,
+    viewport: BrowserViewport,
+) -> tauri::Result<()> {
+    let viewport = viewport.sanitize();
+    webview.set_bounds(viewport.as_rect())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = webview.with_webview(move |platform_webview| {
+            let raw_webview = platform_webview.inner();
+            let ns_view = unsafe { &*(raw_webview.cast::<NSView>()) };
+            apply_macos_browser_webview_frame(ns_view, viewport);
+        });
+    }
+
+    let _ = webview.eval(BROWSER_RESIZE_NUDGE_SCRIPT);
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn install_native_resize_drag_monitor<R: Runtime>(
+    app: AppHandle<R>,
+    webview: &Webview<R>,
+    resize_drag: Arc<BrowserResizeDragState>,
+    session_id: u64,
+    session: BrowserResizeDragSession,
+) -> tauri::Result<()> {
+    webview.with_webview(move |platform_webview| {
+        let raw_webview = platform_webview.inner();
+        let raw_window = platform_webview.ns_window();
+        if raw_webview.is_null() || raw_window.is_null() {
+            return;
+        }
+
+        let app_for_drag = app.clone();
+        let ns_view_ptr = raw_webview.cast::<NSView>() as usize;
+        let ns_window_ptr = raw_window.cast::<NSWindow>() as usize;
+        let monitor_session = session.clone();
+        let block =
+            RcBlock::<BrowserNativeResizeDragTimerHandler>::new(move |timer: NonNull<NSTimer>| {
+                let ns_window = unsafe { &*(ns_window_ptr as *const NSWindow) };
+                let location = ns_window.mouseLocationOutsideOfEventStream();
+                let sidebar_width = monitor_session.width_for_cursor(location.x);
+                let viewport = monitor_session.viewport_for_cursor(location.x);
+                let ns_view = unsafe { &*(ns_view_ptr as *const NSView) };
+                apply_macos_browser_webview_frame(ns_view, viewport);
+
+                let complete = (NSEvent::pressedMouseButtons() & 1) == 0;
+                events::emit(
+                    &app_for_drag,
+                    BROWSER_RESIZE_DRAG_EVENT,
+                    &BrowserResizeDragPayload {
+                        tab_id: monitor_session.tab_id.clone(),
+                        sidebar_width,
+                        x: viewport.x,
+                        y: viewport.y,
+                        width: viewport.width,
+                        height: viewport.height,
+                        complete,
+                    },
+                );
+
+                if complete {
+                    let timer = unsafe { timer.as_ref() };
+                    timer.invalidate();
+                }
+            });
+        let timer =
+            unsafe { NSTimer::timerWithTimeInterval_repeats_block(1.0 / 120.0, true, &block) };
+        let run_loop = NSRunLoop::mainRunLoop();
+        unsafe {
+            run_loop.addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
+            run_loop.addTimer_forMode(&timer, NSRunLoopCommonModes);
+        }
+        timer.fire();
+        let monitor = BrowserNativeResizeDragMonitor {
+            timer: Retained::into_raw(timer) as usize,
+            block: RcBlock::into_raw(block) as usize,
+        };
+
+        if let Some(previous) = resize_drag.replace_native_monitor_if_current(session_id, monitor) {
+            unsafe { remove_native_resize_drag_monitor(previous) };
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_native_resize_drag_monitor<R: Runtime>(
+    app: &AppHandle<R>,
+    resize_drag: &BrowserResizeDragState,
+) {
+    let Some(monitor) = resize_drag.take_native_monitor() else {
+        return;
+    };
+
+    let _ = app.run_on_main_thread(move || unsafe {
+        remove_native_resize_drag_monitor(monitor);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cleanup_native_resize_drag_monitor<R: Runtime>(
+    _app: &AppHandle<R>,
+    _resize_drag: &BrowserResizeDragState,
+) {
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn remove_native_resize_drag_monitor(monitor: BrowserNativeResizeDragMonitor) {
+    let timer_ptr = monitor.timer as *mut NSTimer;
+    if !timer_ptr.is_null() {
+        if let Some(timer) = unsafe { Retained::from_raw(timer_ptr) } {
+            timer.invalidate();
+        }
+    }
+
+    let block_ptr = monitor.block as *mut Block<BrowserNativeResizeDragTimerHandler>;
+    let _ = unsafe { RcBlock::<BrowserNativeResizeDragTimerHandler>::from_raw(block_ptr) };
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_browser_webview_frame(ns_view: &NSView, viewport: BrowserViewport) {
+    let Some(parent_view) = (unsafe { ns_view.superview() }) else {
+        return;
+    };
+
+    let frame = NSRect::new(
+        macos_browser_webview_origin(&parent_view, viewport),
+        NSSize::new(viewport.width.round(), viewport.height.round()),
+    );
+
+    ns_view.setFrame(frame);
+    ns_view.setNeedsLayout(true);
+    ns_view.layoutSubtreeIfNeeded();
+    ns_view.setNeedsDisplay(true);
+    ns_view.displayIfNeeded();
+
+    parent_view.setNeedsLayout(true);
+    parent_view.layoutSubtreeIfNeeded();
+    parent_view.setNeedsDisplay(true);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_browser_webview_origin(parent_view: &NSView, viewport: BrowserViewport) -> NSPoint {
+    let x = viewport.x.round();
+    let y = viewport.y.round();
+    if parent_view.isFlipped() {
+        return NSPoint::new(x, y);
+    }
+
+    let parent_frame = parent_view.frame();
+    NSPoint::new(x, parent_frame.size.height - y - viewport.height.round())
+}
+
 fn resolve_browser_viewport<R: Runtime>(
     app: &AppHandle<R>,
     viewport: Option<BrowserViewport>,
@@ -363,28 +742,150 @@ pub fn browser_resize<R: Runtime>(
     tab_id: Option<String>,
 ) -> CommandResult<()> {
     let tabs = state.tabs();
-    let label = resolve_label(&tabs, tab_id.as_deref())?;
-    let Some(webview) = app.get_webview(&label) else {
+    let labels = resolve_resize_labels(&app, &tabs, tab_id.as_deref())?;
+    let viewport = BrowserViewport {
+        x,
+        y,
+        width,
+        height,
+    };
+    state
+        .resize_coalescer
+        .schedule(app, BrowserResizeJob { labels, viewport })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn browser_resize_drag_start<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, BrowserState>,
+    start_client_x: f64,
+    start_width: f64,
+    right: f64,
+    top: f64,
+    height: f64,
+    min_width: f64,
+    max_width: f64,
+    inset: Option<f64>,
+    tab_id: Option<String>,
+) -> CommandResult<()> {
+    let tabs = state.tabs();
+    let labels = resolve_resize_labels(&app, &tabs, tab_id.as_deref())?;
+    validate_resize_drag_number("startClientX", start_client_x)?;
+    validate_resize_drag_number("startWidth", start_width)?;
+    validate_resize_drag_number("right", right)?;
+    validate_resize_drag_number("top", top)?;
+    validate_resize_drag_number("height", height)?;
+    validate_resize_drag_number("minWidth", min_width)?;
+    validate_resize_drag_number("maxWidth", max_width)?;
+    let inset = inset.unwrap_or(0.0);
+    validate_resize_drag_number("inset", inset)?;
+
+    let min_width = min_width.max(1.0);
+    let max_width = max_width.max(min_width);
+    let session = BrowserResizeDragSession {
+        id: 0,
+        labels,
+        tab_id,
+        start_client_x,
+        start_width: start_width.clamp(min_width, max_width),
+        right,
+        top,
+        height: height.max(1.0),
+        min_width,
+        max_width,
+        inset: inset.max(0.0),
+    };
+    let id = state.resize_drag.begin(session.clone())?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(label) = session.labels.first() {
+        if let Some(webview) = app.get_webview(label) {
+            let _ = install_native_resize_drag_monitor(
+                app.clone(),
+                &webview,
+                Arc::clone(&state.resize_drag),
+                id,
+                session.clone(),
+            );
+        }
+    }
+
+    let resize_drag = Arc::clone(&state.resize_drag);
+    let app_for_timeout = app.clone();
+
+    std::thread::spawn(move || {
+        std::thread::sleep(RESIZE_DRAG_MAX_DURATION);
+        if resize_drag.take_if_current(id).is_some() {
+            cleanup_native_resize_drag_monitor(&app_for_timeout, &resize_drag);
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_resize_drag_end<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, BrowserState>,
+    x: Option<f64>,
+    y: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
+    tab_id: Option<String>,
+) -> CommandResult<()> {
+    let session = state.resize_drag.end()?;
+    cleanup_native_resize_drag_monitor(&app, &state.resize_drag);
+    let labels = match session {
+        Some(session) => session.labels,
+        None => {
+            let tabs = state.tabs();
+            resolve_resize_labels(&app, &tabs, tab_id.as_deref())?
+        }
+    };
+    let viewport = match (x, y, width, height) {
+        (Some(x), Some(y), Some(width), Some(height)) => {
+            validate_resize_drag_number("x", x)?;
+            validate_resize_drag_number("y", y)?;
+            validate_resize_drag_number("width", width)?;
+            validate_resize_drag_number("height", height)?;
+            Some(BrowserViewport {
+                x,
+                y,
+                width,
+                height,
+            })
+        }
+        (None, None, None, None) => None,
+        _ => {
+            return Err(CommandError::user_fixable(
+                "invalid_browser_resize_drag_end",
+                "Browser resize drag end must include a complete viewport.",
+            ));
+        }
+    };
+
+    let Some(viewport) = viewport else {
         return Ok(());
     };
 
-    webview
-        .set_position(LogicalPosition::new(x, y))
-        .map_err(|error| {
-            CommandError::system_fault(
-                "browser_set_position_failed",
-                format!("Xero could not move the browser webview: {error}"),
-            )
-        })?;
-    webview
-        .set_size(LogicalSize::new(width.max(1.0), height.max(1.0)))
-        .map_err(|error| {
-            CommandError::system_fault(
-                "browser_set_size_failed",
-                format!("Xero could not resize the browser webview: {error}"),
-            )
-        })?;
-    Ok(())
+    let mut first_error: Option<tauri::Error> = None;
+    for label in labels {
+        let Some(webview) = app.get_webview(&label) else {
+            continue;
+        };
+        if let Err(error) = set_browser_webview_bounds(&webview, viewport) {
+            first_error.get_or_insert(error);
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(CommandError::system_fault(
+            "browser_resize_drag_end_failed",
+            format!("Xero could not finish resizing the browser webview: {error}"),
+        )),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -972,6 +1473,76 @@ fn resolve_label(tabs: &BrowserTabs, requested: Option<&str>) -> CommandResult<S
     }
 }
 
+fn resolve_resize_labels<R: Runtime>(
+    app: &AppHandle<R>,
+    tabs: &BrowserTabs,
+    requested: Option<&str>,
+) -> CommandResult<Vec<String>> {
+    let mut labels = Vec::new();
+    if let Ok(label) = resolve_label(tabs, requested) {
+        push_unique_label(&mut labels, label);
+    }
+    if let Some(label) = tabs.active_label_soft() {
+        push_unique_label(&mut labels, label);
+    }
+    for label in visible_browser_webview_labels(app) {
+        push_unique_label(&mut labels, label);
+    }
+
+    if labels.is_empty() {
+        return Err(CommandError::user_fixable(
+            "browser_not_open",
+            "The in-app browser is not currently open.",
+        ));
+    }
+
+    Ok(labels)
+}
+
+fn push_unique_label(labels: &mut Vec<String>, label: String) {
+    if labels.iter().any(|candidate| candidate == &label) {
+        return;
+    }
+    labels.push(label);
+}
+
+fn visible_browser_webview_labels<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    let Some(window) = app.get_window(BROWSER_MAIN_WINDOW_LABEL) else {
+        return Vec::new();
+    };
+    let scale_factor = window
+        .scale_factor()
+        .ok()
+        .filter(|scale| scale.is_finite() && *scale > 0.0)
+        .unwrap_or(1.0);
+
+    app.webviews()
+        .into_iter()
+        .filter_map(|(label, webview)| {
+            if !label.starts_with(BROWSER_TAB_PREFIX) {
+                return None;
+            }
+            let bounds = webview.bounds().ok()?;
+            let position = bounds.position.to_logical::<f64>(scale_factor);
+            if position.x <= HIDDEN_OFFSET / 2.0 || position.y <= HIDDEN_OFFSET / 2.0 {
+                return None;
+            }
+            Some(label)
+        })
+        .collect()
+}
+
+fn validate_resize_drag_number(field: &'static str, value: f64) -> CommandResult<()> {
+    if value.is_finite() {
+        return Ok(());
+    }
+
+    Err(CommandError::user_fixable(
+        "invalid_browser_resize_drag",
+        format!("Field `{field}` must be a finite number."),
+    ))
+}
+
 fn current_tab_meta(tabs: &BrowserTabs, id: &str) -> BrowserTabMetadata {
     tabs.list()
         .ok()
@@ -1063,5 +1634,29 @@ mod tests {
             .tab_label("tab-missing")
             .expect_err("missing tab should fail");
         assert_eq!(error.code, "browser_tab_not_found");
+    }
+
+    #[test]
+    fn resize_drag_viewport_tracks_cursor_against_fixed_right_edge() {
+        let session = BrowserResizeDragSession {
+            id: 1,
+            labels: vec!["xero-browser-tab-1".to_string()],
+            tab_id: Some("tab-1".to_string()),
+            start_client_x: 760.0,
+            start_width: 640.0,
+            right: 1400.0,
+            top: 100.0,
+            height: 800.0,
+            min_width: 320.0,
+            max_width: 1400.0,
+            inset: 6.0,
+        };
+
+        let viewport = session.viewport_for_cursor(680.0);
+
+        assert_eq!(viewport.x, 686.0);
+        assert_eq!(viewport.y, 100.0);
+        assert_eq!(viewport.width, 714.0);
+        assert_eq!(viewport.height, 800.0);
     }
 }

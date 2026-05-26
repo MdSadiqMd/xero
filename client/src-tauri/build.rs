@@ -211,9 +211,7 @@ fn compile_ios_helper() {
         return;
     };
     let Some(sdk_path) = xcrun_output(&["--sdk", "macosx", "--show-sdk-path"]) else {
-        println!(
-            "cargo:warning=macOS SDK path not found; iOS helper binary will not be compiled."
-        );
+        println!("cargo:warning=macOS SDK path not found; iOS helper binary will not be compiled.");
         return;
     };
 
@@ -301,9 +299,7 @@ fn compile_ios_helper() {
     let resources_dir = manifest_dir.join("resources");
     let res_destination = resources_dir.join("xero-ios-helper");
     if let Err(e) = std::fs::copy(&output, &res_destination) {
-        println!(
-            "cargo:warning=failed to copy xero-ios-helper to resources/: {e}"
-        );
+        println!("cargo:warning=failed to copy xero-ios-helper to resources/: {e}");
     }
 }
 

@@ -7,6 +7,7 @@ pub const BROWSER_CONSOLE_EVENT: &str = "browser:console";
 pub const BROWSER_TAB_UPDATED_EVENT: &str = "browser:tab_updated";
 pub const BROWSER_DIALOG_EVENT: &str = "browser:dialog";
 pub const BROWSER_DOWNLOAD_EVENT: &str = "browser:download";
+pub const BROWSER_RESIZE_DRAG_EVENT: &str = "browser:resize_drag";
 pub const BROWSER_TOOL_CONTEXT_EVENT: &str = "browser:tool_context";
 pub const BROWSER_TOOL_CLOSED_EVENT: &str = "browser:tool_closed";
 
@@ -57,6 +58,18 @@ pub struct BrowserDownloadPayload {
     pub tab_id: String,
     pub url: String,
     pub suggested_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserResizeDragPayload {
+    pub tab_id: Option<String>,
+    pub sidebar_width: f64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

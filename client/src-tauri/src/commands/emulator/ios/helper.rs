@@ -128,10 +128,7 @@ pub fn resolve_helper_binary<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> 
     }
 
     // 3. $PATH lookup.
-    if let Ok(output) = Command::new("which")
-        .arg(BINARY_NAME)
-        .output()
-    {
+    if let Ok(output) = Command::new("which").arg(BINARY_NAME).output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let p = PathBuf::from(&path);
@@ -150,8 +147,7 @@ mod tests {
 
     #[test]
     fn helper_launch_generates_valid_socket_path() {
-        let launch =
-            HelperLaunch::new("/usr/bin/true", "AAAA-BBBB-CCCC").expect("launch creation");
+        let launch = HelperLaunch::new("/usr/bin/true", "AAAA-BBBB-CCCC").expect("launch creation");
         assert!(launch
             .socket_path
             .to_str()

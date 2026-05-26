@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Loader2, Plus, Save, Sparkles, Trash2 } from "lucide-react"
+import { Globe2, Loader2, Plus, Save, Sparkles, Trash2 } from "lucide-react"
 
 import {
   AlertDialog,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import {
   Select,
   SelectContent,
@@ -65,12 +66,14 @@ export interface StartTargetsModelOption {
 export interface SuggestedTarget {
   name: string
   command: string
+  browserSupported?: boolean
 }
 
 interface StartTargetsEditorProps {
   initialTargets: StartTargetDto[]
   saveLabel?: string
   hideSaveOnPristine?: boolean
+  fixedFooter?: boolean
   className?: string
   onSave: (targets: StartTargetInputDto[]) => Promise<void>
   resolveSuggestRequest?: () => StartTargetsSuggestRequest | null
@@ -86,6 +89,7 @@ interface RowState {
   id: string | null
   name: string
   command: string
+  browserSupported: boolean
 }
 
 let rowKeyCounter = 0
@@ -99,6 +103,7 @@ const toRow = (target: StartTargetDto): RowState => ({
   id: target.id,
   name: target.name,
   command: target.command,
+  browserSupported: target.browserSupported === true,
 })
 
 const blankRow = (): RowState => ({
@@ -106,6 +111,7 @@ const blankRow = (): RowState => ({
   id: null,
   name: "",
   command: "",
+  browserSupported: false,
 })
 
 function rowsEqualToInitial(rows: RowState[], initial: StartTargetDto[]) {
@@ -116,6 +122,7 @@ function rowsEqualToInitial(rows: RowState[], initial: StartTargetDto[]) {
     if (row.id !== target.id) return false
     if (row.name.trim() !== target.name.trim()) return false
     if (row.command.trim() !== target.command.trim()) return false
+    if (row.browserSupported !== (target.browserSupported === true)) return false
   }
   return true
 }
@@ -222,6 +229,7 @@ export function StartTargetsEditor({
   initialTargets,
   saveLabel = "Save",
   hideSaveOnPristine = false,
+  fixedFooter = false,
   className,
   onSave,
   resolveSuggestRequest,
@@ -299,11 +307,12 @@ export function StartTargetsEditor({
 
   const replaceRowsWithSuggestion = (suggestion: SuggestedTarget[]) => {
     const next = suggestion.map(
-      ({ name, command }): RowState => ({
+      ({ name, command, browserSupported }): RowState => ({
         rowKey: nextRowKey(),
         id: null,
         name,
         command,
+        browserSupported: browserSupported === true,
       }),
     )
     setRows(next.length > 0 ? next : [blankRow()])
@@ -363,6 +372,7 @@ export function StartTargetsEditor({
           id: row.id ?? null,
           name: row.name.trim(),
           command: row.command.trim(),
+          browserSupported: row.browserSupported,
         }))
       await onSave(payload)
       setSaveMessage("Saved.")
@@ -403,114 +413,145 @@ export function StartTargetsEditor({
     busy || (hideSaveOnPristine && pristine) || (!hideSaveOnPristine && false)
 
   return (
-    <div className={cn("flex flex-col gap-3", className)}>
-      <div className="flex flex-col gap-2">
-        {rows.map((row, index) => (
-          <div
-            key={row.rowKey}
-            className="rounded-md border border-border/60 bg-secondary/20 p-2.5"
-          >
-            <div className="flex items-center gap-2">
-              <Input
-                aria-label={`Target ${index + 1} name`}
-                value={row.name}
-                onChange={(event) => updateRow(row.rowKey, { name: event.target.value })}
-                placeholder="web"
-                disabled={busy}
-                className="h-8 w-32 font-mono text-[12.5px]"
-              />
-              <Input
-                aria-label={`Target ${index + 1} command`}
-                value={row.command}
-                onChange={(event) => updateRow(row.rowKey, { command: event.target.value })}
-                placeholder="cd apps/web && pnpm dev"
-                disabled={busy}
-                className="h-8 flex-1 font-mono text-[12.5px]"
-              />
-              <Button
-                aria-label={`Remove target ${index + 1}`}
-                variant="ghost"
-                size="icon"
-                onClick={() => removeRow(row.rowKey)}
-                disabled={busy}
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+    <div
+      className={cn(
+        fixedFooter
+          ? "grid min-h-0 grid-rows-[minmax(0,1fr)_auto]"
+          : "flex flex-col gap-3",
+        className,
+      )}
+    >
+      <div
+        className={cn(
+          "flex flex-col gap-3",
+          fixedFooter && "min-h-0 overflow-y-auto overscroll-contain px-6 pb-4 pt-1 scrollbar-thin",
+        )}
+      >
+        <div className="flex flex-col gap-2">
+          {rows.map((row, index) => (
+            <div
+              key={row.rowKey}
+              className="rounded-md border border-border/60 bg-secondary/20 p-2.5"
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  aria-label={`Target ${index + 1} name`}
+                  value={row.name}
+                  onChange={(event) => updateRow(row.rowKey, { name: event.target.value })}
+                  placeholder="web"
+                  disabled={busy}
+                  className="h-8 w-32 font-mono text-[12.5px]"
+                />
+                <Input
+                  aria-label={`Target ${index + 1} command`}
+                  value={row.command}
+                  onChange={(event) => updateRow(row.rowKey, { command: event.target.value })}
+                  placeholder="cd apps/web && pnpm dev"
+                  disabled={busy}
+                  className="h-8 flex-1 font-mono text-[12.5px]"
+                />
+                <Button
+                  aria-label={`Remove target ${index + 1}`}
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeRow(row.rowKey)}
+                  disabled={busy}
+                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div className="mt-2 flex items-center justify-between rounded-md border border-border/40 bg-background/35 px-2 py-1.5">
+                <div className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
+                  <Globe2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>Browser supported</span>
+                </div>
+                <Switch
+                  aria-label={`Target ${index + 1} browser supported`}
+                  checked={row.browserSupported}
+                  disabled={busy}
+                  onCheckedChange={(checked) => updateRow(row.rowKey, { browserSupported: checked })}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={addRow}
+          disabled={busy}
+          className="self-start text-muted-foreground hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add target
+        </Button>
+
+        {error ? (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">
+            {error}
+          </p>
+        ) : saveMessage ? (
+          <p className="text-[12px] text-success">{saveMessage}</p>
+        ) : (
+          <p className="text-[12px] text-muted-foreground">
+            One target = single root command. Add more for monorepos. Use{" "}
+            <code className="font-mono">cd path && cmd</code> to run from a
+            subdirectory.
+          </p>
+        )}
+
+        {aiEnabled ? (
+          <div className="rounded-md border border-border/60 bg-secondary/15 px-2.5 py-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  AI model
+                </div>
+                <div className="truncate text-[12.5px] text-foreground" title={visibleModelLabel}>
+                  {visibleModelLabel}
+                </div>
+              </div>
+              {modelOptions.length > 0 ? (
+                <Select
+                  value={selectedModelSelectionKey ?? undefined}
+                  onValueChange={(value) => setSelectedModelSelectionKey(value)}
+                  disabled={busy}
+                >
+                  <SelectTrigger
+                    aria-label="AI suggestion model"
+                    className="h-8 w-full text-[12px] sm:w-[260px]"
+                    size="sm"
+                  >
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[320px]">
+                    {modelGroups.map((group) => (
+                      <SelectGroup key={group.providerLabel}>
+                        <SelectLabel>{group.providerLabel}</SelectLabel>
+                        {group.options.map((option) => (
+                          <SelectItem key={option.selectionKey} value={option.selectionKey}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
             </div>
           </div>
-        ))}
+        ) : null}
       </div>
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={addRow}
-        disabled={busy}
-        className="self-start text-muted-foreground hover:text-foreground"
+      <div
+        className={cn(
+          "flex items-center justify-between gap-2",
+          fixedFooter && "border-t border-border/60 bg-background/95 px-6 py-4",
+        )}
       >
-        <Plus className="h-3.5 w-3.5" />
-        Add target
-      </Button>
-
-      {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">
-          {error}
-        </p>
-      ) : saveMessage ? (
-        <p className="text-[12px] text-success">{saveMessage}</p>
-      ) : (
-        <p className="text-[12px] text-muted-foreground">
-          One target = single root command. Add more for monorepos. Use{" "}
-          <code className="font-mono">cd path && cmd</code> to run from a
-          subdirectory.
-        </p>
-      )}
-
-      {aiEnabled ? (
-        <div className="rounded-md border border-border/60 bg-secondary/15 px-2.5 py-2">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                AI model
-              </div>
-              <div className="truncate text-[12.5px] text-foreground" title={visibleModelLabel}>
-                {visibleModelLabel}
-              </div>
-            </div>
-            {modelOptions.length > 0 ? (
-              <Select
-                value={selectedModelSelectionKey ?? undefined}
-                onValueChange={(value) => setSelectedModelSelectionKey(value)}
-                disabled={busy}
-              >
-                <SelectTrigger
-                  aria-label="AI suggestion model"
-                  className="h-8 w-full text-[12px] sm:w-[260px]"
-                  size="sm"
-                >
-                  <SelectValue placeholder="Select model" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[320px]">
-                  {modelGroups.map((group) => (
-                    <SelectGroup key={group.providerLabel}>
-                      <SelectLabel>{group.providerLabel}</SelectLabel>
-                      {group.options.map((option) => (
-                        <SelectItem key={option.selectionKey} value={option.selectionKey}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-between gap-2">
         <Button
           type="button"
           variant="ghost"

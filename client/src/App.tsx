@@ -14,6 +14,7 @@ import type {
   AgentPaneCloseState,
   AgentRuntimeProps,
 } from '@/components/xero/agent-runtime'
+import type { BrowserLaunchTarget } from '@/components/xero/browser-launch-targets'
 import { SetupEmptyState } from '@/components/xero/agent-runtime/setup-empty-state'
 import { AgentWorkspace } from '@/components/xero/agent-workspace'
 import { AgentSessionsSidebar } from '@/components/xero/agent-sessions-sidebar'
@@ -282,6 +283,11 @@ type BrowserComposerInsertTarget = 'agent-view' | 'agent-dock'
 interface PendingBrowserComposerInsert {
   target: BrowserComposerInsertTarget
   insert: AgentComposerInsert
+}
+
+interface PendingBrowserOpenUrl {
+  id: string
+  url: string
 }
 
 function shouldIncludeIosSurface(): boolean {
@@ -1656,6 +1662,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [projectAddOpen, setProjectAddOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
+  const [browserLaunchTargets, setBrowserLaunchTargets] = useState<BrowserLaunchTarget[]>([])
+  const [pendingBrowserOpenUrl, setPendingBrowserOpenUrl] = useState<PendingBrowserOpenUrl | null>(null)
   const [iosOpen, setIosOpen] = useState(false)
   const [solanaOpen, setSolanaOpen] = useState(false)
   const [vcsOpen, setVcsOpen] = useState(false)
@@ -1980,6 +1988,39 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setTerminalOpen(false)
     setBrowserOpen(true)
   }, [browserOpen])
+
+  const revealBrowserSidebar = useCallback(() => {
+    setIosOpen(false)
+    setSolanaOpen(false)
+    setVcsOpen(false)
+    setWorkflowsOpen(false)
+    setUsageOpen(false)
+    setAgentDockOpen(false)
+    setComputerUseOpen(false)
+    setTerminalOpen(false)
+    setBrowserOpen(true)
+  }, [])
+
+  const handleOpenUrlInBrowser = useCallback(
+    (url: string) => {
+      const id = `browser-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setPendingBrowserOpenUrl({ id, url })
+      revealBrowserSidebar()
+    },
+    [revealBrowserSidebar],
+  )
+
+  const handleBrowserLaunchTargetDetected = useCallback((target: BrowserLaunchTarget) => {
+    setBrowserLaunchTargets((current) => {
+      const next = current.filter((entry) => entry.id !== target.id)
+      next.unshift(target)
+      return next.slice(0, 8)
+    })
+  }, [])
+
+  const handlePendingBrowserOpenUrlConsumed = useCallback((id: string) => {
+    setPendingBrowserOpenUrl((current) => (current?.id === id ? null : current))
+  }, [])
 
   const toggleIos = useCallback(() => {
     if (iosOpen) {
@@ -2314,6 +2355,11 @@ export function XeroApp({ adapter }: XeroAppProps) {
     }
   }, [activeView, agentDockOpen])
 
+  useEffect(() => {
+    setBrowserLaunchTargets([])
+    setPendingBrowserOpenUrl(null)
+  }, [activeProjectId])
+
   // Imperative handle published by <TerminalSidebar>. We use it to spawn a
   // tab and write the project's start_command when the user clicks Play.
   const terminalSidebarHandleRef = useRef<TerminalSidebarHandle | null>(null)
@@ -2360,7 +2406,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
       revealTerminalSidebar()
       const handle = await waitForTerminalSidebarHandle()
       if (!handle) return
-      await handle.spawnTabWithCommand(target.command)
+      await handle.spawnTabWithCommand(target.command, {
+        label: target.name,
+        browserSupported: target.browserSupported,
+      })
     },
     [activeProjectId, activeProjectStartTargets, revealTerminalSidebar, waitForTerminalSidebarHandle],
   )
@@ -2376,7 +2425,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
     const handle = await waitForTerminalSidebarHandle()
     if (!handle) return
     for (const target of targets) {
-      await handle.spawnTabWithCommand(target.command)
+      await handle.spawnTabWithCommand(target.command, {
+        label: target.name,
+        browserSupported: target.browserSupported,
+      })
     }
   }, [activeProjectId, activeProjectStartTargets, revealTerminalSidebar, waitForTerminalSidebarHandle])
 
@@ -2397,7 +2449,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
   )
 
   const handleUpdateProjectStartTargets = useCallback(
-    async (targets: { id?: string | null; name: string; command: string }[]) => {
+    async (
+      targets: { id?: string | null; name: string; command: string; browserSupported?: boolean }[],
+    ) => {
       if (!activeProjectId) return
       await resolvedAdapter.updateProjectStartTargets?.({
         projectId: activeProjectId,
@@ -4917,6 +4971,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
             >
               <LazyBrowserSidebar
                 open={browserOpen}
+                projectBrowserTargets={browserLaunchTargets}
+                pendingOpenUrl={pendingBrowserOpenUrl}
+                onPendingOpenUrlConsumed={handlePendingBrowserOpenUrlConsumed}
                 onAddAgentContext={handleAddBrowserContextToAgentComposer}
                 onAddAgentContextLoadingChange={handleBrowserContextLoadingChange}
               />
@@ -5164,6 +5221,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
               <LazyTerminalSidebar
                 open={terminalOpen}
                 projectId={activeProjectId}
+                onOpenBrowserUrl={handleOpenUrlInBrowser}
+                onBrowserLaunchTargetDetected={handleBrowserLaunchTargetDetected}
                 registerHandle={(handle) => {
                   terminalSidebarHandleRef.current = handle
                 }}

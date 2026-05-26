@@ -45,7 +45,7 @@ export function StartTargetsDialog({
 }: StartTargetsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+      <DialogContent className="grid max-h-[min(760px,calc(100vh-4rem))] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[560px]">
         <div
           aria-hidden
           className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-primary/[0.06] to-transparent"
@@ -67,8 +67,10 @@ export function StartTargetsDialog({
           </DialogHeader>
         </div>
 
-        <div className="relative px-6 pb-5">
+        <div className="relative min-h-0">
           <StartTargetsEditor
+            className="h-full"
+            fixedFooter
             initialTargets={initialTargets}
             onSave={async (targets) => {
               await onSubmit(targets)

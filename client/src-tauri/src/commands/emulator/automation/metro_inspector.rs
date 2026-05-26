@@ -113,13 +113,12 @@ impl MetroInspector {
         })?;
         stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
 
-        let (ws, _response) =
-            tungstenite::client(&ws_url, stream).map_err(|e| {
-                CommandError::system_fault(
-                    "metro_ws_handshake_failed",
-                    format!("WebSocket handshake: {e}"),
-                )
-            })?;
+        let (ws, _response) = tungstenite::client(&ws_url, stream).map_err(|e| {
+            CommandError::system_fault(
+                "metro_ws_handshake_failed",
+                format!("WebSocket handshake: {e}"),
+            )
+        })?;
 
         let status = MetroStatus {
             connected: true,
@@ -369,17 +368,15 @@ pub fn discover_metro(port_range: &[u16]) -> Option<u16> {
 
 fn probe_metro_port(port: u16) -> bool {
     let addr = format!("127.0.0.1:{port}");
-    let Ok(mut stream) = TcpStream::connect_timeout(
-        &addr.parse().unwrap(),
-        Duration::from_millis(200),
-    ) else {
+    let Ok(mut stream) =
+        TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(200))
+    else {
         return false;
     };
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
 
-    let request = format!(
-        "GET /status HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let request =
+        format!("GET /status HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
@@ -394,21 +391,17 @@ fn probe_metro_port(port: u16) -> bool {
 /// Fetch the list of debuggable pages from Metro's /json/list endpoint.
 fn fetch_pages(port: u16) -> Result<Vec<InspectorPage>, CommandError> {
     let addr = format!("127.0.0.1:{port}");
-    let mut stream = TcpStream::connect_timeout(
-        &addr.parse().unwrap(),
-        Duration::from_secs(5),
-    )
-    .map_err(|e| {
-        CommandError::system_fault(
-            "metro_connect_failed",
-            format!("connect to Metro on port {port}: {e}"),
-        )
-    })?;
+    let mut stream = TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_secs(5))
+        .map_err(|e| {
+            CommandError::system_fault(
+                "metro_connect_failed",
+                format!("connect to Metro on port {port}: {e}"),
+            )
+        })?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
 
-    let request = format!(
-        "GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let request =
+        format!("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).map_err(|e| {
         CommandError::system_fault("metro_request_failed", format!("send request: {e}"))
     })?;
@@ -418,11 +411,7 @@ fn fetch_pages(port: u16) -> Result<Vec<InspectorPage>, CommandError> {
     let response = String::from_utf8_lossy(&buf);
 
     // Extract JSON body after \r\n\r\n.
-    let body = response
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .trim();
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim();
 
     // Handle chunked transfer encoding: strip chunk headers.
     let json_body = if body.contains('[') {

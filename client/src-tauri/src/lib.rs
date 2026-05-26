@@ -450,6 +450,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::adrenaline_mode::closed_lid_mode_update_settings,
             commands::browser::browser_show,
             commands::browser::browser_resize,
+            commands::browser::browser_resize_drag_start,
+            commands::browser::browser_resize_drag_end,
             commands::browser::browser_hide,
             commands::browser::settings::browser_control_settings,
             commands::browser::settings::browser_control_update_settings,

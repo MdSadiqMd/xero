@@ -899,6 +899,7 @@ export type OpenTerminalResponseDto = z.infer<typeof openTerminalResponseSchema>
 const suggestedStartTargetSchema = z.object({
   name: z.string(),
   command: z.string(),
+  browserSupported: z.boolean().optional(),
 })
 const suggestedStartTargetsSchema = z.object({
   targets: z.array(suggestedStartTargetSchema),
@@ -930,6 +931,7 @@ export interface StartTargetInputDto {
   id?: string | null
   name: string
   command: string
+  browserSupported?: boolean
 }
 
 export interface UpdateProjectStartTargetsRequestDto {
@@ -2402,6 +2404,7 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
           id: target.id ?? null,
           name: target.name,
           command: target.command,
+          browserSupported: target.browserSupported === true,
         })),
       },
     })

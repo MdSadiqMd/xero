@@ -91,22 +91,14 @@ impl HelperClient {
     }
 
     /// Send a touch event to the simulator.
-    pub fn send_touch(
-        &self,
-        phase: TouchPhase,
-        x: i32,
-        y: i32,
-    ) -> Result<(), CommandError> {
+    pub fn send_touch(&self, phase: TouchPhase, x: i32, y: i32) -> Result<(), CommandError> {
         let phase_str = match phase {
             TouchPhase::Began => "began",
             TouchPhase::Moved => "moved",
             TouchPhase::Ended => "ended",
             TouchPhase::Cancelled => "cancelled",
         };
-        self.send_request(
-            "hid_touch",
-            json!({ "phase": phase_str, "x": x, "y": y }),
-        )?;
+        self.send_request("hid_touch", json!({ "phase": phase_str, "x": x, "y": y }))?;
         Ok(())
     }
 
@@ -154,14 +146,12 @@ impl HelperClient {
     /// Returns the raw JSON tree that `ios_ui::normalize_tree()` can parse.
     pub fn accessibility_tree(&self) -> Result<serde_json::Value, CommandError> {
         let resp = self.send_request("accessibility_tree", json!({}))?;
-        resp.get("tree")
-            .cloned()
-            .ok_or_else(|| {
-                CommandError::system_fault(
-                    "ios_helper_ax_no_tree",
-                    "helper returned no tree in accessibility_tree response".to_string(),
-                )
-            })
+        resp.get("tree").cloned().ok_or_else(|| {
+            CommandError::system_fault(
+                "ios_helper_ax_no_tree",
+                "helper returned no tree in accessibility_tree response".to_string(),
+            )
+        })
     }
 
     /// Health check.
@@ -278,14 +268,16 @@ fn reader_loop(
             }
             MSG_TYPE_FRAME => {
                 if payload.len() >= 8 {
-                    let width = u32::from_be_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                    ]);
-                    let height = u32::from_be_bytes([
-                        payload[4], payload[5], payload[6], payload[7],
-                    ]);
+                    let width =
+                        u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    let height =
+                        u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
                     let jpeg = payload[8..].to_vec();
-                    let _ = frame_tx.send(FrameData { width, height, jpeg });
+                    let _ = frame_tx.send(FrameData {
+                        width,
+                        height,
+                        jpeg,
+                    });
                 }
             }
             _ => {} // Unknown type; ignore.

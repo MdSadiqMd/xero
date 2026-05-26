@@ -347,7 +347,10 @@ fn command_error(binary: &str, args: &[&str], code: &'static str, detail: &str) 
     if detail.to_ascii_lowercase().contains("insufficient space") {
         return CommandError::user_fixable(
             "ios_runtime_disk_space_low",
-            disk_space_error_message(parse_required_space(detail), runtime_storage_available_bytes()),
+            disk_space_error_message(
+                parse_required_space(detail),
+                runtime_storage_available_bytes(),
+            ),
         );
     }
 
@@ -416,7 +419,10 @@ fn disk_space_error_message(
 
     let shortfall = required.bytes.saturating_sub(available_bytes);
     let shortfall = if shortfall > 0 {
-        format!(" Free at least {} more, then try again.", format_bytes(shortfall))
+        format!(
+            " Free at least {} more, then try again.",
+            format_bytes(shortfall)
+        )
     } else {
         " Free more disk space, then try again.".to_string()
     };
@@ -436,7 +442,9 @@ fn runtime_storage_available_bytes() -> Option<(String, u64)> {
     } else {
         "/"
     };
-    available_bytes(path).ok().map(|bytes| (path.to_string(), bytes))
+    available_bytes(path)
+        .ok()
+        .map(|bytes| (path.to_string(), bytes))
 }
 
 #[cfg(target_os = "macos")]
@@ -484,8 +492,9 @@ mod tests {
 
     #[test]
     fn parses_xcode_required_space_error() {
-        let parsed = parse_required_space("Insufficient space available. Requires 8.39 GB Finding content.")
-            .expect("required space");
+        let parsed =
+            parse_required_space("Insufficient space available. Requires 8.39 GB Finding content.")
+                .expect("required space");
 
         assert_eq!(parsed.label, "8.39 GB");
         assert_eq!(parsed.bytes, 8_390_000_000);

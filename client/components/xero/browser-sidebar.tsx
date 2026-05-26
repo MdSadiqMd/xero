@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Cookie,
+  FolderGit2,
   Loader2,
   MousePointerSquareDashed,
   Pencil,
@@ -15,7 +16,6 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarOpenMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import { recordIpcPayloadSample } from "@/src/lib/ipc-payload-budget"
 import { createSafeTauriUnlisten } from "@/src/lib/tauri-events"
@@ -44,7 +44,15 @@ import {
 import {
   createBrowserResizeScheduler,
   readBrowserViewportRect,
+  type ViewportRect,
 } from "./browser-resize-scheduler"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import type { BrowserLaunchTarget } from "./browser-launch-targets"
 
 type ToolMode = "pen" | "inspect" | null
 
@@ -59,11 +67,15 @@ const COOKIE_IMPORT_PROMPTED_KEY = "xero.browser.cookieImportPrompted"
 // once a URL had been loaded.
 const RESIZE_HANDLE_INSET = 6
 const TOOL_CAPTURE_SETTLE_MS = 50
+const SIDEBAR_GEOMETRY_SETTLE_MS = 190
 
 interface BrowserSidebarProps {
   open: boolean
   onAddAgentContext?: (request: BrowserAgentContextRequest) => Promise<void>
   onAddAgentContextLoadingChange?: (loading: boolean) => void
+  projectBrowserTargets?: BrowserLaunchTarget[]
+  pendingOpenUrl?: { id: string; url: string } | null
+  onPendingOpenUrlConsumed?: (id: string) => void
 }
 
 interface BrowserTabMeta {
@@ -94,6 +106,19 @@ interface BrowserLoadStatePayload {
 
 interface BrowserTabUpdatedPayload {
   tabs: BrowserTabMeta[]
+}
+
+interface BrowserResizeDragPayload extends ViewportRect {
+  tabId: string | null
+  sidebarWidth: number
+  complete: boolean
+}
+
+interface BrowserResizeDragRuntime {
+  latestRect: ViewportRect | null
+  latestWidth: number
+  nativeActive: boolean
+  finish: (() => void) | null
 }
 
 type BrowserCoalescedEvent =
@@ -252,10 +277,29 @@ function waitForBrowserToolPaint(): Promise<void> {
   })
 }
 
+function readBrowserViewportRectForWidth(
+  node: HTMLElement,
+  width: number,
+  inset = 0,
+): ViewportRect {
+  const rect = node.getBoundingClientRect()
+  const roundedWidth = Math.max(1, Math.round(width))
+
+  return {
+    x: Math.round(rect.right) - roundedWidth + inset,
+    y: Math.round(rect.top),
+    width: Math.max(1, roundedWidth - inset),
+    height: Math.max(1, Math.round(rect.height)),
+  }
+}
+
 export function BrowserSidebar({
   open,
   onAddAgentContext,
   onAddAgentContextLoadingChange,
+  projectBrowserTargets = [],
+  pendingOpenUrl = null,
+  onPendingOpenUrlConsumed,
 }: BrowserSidebarProps) {
   const [width, setWidth] = useState(viewportDefaultWidth)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
@@ -270,6 +314,7 @@ export function BrowserSidebar({
   const [toolSubmitting, setToolSubmitting] = useState(false)
   const [toolSubmitError, setToolSubmitError] = useState<string | null>(null)
   const motionOpen = useSidebarOpenMotion(open)
+  const [openGeometrySettled, setOpenGeometrySettled] = useState(false)
   const targetWidth = motionOpen ? width : 0
   const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const {
@@ -280,9 +325,18 @@ export function BrowserSidebar({
   } = useCookieImport()
   const widthRef = useRef(width)
   widthRef.current = width
+  const tabsRef = useRef(tabs)
+  tabsRef.current = tabs
+  const sidebarRef = useRef<HTMLElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const addressFocusedRef = useRef(false)
   const hasWebviewRef = useRef(false)
+  if (tabs.length > 0) {
+    hasWebviewRef.current = true
+  }
+  const isResizingRef = useRef(false)
+  const resizeDragRuntimeRef = useRef<BrowserResizeDragRuntime | null>(null)
   const cookieSourcesLoadedRef = useRef(false)
   const openRef = useRef(open)
   const activeTabIdRef = useRef(activeTabId)
@@ -291,6 +345,7 @@ export function BrowserSidebar({
   const toolActivationRequestRef = useRef(0)
   const onAddAgentContextRef = useRef(onAddAgentContext)
   const onAddAgentContextLoadingChangeRef = useRef(onAddAgentContextLoadingChange)
+  const consumedPendingOpenUrlIdsRef = useRef<Set<string>>(new Set())
 
   openRef.current = open
   activeTabIdRef.current = activeTabId
@@ -298,12 +353,25 @@ export function BrowserSidebar({
   onAddAgentContextRef.current = onAddAgentContext
   onAddAgentContextLoadingChangeRef.current = onAddAgentContextLoadingChange
 
+  useEffect(() => {
+    if (!open || !motionOpen) {
+      setOpenGeometrySettled(false)
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setOpenGeometrySettled(true)
+    }, SIDEBAR_GEOMETRY_SETTLE_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [motionOpen, open])
+
   const resizeScheduler = useMemo(
     () =>
       createBrowserResizeScheduler({
         getEnabled: () =>
           openRef.current &&
-          hasWebviewRef.current &&
+          (hasWebviewRef.current || tabsRef.current.length > 0) &&
           isTauri(),
         getNode: () => viewportRef.current,
         getTabId: () => activeTabIdRef.current,
@@ -315,6 +383,106 @@ export function BrowserSidebar({
         },
       }),
     [],
+  )
+
+  const syncBrowserViewportToWidth = useCallback(
+    (nextWidth: number) => {
+      if (
+        !openRef.current ||
+        (!hasWebviewRef.current && tabsRef.current.length === 0) ||
+        !isTauri()
+      ) {
+        return
+      }
+      const node = viewportRef.current
+      if (!node) return
+
+      const rect = readBrowserViewportRectForWidth(
+        node,
+        nextWidth,
+        RESIZE_HANDLE_INSET,
+      )
+      resizeScheduler.markSynced(rect)
+      void invoke("browser_resize", {
+        ...rect,
+        tabId: activeTabIdRef.current,
+      }).catch(() => {
+        /* swallow */
+      })
+    },
+    [resizeScheduler],
+  )
+
+  const markBrowserViewportSyncedToWidth = useCallback(
+    (nextWidth: number): ViewportRect | null => {
+      const node = viewportRef.current
+      if (!node) return null
+
+      const rect = readBrowserViewportRectForWidth(
+        node,
+        nextWidth,
+        RESIZE_HANDLE_INSET,
+      )
+      resizeScheduler.markSynced(rect)
+      return rect
+    },
+    [resizeScheduler],
+  )
+
+  const applySidebarWidth = useCallback((nextWidth: number) => {
+    widthRef.current = nextWidth
+    const nextWidthStyle = `${nextWidth}px`
+    if (sidebarRef.current) {
+      sidebarRef.current.style.width = nextWidthStyle
+      sidebarRef.current.style.transition = "none"
+    }
+    if (contentRef.current) {
+      contentRef.current.style.width = nextWidthStyle
+    }
+  }, [])
+
+  const applyNativeResizeDrag = useCallback(
+    (payload: BrowserResizeDragPayload) => {
+      const runtime = resizeDragRuntimeRef.current
+      if (!runtime?.nativeActive) return
+      if (payload.tabId && payload.tabId !== activeTabIdRef.current) return
+
+      const nextWidth = Math.max(
+        MIN_WIDTH,
+        Math.min(viewportMaxWidth(), payload.sidebarWidth),
+      )
+      const rect = {
+        x: payload.x,
+        y: payload.y,
+        width: payload.width,
+        height: payload.height,
+      }
+
+      runtime.latestWidth = nextWidth
+      runtime.latestRect = rect
+      applySidebarWidth(nextWidth)
+      resizeScheduler.markSynced(rect)
+
+      if (payload.complete) {
+        runtime.finish?.()
+      }
+    },
+    [applySidebarWidth, resizeScheduler],
+  )
+
+  const setSidebarWidthAndSync = useCallback(
+    (nextWidth: number, options: { syncBrowser?: boolean } = {}) => {
+      if (isResizingRef.current) {
+        applySidebarWidth(nextWidth)
+      } else {
+        widthRef.current = nextWidth
+      }
+      setWidth(nextWidth)
+      if (options.syncBrowser !== false) {
+        syncBrowserViewportToWidth(nextWidth)
+      }
+    },
+    [applySidebarWidth, syncBrowserViewportToWidth],
   )
 
   const activeTab = useMemo(
@@ -435,7 +603,7 @@ export function BrowserSidebar({
 
   useEffect(() => {
     if (!open || !isTauri()) return
-    if (!hasWebviewRef.current) return
+    if (!hasWebviewRef.current && tabsRef.current.length === 0) return
 
     // Reset the cache on every effect re-run (sidebar open, active tab change)
     // so the first scheduled sync fires a browser_resize. Without this,
@@ -446,8 +614,16 @@ export function BrowserSidebar({
   }, [activeTabId, open, resizeScheduler])
 
   useEffect(() => {
+    if (!openGeometrySettled || !isTauri()) return
+    if (!hasWebviewRef.current && tabsRef.current.length === 0) return
+
+    resizeScheduler.reset()
+    resizeScheduler.schedule({ force: true })
+  }, [activeTabId, openGeometrySettled, resizeScheduler])
+
+  useEffect(() => {
     if (!open || !isTauri()) return
-    if (!hasWebviewRef.current) return
+    if (!hasWebviewRef.current && tabsRef.current.length === 0) return
 
     const node = viewportRef.current
     if (!node) return
@@ -467,7 +643,13 @@ export function BrowserSidebar({
   }, [activeTabId, open, resizeScheduler])
 
   useEffect(() => {
-    if (open || !isTauri() || !hasWebviewRef.current) return
+    if (
+      open ||
+      !isTauri() ||
+      (!hasWebviewRef.current && tabsRef.current.length === 0)
+    ) {
+      return
+    }
     resizeScheduler.cancel()
     resizeScheduler.reset()
     void invoke("browser_hide").catch(() => {
@@ -536,8 +718,10 @@ export function BrowserSidebar({
       },
       onTabUpdated: (payload) => {
         setTabs(payload.tabs)
+        hasWebviewRef.current = payload.tabs.length > 0
         const active = payload.tabs.find((tab) => tab.active)
         if (active) {
+          activeTabIdRef.current = active.id
           setActiveTabId(active.id)
         }
       },
@@ -576,6 +760,13 @@ export function BrowserSidebar({
     )
 
     trackUnlisten(
+      listen<BrowserResizeDragPayload>("browser:resize_drag", (event) => {
+        recordIpcPayloadSample({ boundary: "event", name: "browser:resize_drag", payload: event.payload })
+        applyNativeResizeDrag(event.payload)
+      }),
+    )
+
+    trackUnlisten(
       listen<BrowserToolContextEventPayload>(BROWSER_TOOL_CONTEXT_EVENT, (event) => {
         recordIpcPayloadSample({ boundary: "event", name: BROWSER_TOOL_CONTEXT_EVENT, payload: event.payload })
         void addBrowserToolContextToAgent(event.payload)
@@ -597,7 +788,7 @@ export function BrowserSidebar({
       coalescer.dispose()
       unsubs.forEach((unsub) => unsub())
     }
-  }, [addBrowserToolContextToAgent])
+  }, [addBrowserToolContextToAgent, applyNativeResizeDrag])
 
   // Hydrate tabs when sidebar opens
   useEffect(() => {
@@ -606,8 +797,10 @@ export function BrowserSidebar({
     void safeInvoke<BrowserTabMeta[]>("browser_tab_list").then((list) => {
       if (cancelled || !list) return
       setTabs(list)
+      hasWebviewRef.current = list.length > 0
       const active = list.find((tab) => tab.active) ?? list[0] ?? null
       if (active) {
+        activeTabIdRef.current = active.id
         setActiveTabId(active.id)
         if (active.url && !addressFocusedRef.current) setAddress(active.url)
       }
@@ -624,42 +817,111 @@ export function BrowserSidebar({
       const startX = event.clientX
       const startWidth = widthRef.current
       const ceiling = viewportMaxWidth()
-      let latestWidth = startWidth
-      const widthUpdates = createFrameCoalescer<number>({
-        onFlush: (next) => {
-          setWidth(next)
-          resizeScheduler.schedule()
-        },
-      })
       setMaxWidth(ceiling)
+      isResizingRef.current = true
       setIsResizing(true)
+      const hasBrowserWebview = hasWebviewRef.current || tabsRef.current.length > 0
+      const runtime: BrowserResizeDragRuntime = {
+        latestRect: null,
+        latestWidth: startWidth,
+        nativeActive:
+          isTauri() && hasBrowserWebview && viewportRef.current !== null,
+        finish: null,
+      }
+      resizeDragRuntimeRef.current = runtime
+
+      if (runtime.nativeActive && viewportRef.current) {
+        const rect = viewportRef.current.getBoundingClientRect()
+        runtime.latestRect = readBrowserViewportRectForWidth(
+          viewportRef.current,
+          startWidth,
+          RESIZE_HANDLE_INSET,
+        )
+        void invoke("browser_resize_drag_start", {
+          startClientX: startX,
+          startWidth,
+          right: Math.round(rect.right),
+          top: Math.round(rect.top),
+          height: Math.max(1, Math.round(rect.height)),
+          minWidth: MIN_WIDTH,
+          maxWidth: ceiling,
+          inset: RESIZE_HANDLE_INSET,
+          tabId: activeTabIdRef.current,
+        }).catch(() => {
+          if (resizeDragRuntimeRef.current === runtime) {
+            runtime.nativeActive = false
+          }
+        })
+      }
 
       const previousCursor = document.body.style.cursor
       const previousSelect = document.body.style.userSelect
       document.body.style.cursor = "col-resize"
       document.body.style.userSelect = "none"
 
-      const handleMove = (ev: PointerEvent) => {
-        const delta = startX - ev.clientX
-        latestWidth = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
-        widthUpdates.schedule(latestWidth)
-      }
-      const handleUp = () => {
-        widthUpdates.flush()
+      const cleanupDragListeners = () => {
         window.removeEventListener("pointermove", handleMove)
         window.removeEventListener("pointerup", handleUp)
         window.removeEventListener("pointercancel", handleUp)
         document.body.style.cursor = previousCursor
         document.body.style.userSelect = previousSelect
+      }
+
+      const finishDrag = () => {
+        if (resizeDragRuntimeRef.current !== runtime) return
+        const usedNativeDragTracker = runtime.nativeActive
+        const finalWidth = runtime.latestWidth
+        if (usedNativeDragTracker) {
+          const finalRect =
+            runtime.latestRect ?? markBrowserViewportSyncedToWidth(finalWidth)
+          void invoke("browser_resize_drag_end", {
+            ...(finalRect ?? {}),
+            tabId: activeTabIdRef.current,
+          }).catch(() => {
+            syncBrowserViewportToWidth(finalWidth)
+          })
+        }
+        setSidebarWidthAndSync(finalWidth, {
+          syncBrowser: !usedNativeDragTracker,
+        })
+        cleanupDragListeners()
+        resizeDragRuntimeRef.current = null
+        runtime.nativeActive = false
+        isResizingRef.current = false
         setIsResizing(false)
-        resizeScheduler.schedule({ force: true })
+        if (!usedNativeDragTracker) {
+          resizeScheduler.schedule({ force: true })
+        }
+      }
+      runtime.finish = finishDrag
+
+      const handleMove = (ev: PointerEvent) => {
+        ev.preventDefault()
+        const delta = startX - ev.clientX
+        const latestWidth = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
+        runtime.latestWidth = latestWidth
+        applySidebarWidth(latestWidth)
+        if (runtime.nativeActive) {
+          runtime.latestRect = markBrowserViewportSyncedToWidth(latestWidth)
+        } else {
+          syncBrowserViewportToWidth(latestWidth)
+        }
+      }
+      const handleUp = () => {
+        runtime.finish?.()
       }
 
       window.addEventListener("pointermove", handleMove)
       window.addEventListener("pointerup", handleUp)
       window.addEventListener("pointercancel", handleUp)
     },
-    [resizeScheduler],
+    [
+      applySidebarWidth,
+      markBrowserViewportSyncedToWidth,
+      resizeScheduler,
+      setSidebarWidthAndSync,
+      syncBrowserViewportToWidth,
+    ],
   )
 
   const handleResizeKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -667,13 +929,12 @@ export function BrowserSidebar({
     event.preventDefault()
     const step = event.shiftKey ? 32 : 8
     const ceiling = viewportMaxWidth()
+    const delta = event.key === "ArrowLeft" ? step : -step
+    const nextWidth = Math.max(MIN_WIDTH, Math.min(ceiling, widthRef.current + delta))
     setMaxWidth(ceiling)
-    setWidth((current) => {
-      const delta = event.key === "ArrowLeft" ? step : -step
-      return Math.max(MIN_WIDTH, Math.min(ceiling, current + delta))
-    })
+    setSidebarWidthAndSync(nextWidth)
     resizeScheduler.schedule({ force: true })
-  }, [resizeScheduler])
+  }, [resizeScheduler, setSidebarWidthAndSync])
 
   const openUrl = useCallback(
     (target: string, options?: { tabId?: string; newTab?: boolean }) => {
@@ -700,6 +961,7 @@ export function BrowserSidebar({
       void invoke<BrowserTabMeta>("browser_show", payload)
         .then((meta) => {
           if (meta) {
+            activeTabIdRef.current = meta.id
             setActiveTabId(meta.id)
           }
         })
@@ -754,6 +1016,7 @@ export function BrowserSidebar({
       void invoke<BrowserTabMeta>("browser_tab_focus", { tabId })
         .then((meta) => {
           if (meta) {
+            activeTabIdRef.current = meta.id
             setActiveTabId(meta.id)
             if (meta.url && !addressFocusedRef.current) setAddress(meta.url)
           }
@@ -773,11 +1036,13 @@ export function BrowserSidebar({
           if (!list) return
           setTabs(list)
           if (list.length === 0) {
+            activeTabIdRef.current = null
             setActiveTabId(null)
             setAddress("")
             hasWebviewRef.current = false
           } else {
             const next = list.find((tab) => tab.active) ?? list[0]
+            activeTabIdRef.current = next.id
             setActiveTabId(next.id)
             if (next.url) setAddress(next.url)
           }
@@ -793,6 +1058,23 @@ export function BrowserSidebar({
     if (!isTauri()) return
     openUrl("https://www.google.com/", { newTab: true })
   }, [openUrl])
+
+  const handleOpenProjectBrowserTarget = useCallback(
+    (target: BrowserLaunchTarget) => {
+      setAddress(target.url)
+      openUrl(target.url)
+    },
+    [openUrl],
+  )
+
+  useEffect(() => {
+    if (!open || !openGeometrySettled || !pendingOpenUrl) return
+    if (consumedPendingOpenUrlIdsRef.current.has(pendingOpenUrl.id)) return
+    consumedPendingOpenUrlIdsRef.current.add(pendingOpenUrl.id)
+    setAddress(pendingOpenUrl.url)
+    openUrl(pendingOpenUrl.url)
+    onPendingOpenUrlConsumed?.(pendingOpenUrl.id)
+  }, [onPendingOpenUrlConsumed, open, openGeometrySettled, openUrl, pendingOpenUrl])
 
   // First-run prompt: once a webview exists and the user hasn't been prompted
   // yet, probe installed browsers and pop the banner. Keyed off tabs (not
@@ -832,6 +1114,7 @@ export function BrowserSidebar({
 
   return (
     <aside
+      ref={sidebarRef}
       aria-hidden={!open}
       className={cn(
         widthMotion.islandClassName,
@@ -859,6 +1142,7 @@ export function BrowserSidebar({
       />
 
       <div
+        ref={contentRef}
         className="flex h-full min-w-0 shrink-0 flex-col"
         style={{ width }}
       >
@@ -940,6 +1224,52 @@ export function BrowserSidebar({
             <RotateCw className="h-3.5 w-3.5" />
           )}
         </button>
+        {projectBrowserTargets.length > 1 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                aria-label="Open project app in browser"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+                title="Open project app"
+                type="button"
+              >
+                <FolderGit2 className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              {projectBrowserTargets.map((target) => (
+                <DropdownMenuItem
+                  key={target.id}
+                  className="flex min-w-0 flex-col items-start gap-0.5"
+                  onSelect={() => handleOpenProjectBrowserTarget(target)}
+                >
+                  <span className="max-w-full truncate text-[12px]">{target.label}</span>
+                  <span className="max-w-full truncate font-mono text-[10.5px] text-muted-foreground">
+                    {target.url}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <button
+            aria-label="Open project app in browser"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+            disabled={projectBrowserTargets.length === 0}
+            onClick={() => {
+              const [target] = projectBrowserTargets
+              if (target) handleOpenProjectBrowserTarget(target)
+            }}
+            title={
+              projectBrowserTargets.length === 0
+                ? "No browser-supported project app detected"
+                : "Open project app"
+            }
+            type="button"
+          >
+            <FolderGit2 className="h-3.5 w-3.5" />
+          </button>
+        )}
         <form className="ml-1 flex min-w-0 flex-1" onSubmit={handleSubmit}>
           <input
             aria-label="Address"

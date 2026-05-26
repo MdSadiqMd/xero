@@ -105,12 +105,18 @@ describe('StartTargetsEditor', () => {
 
     const command = screen.getByLabelText('Target 1 command') as HTMLInputElement
     fireEvent.change(command, { target: { value: '  pnpm dev --port 3000  ' } })
+    fireEvent.click(screen.getByRole('switch', { name: 'Target 1 browser supported' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
     expect(onSave).toHaveBeenCalledWith([
-      { id: 'tgt-existing', name: 'web', command: 'pnpm dev --port 3000' },
+      {
+        id: 'tgt-existing',
+        name: 'web',
+        command: 'pnpm dev --port 3000',
+        browserSupported: true,
+      },
     ])
   })
 
@@ -118,8 +124,8 @@ describe('StartTargetsEditor', () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
     const onSuggest = vi.fn().mockResolvedValue({
       targets: [
-        { name: 'web', command: 'pnpm dev' },
-        { name: 'api', command: 'cargo run' },
+        { name: 'web', command: 'pnpm dev', browserSupported: true },
+        { name: 'api', command: 'cargo run', browserSupported: false },
       ],
     })
 
@@ -140,6 +146,8 @@ describe('StartTargetsEditor', () => {
     })
     const name2 = screen.getByLabelText('Target 2 name') as HTMLInputElement
     expect(name2.value).toBe('api')
+    expect(screen.getByRole('switch', { name: 'Target 1 browser supported' })).toBeChecked()
+    expect(screen.getByRole('switch', { name: 'Target 2 browser supported' })).not.toBeChecked()
   })
 
   it('shows the AI model and sends the selected model/provider route', async () => {
