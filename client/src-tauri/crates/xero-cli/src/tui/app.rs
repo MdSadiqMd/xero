@@ -127,6 +127,45 @@ pub struct RuntimeEventRow {
     pub safe_read_approval: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApprovalRequest {
+    pub action_id: String,
+    pub action_type: String,
+    pub title: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecisionChoice {
+    Approve,
+    Deny,
+}
+
+impl ApprovalDecisionChoice {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Approve => "Approve",
+            Self::Deny => "Deny",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Approve => "Allow this action",
+            Self::Deny => "Block this action",
+        }
+    }
+
+    fn approves(self) -> bool {
+        matches!(self, Self::Approve)
+    }
+}
+
+const APPROVAL_DECISION_CHOICES: &[ApprovalDecisionChoice] = &[
+    ApprovalDecisionChoice::Approve,
+    ApprovalDecisionChoice::Deny,
+];
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct RunDetail {
@@ -143,6 +182,7 @@ pub struct RunDetail {
     pub in_progress_reasoning: Option<String>,
     pub tokens_used: Option<u64>,
     pub context_window: Option<u64>,
+    pub pending_approval: Option<PendingApprovalRequest>,
     /// When the run was started in this TUI session. Used to compute live
     /// elapsed time for tool pills that haven't completed yet.
     pub started_at: Option<Instant>,
@@ -176,7 +216,6 @@ fn default_agent_catalog() -> Vec<AgentEntry> {
     // desktop UI.
     [
         ("ask", "Ask"),
-        ("computer_use", "Computer Use"),
         ("plan", "Plan"),
         ("engineer", "Engineer"),
         ("debug", "Debug"),
@@ -211,6 +250,10 @@ fn merge_missing_default_agents(mut agents: Vec<AgentEntry>) -> Vec<AgentEntry> 
         }
     }
     agents
+}
+
+fn is_tui_supported_agent_definition_id(definition_id: &str) -> bool {
+    definition_id != "computer_use"
 }
 
 /// Mirrors `ProviderModelThinkingEffortDto` on the desktop side so cycling
@@ -262,6 +305,93 @@ impl ThinkingEffort {
     }
 }
 
+/// Mirrors the desktop composer approval modes for TUI selection and
+/// cloud-control sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalMode {
+    Suggest,
+    AutoEdit,
+    Yolo,
+}
+
+impl ApprovalMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Suggest => "suggest",
+            Self::AutoEdit => "auto_edit",
+            Self::Yolo => "yolo",
+        }
+    }
+
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::Suggest => "Ask first",
+            Self::AutoEdit => "Auto-edit files",
+            Self::Yolo => "Full auto",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Suggest => "Review edits and commands",
+            Self::AutoEdit => "Edit files; ask before commands",
+            Self::Yolo => "Edit and run safe commands",
+        }
+    }
+
+    pub fn footer_label(self) -> &'static str {
+        match self {
+            Self::Suggest => "ask-first",
+            Self::AutoEdit => "auto-edit",
+            Self::Yolo => "full-auto",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        Some(
+            match value.trim().replace('-', "_").to_ascii_lowercase().as_str() {
+                "suggest" => Self::Suggest,
+                "auto_edit" | "autoedit" => Self::AutoEdit,
+                "yolo" => Self::Yolo,
+                _ => return None,
+            },
+        )
+    }
+
+    fn resolve_for_agent(self, agent_id: &str) -> Self {
+        if approval_modes_for_agent(agent_id).contains(&self) {
+            self
+        } else {
+            Self::default_for_agent(agent_id)
+        }
+    }
+
+    fn default_for_agent(_agent_id: &str) -> Self {
+        Self::Suggest
+    }
+
+    fn next_for_agent(self, agent_id: &str) -> Self {
+        let modes = approval_modes_for_agent(agent_id);
+        let current = self.resolve_for_agent(agent_id);
+        let index = modes.iter().position(|mode| *mode == current).unwrap_or(0);
+        modes[(index + 1) % modes.len()]
+    }
+}
+
+const APPROVAL_SUGGEST_ONLY: &[ApprovalMode] = &[ApprovalMode::Suggest];
+const APPROVAL_FULL_CONTROL: &[ApprovalMode] = &[
+    ApprovalMode::Suggest,
+    ApprovalMode::AutoEdit,
+    ApprovalMode::Yolo,
+];
+
+fn approval_modes_for_agent(agent_id: &str) -> &'static [ApprovalMode] {
+    match agent_id {
+        "ask" | "plan" | "crawl" | "agent_create" => APPROVAL_SUGGEST_ONLY,
+        _ => APPROVAL_FULL_CONTROL,
+    }
+}
+
 pub struct App {
     pub project: ResolvedProject,
     pub providers: Vec<ProviderRow>,
@@ -270,6 +400,8 @@ pub struct App {
     pub agents: Vec<AgentEntry>,
     pub selected_agent: usize,
     pub thinking_effort: ThinkingEffort,
+    pub approval_mode: ApprovalMode,
+    pub approval_choice_index: usize,
     pub composer: String,
     pub composer_cursor: usize,
     pub composer_desired_column: Option<usize>,
@@ -355,6 +487,16 @@ impl App {
             .as_deref()
             .and_then(ThinkingEffort::from_str)
             .unwrap_or(ThinkingEffort::High);
+        let selected_agent_id = agents
+            .get(selected_agent)
+            .map(|agent| agent.definition_id.as_str())
+            .unwrap_or(DEFAULT_SELECTED_AGENT_DEFINITION_ID);
+        let approval_mode = stored
+            .approval_mode
+            .as_deref()
+            .and_then(ApprovalMode::from_str)
+            .unwrap_or_else(|| ApprovalMode::default_for_agent(selected_agent_id))
+            .resolve_for_agent(selected_agent_id);
         let selected_provider = stored
             .provider_id
             .as_deref()
@@ -393,6 +535,8 @@ impl App {
             agents,
             selected_agent,
             thinking_effort,
+            approval_mode,
+            approval_choice_index: 0,
             composer: String::new(),
             composer_cursor: 0,
             composer_desired_column: None,
@@ -460,12 +604,81 @@ impl App {
             return;
         }
         self.selected_agent = (self.selected_agent + 1) % self.agents.len();
+        self.approval_mode = self.selected_approval_mode();
         self.persist_preferences();
     }
 
     pub fn cycle_thinking_effort(&mut self) {
         self.thinking_effort = self.thinking_effort.next();
         self.persist_preferences();
+    }
+
+    pub fn cycle_approval_mode(&mut self) {
+        let agent_id = self
+            .selected_agent_definition_id()
+            .unwrap_or(DEFAULT_SELECTED_AGENT_DEFINITION_ID);
+        self.approval_mode = self.approval_mode.next_for_agent(agent_id);
+        self.persist_preferences();
+    }
+
+    pub fn selected_approval_mode(&self) -> ApprovalMode {
+        let agent_id = self
+            .selected_agent_definition_id()
+            .unwrap_or(DEFAULT_SELECTED_AGENT_DEFINITION_ID);
+        self.approval_mode.resolve_for_agent(agent_id)
+    }
+
+    pub fn approval_modes_for_selected_agent(&self) -> &'static [ApprovalMode] {
+        approval_modes_for_agent(
+            self.selected_agent_definition_id()
+                .unwrap_or(DEFAULT_SELECTED_AGENT_DEFINITION_ID),
+        )
+    }
+
+    pub fn set_approval_mode(&mut self, mode: ApprovalMode) -> bool {
+        let agent_id = self
+            .selected_agent_definition_id()
+            .unwrap_or(DEFAULT_SELECTED_AGENT_DEFINITION_ID);
+        let resolved = mode.resolve_for_agent(agent_id);
+        if resolved != mode {
+            return false;
+        }
+        self.approval_mode = resolved;
+        self.persist_preferences();
+        true
+    }
+
+    pub fn pending_approval(&self) -> Option<&PendingApprovalRequest> {
+        self.run_detail
+            .as_ref()
+            .and_then(|detail| detail.pending_approval.as_ref())
+    }
+
+    pub fn approval_decision_choices(&self) -> &'static [ApprovalDecisionChoice] {
+        APPROVAL_DECISION_CHOICES
+    }
+
+    pub fn selected_approval_decision_index(&self) -> usize {
+        self.approval_choice_index
+            .min(APPROVAL_DECISION_CHOICES.len().saturating_sub(1))
+    }
+
+    pub fn selected_approval_decision(&self) -> ApprovalDecisionChoice {
+        APPROVAL_DECISION_CHOICES[self.selected_approval_decision_index()]
+    }
+
+    pub fn move_approval_decision_selection(&mut self, offset: isize) {
+        let len = APPROVAL_DECISION_CHOICES.len();
+        if len == 0 {
+            self.approval_choice_index = 0;
+            return;
+        }
+        let current = self.selected_approval_decision_index();
+        self.approval_choice_index = if offset.is_negative() {
+            current.saturating_sub(offset.unsigned_abs())
+        } else {
+            (current + offset as usize).min(len - 1)
+        };
     }
 
     pub(crate) fn replace_composer(&mut self, value: impl Into<String>) {
@@ -499,6 +712,7 @@ impl App {
         let preferences = TuiPreferences {
             runtime_agent_id: self.selected_agent_definition_id().map(str::to_owned),
             thinking_effort: Some(self.thinking_effort.label().to_owned()),
+            approval_mode: Some(self.selected_approval_mode().label().to_owned()),
             provider_id: self.selected_provider_id().map(str::to_owned),
             model_id: self.selected_model_id().map(str::to_owned),
         };
@@ -748,6 +962,7 @@ pub(crate) fn sync_active_session_to_cloud(
     };
     let runtime_agent_id = app.selected_agent_definition_id().unwrap_or("generalist");
     let thinking_effort = app.thinking_effort.label();
+    let approval_mode = app.selected_approval_mode().label();
     super::remote::publish_session_added(globals, project_id, session_id)?;
     super::remote::publish_session_controls(
         globals,
@@ -757,6 +972,7 @@ pub(crate) fn sync_active_session_to_cloud(
         model_id,
         runtime_agent_id,
         thinking_effort,
+        approval_mode,
     )
 }
 
@@ -1068,6 +1284,9 @@ fn apply_remote_controls_update(app: &mut App, update: super::remote::RemoteCont
     if app.active_session_id.as_deref() != Some(update.session_id.as_str()) {
         return;
     }
+    if !is_tui_supported_agent_definition_id(&update.runtime_agent_id) {
+        return;
+    }
     let credential_kind = app
         .providers
         .iter()
@@ -1090,6 +1309,12 @@ fn apply_remote_controls_update(app: &mut App, update: super::remote::RemoteCont
     }
     if let Some(thinking_effort) = ThinkingEffort::from_str(&update.thinking_effort) {
         app.thinking_effort = thinking_effort;
+    }
+    if let Some(approval_mode) = ApprovalMode::from_str(&update.approval_mode) {
+        app.approval_mode = approval_mode.resolve_for_agent(
+            app.selected_agent_definition_id()
+                .unwrap_or(DEFAULT_SELECTED_AGENT_DEFINITION_ID),
+        );
     }
     app.persist_preferences();
 }
@@ -1344,6 +1569,30 @@ fn handle_composer_key(
         KeyCode::BackTab => {
             app.cycle_thinking_effort();
             sync_active_session_to_cloud_best_effort(globals, app);
+        }
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
+            if app.pending_approval().is_some() {
+                app.move_approval_decision_selection(1);
+            } else {
+                app.cycle_approval_mode();
+                sync_active_session_to_cloud_best_effort(globals, app);
+            }
+        }
+        KeyCode::Up if app.pending_approval().is_some() => {
+            app.move_approval_decision_selection(-1);
+        }
+        KeyCode::Down if app.pending_approval().is_some() => {
+            app.move_approval_decision_selection(1);
+        }
+        KeyCode::Enter if app.pending_approval().is_some() => {
+            if active_run.is_some() {
+                app.status = Some("Approval command is already running.".into());
+                return KeyOutcome::Continue;
+            }
+            match start_approval_decision_job(globals, app) {
+                Ok(job) => *active_run = Some(job),
+                Err(error) => app.status = Some(error.message),
+            }
         }
         KeyCode::Esc => {
             if !app.composer.is_empty() {
@@ -2536,6 +2785,7 @@ fn start_prompt_job(
         .unwrap_or("engineer")
         .to_owned();
     let thinking_effort = app.thinking_effort.label().to_owned();
+    let approval_mode = app.selected_approval_mode().label().to_owned();
     let run_id = app
         .draft_run_id
         .clone()
@@ -2561,6 +2811,8 @@ fn start_prompt_job(
         runtime_agent_id.clone(),
         "--thinking-effort".to_owned(),
         thinking_effort,
+        "--approval-mode".to_owned(),
+        approval_mode,
         "--prompt".to_owned(),
         prompt.to_owned(),
     ];
@@ -2614,6 +2866,7 @@ fn start_prompt_job(
         in_progress_reasoning: None,
         tokens_used: None,
         context_window: None,
+        pending_approval: None,
         started_at: Some(started_at),
     });
     app.active_run_id = Some(run_id.clone());
@@ -2629,6 +2882,64 @@ fn start_prompt_job(
         agent_session_id,
         run_id,
         clears_pending_attachments: !pending_attachments.is_empty(),
+        receiver,
+    })
+}
+
+fn start_approval_decision_job(
+    globals: &GlobalOptions,
+    app: &mut App,
+) -> Result<PromptJob, CliError> {
+    let project_id = app
+        .project
+        .project_id
+        .clone()
+        .ok_or_else(|| CliError::usage("Approvals require a registered Xero project."))?;
+    let approval = app
+        .pending_approval()
+        .cloned()
+        .ok_or_else(|| CliError::usage("No pending approval is available."))?;
+    let run_id = app
+        .run_detail
+        .as_ref()
+        .map(|detail| detail.run_id.clone())
+        .filter(|run_id| !run_id.trim().is_empty())
+        .ok_or_else(|| CliError::usage("No active run has a pending approval."))?;
+    let decision = app.selected_approval_decision();
+    let command = if decision.approves() {
+        "approve"
+    } else {
+        "deny"
+    };
+    let owned = vec![
+        "conversation".to_owned(),
+        command.to_owned(),
+        "--project-id".to_owned(),
+        project_id.clone(),
+        "--action-id".to_owned(),
+        approval.action_id.clone(),
+        run_id.clone(),
+    ];
+
+    let (sender, receiver) = mpsc::channel();
+    let globals_clone = globals.clone();
+    thread::spawn(move || {
+        let borrowed = owned.iter().map(String::as_str).collect::<Vec<_>>();
+        let _ = sender.send(invoke_json(&globals_clone, &borrowed));
+    });
+
+    app.status = Some(format!("{} {}...", decision.label(), approval.title));
+    app.active_run_id = Some(run_id.clone());
+    app.approval_choice_index = 0;
+
+    Ok(PromptJob {
+        project_id: Some(project_id),
+        agent_session_id: app
+            .active_session_id
+            .clone()
+            .unwrap_or_else(|| generate_id("session")),
+        run_id,
+        clears_pending_attachments: false,
         receiver,
     })
 }
@@ -2707,6 +3018,7 @@ fn load_run_detail(
 }
 
 pub fn run_detail_from_snapshot(snapshot: &JsonValue) -> RunDetail {
+    let status = string_field(snapshot, "status");
     let mut messages = snapshot
         .get("messages")
         .and_then(JsonValue::as_array)
@@ -2765,18 +3077,21 @@ pub fn run_detail_from_snapshot(snapshot: &JsonValue) -> RunDetail {
         std::collections::HashMap::new();
     let mut in_progress_text: Option<String> = None;
     let mut in_progress_reasoning: Option<String> = None;
+    let mut pending_approval: Option<PendingApprovalRequest> = None;
+    let mut resolved_approval_ids = std::collections::HashSet::new();
     let events = snapshot
         .get("events")
         .and_then(JsonValue::as_array)
         .into_iter()
         .flatten()
         .map(|event| {
+            let event_kind = string_field(event, "eventKind");
             let payload = event.get("payload").cloned().unwrap_or(JsonValue::Null);
             // Streamed assistant deltas: take the latest non-empty
             // text/reasoning so the inline preview reflects the most
             // recent state. We let later events overwrite earlier ones
             // since the backend emits cumulative content per delta.
-            if string_field(event, "eventKind") == "message_delta"
+            if event_kind == "message_delta"
                 && payload.get("inProgress").and_then(JsonValue::as_bool) == Some(true)
                 && payload.get("role").and_then(JsonValue::as_str) == Some("assistant")
             {
@@ -2813,7 +3128,7 @@ pub fn run_detail_from_snapshot(snapshot: &JsonValue) -> RunDetail {
             // `payload.dispatch.elapsedMs` (or, on older shapes,
             // `payload.elapsedMs`). Index them so we can join back to
             // the assistant message's tool calls below.
-            if string_field(event, "eventKind") == "tool_completed" {
+            if event_kind == "tool_completed" {
                 if let Some(id) = payload
                     .get("toolCallId")
                     .and_then(JsonValue::as_str)
@@ -2829,8 +3144,23 @@ pub fn run_detail_from_snapshot(snapshot: &JsonValue) -> RunDetail {
                     }
                 }
             }
+            if matches!(event_kind.as_str(), "approval_required" | "action_required") {
+                if let Some(approval) = pending_approval_from_payload(&payload) {
+                    pending_approval = Some(approval);
+                }
+            }
+            if event_kind == "policy_decision" {
+                if let Some(action_id) = payload
+                    .get("actionId")
+                    .or_else(|| payload.get("action_id"))
+                    .and_then(JsonValue::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                {
+                    resolved_approval_ids.insert(action_id.to_owned());
+                }
+            }
             RuntimeEventRow {
-                event_kind: string_field(event, "eventKind"),
+                event_kind,
                 summary: payload
                     .get("summary")
                     .or_else(|| payload.get("message"))
@@ -2886,17 +3216,70 @@ pub fn run_detail_from_snapshot(snapshot: &JsonValue) -> RunDetail {
             }
         }
     }
+    if matches!(
+        status.as_str(),
+        "completed" | "failed" | "cancelled" | "handed_off"
+    ) {
+        pending_approval = None;
+    }
+    if pending_approval
+        .as_ref()
+        .is_some_and(|approval| resolved_approval_ids.contains(&approval.action_id))
+    {
+        pending_approval = None;
+    }
     RunDetail {
         run_id: string_field(snapshot, "runId"),
-        status: string_field(snapshot, "status"),
+        status,
         messages,
         events,
         in_progress_text,
         in_progress_reasoning,
         tokens_used,
         context_window,
+        pending_approval,
         started_at: None,
     }
+}
+
+fn pending_approval_from_payload(payload: &JsonValue) -> Option<PendingApprovalRequest> {
+    let action_id = payload
+        .get("actionId")
+        .or_else(|| payload.get("action_id"))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())?
+        .to_owned();
+    let action_type = payload
+        .get("actionType")
+        .or_else(|| payload.get("action_type"))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("approval")
+        .to_owned();
+    let title = payload
+        .get("title")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Approval required")
+        .to_owned();
+    let detail = payload
+        .get("detail")
+        .or_else(|| payload.get("summary"))
+        .or_else(|| payload.get("message"))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+
+    Some(PendingApprovalRequest {
+        action_id,
+        action_type,
+        title,
+        detail,
+    })
 }
 
 fn u64_field(value: &JsonValue, key: &str) -> Option<u64> {
@@ -2912,6 +3295,7 @@ fn u64_field(value: &JsonValue, key: &str) -> Option<u64> {
 struct TuiPreferences {
     runtime_agent_id: Option<String>,
     thinking_effort: Option<String>,
+    approval_mode: Option<String>,
     provider_id: Option<String>,
     model_id: Option<String>,
 }
@@ -2989,7 +3373,10 @@ fn load_agents(
             definition_id: string_field(definition, "definitionId"),
             display_name: string_field(definition, "displayName"),
         })
-        .filter(|entry| !entry.definition_id.is_empty())
+        .filter(|entry| {
+            !entry.definition_id.is_empty()
+                && is_tui_supported_agent_definition_id(&entry.definition_id)
+        })
         .collect::<Vec<_>>();
     if agents.is_empty() {
         Ok(default_agent_catalog())
@@ -3651,6 +4038,7 @@ pub fn smoke_fake_provider_run(globals: &GlobalOptions) -> Result<JsonValue, Cli
         .unwrap_or("engineer")
         .to_owned();
     let thinking_effort = app.thinking_effort.label().to_owned();
+    let approval_mode = app.selected_approval_mode().label().to_owned();
     let run_id = generate_id("tui-run");
     let project_id = app.project.project_id.clone();
     let mut owned = vec![
@@ -3668,6 +4056,8 @@ pub fn smoke_fake_provider_run(globals: &GlobalOptions) -> Result<JsonValue, Cli
         runtime_agent_id,
         "--thinking-effort".to_owned(),
         thinking_effort,
+        "--approval-mode".to_owned(),
+        approval_mode,
         "--prompt".to_owned(),
         "TUI fake-provider smoke: respond with a compact status line.".to_owned(),
     ];
@@ -3727,6 +4117,8 @@ pub(crate) fn test_only_empty_app() -> App {
         agents: default_agent_catalog(),
         selected_agent: 0,
         thinking_effort: ThinkingEffort::High,
+        approval_mode: ApprovalMode::Suggest,
+        approval_choice_index: 0,
         composer: String::new(),
         composer_cursor: 0,
         composer_desired_column: None,
@@ -4036,6 +4428,8 @@ mod tests {
             agents: default_agent_catalog(),
             selected_agent: 0,
             thinking_effort: ThinkingEffort::High,
+            approval_mode: ApprovalMode::Suggest,
+            approval_choice_index: 0,
             composer: String::new(),
             composer_cursor: 0,
             composer_desired_column: None,
@@ -4255,6 +4649,10 @@ mod tests {
             text.contains("think:high"),
             "missing default thinking-effort indicator"
         );
+        assert!(
+            text.contains("approval:ask-first"),
+            "missing default approval-mode indicator"
+        );
     }
 
     #[test]
@@ -4389,6 +4787,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: None,
         });
         let mut active_run = None;
@@ -4540,6 +4939,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: Some(Instant::now()),
         });
 
@@ -4659,6 +5059,10 @@ mod tests {
         assert!(
             text.contains("think:high"),
             "short viewport should keep the composer agent footer visible"
+        );
+        assert!(
+            text.contains("approval:ask-first"),
+            "short viewport should keep the composer approval footer visible"
         );
         assert!(
             text.contains("ctrl+p /commands"),
@@ -4987,6 +5391,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: None,
         });
         let mut terminal = Terminal::with_options(
@@ -5078,6 +5483,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: None,
         });
         let mut terminal = Terminal::with_options(
@@ -5133,6 +5539,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: Some(Instant::now()),
         });
         let mut terminal = Terminal::with_options(
@@ -5183,6 +5590,7 @@ mod tests {
             in_progress_reasoning: Some("think alpha".into()),
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: Some(Instant::now()),
         });
         let mut terminal = Terminal::with_options(
@@ -5232,6 +5640,7 @@ mod tests {
             in_progress_reasoning: Some("partial reasoning tail".into()),
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: Some(Instant::now()),
         });
 
@@ -5269,6 +5678,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: None,
             context_window: None,
+            pending_approval: None,
             started_at: Some(Instant::now()),
         });
 
@@ -5470,6 +5880,16 @@ mod tests {
     }
 
     #[test]
+    fn default_tui_agent_catalog_omits_computer_use() {
+        assert!(
+            default_agent_catalog()
+                .iter()
+                .all(|agent| agent.definition_id != "computer_use"),
+            "Computer Use should only be available from the desktop client app"
+        );
+    }
+
+    #[test]
     fn thinking_effort_cycle_wraps_after_x_high() {
         let mut effort = ThinkingEffort::None;
         for expected in [
@@ -5486,7 +5906,170 @@ mod tests {
     }
 
     #[test]
-    fn start_prompt_job_passes_selected_agent_and_thinking_to_agent_exec() {
+    fn approval_mode_cycle_wraps_for_write_agents() {
+        let mut app = empty_app();
+        app.selected_agent = app
+            .agents
+            .iter()
+            .position(|agent| agent.definition_id == "engineer")
+            .expect("engineer agent");
+
+        app.cycle_approval_mode();
+        assert_eq!(app.selected_approval_mode(), ApprovalMode::AutoEdit);
+        app.cycle_approval_mode();
+        assert_eq!(app.selected_approval_mode(), ApprovalMode::Yolo);
+        app.cycle_approval_mode();
+        assert_eq!(app.selected_approval_mode(), ApprovalMode::Suggest);
+    }
+
+    #[test]
+    fn approval_mode_falls_back_for_suggest_only_agents() {
+        let mut app = empty_app();
+        app.approval_mode = ApprovalMode::Yolo;
+        app.selected_agent = app
+            .agents
+            .iter()
+            .position(|agent| agent.definition_id == "ask")
+            .expect("ask agent");
+
+        assert_eq!(app.selected_approval_mode(), ApprovalMode::Suggest);
+    }
+
+    #[test]
+    fn run_detail_tracks_unresolved_approval_request() {
+        let snapshot = json!({
+            "runId": "run-approval",
+            "status": "paused",
+            "messages": [],
+            "events": [{
+                "eventKind": "approval_required",
+                "payload": {
+                    "actionId": "action-1",
+                    "actionType": "command",
+                    "title": "Run command?",
+                    "detail": "pnpm test"
+                }
+            }]
+        });
+
+        let detail = run_detail_from_snapshot(&snapshot);
+
+        assert_eq!(
+            detail
+                .pending_approval
+                .as_ref()
+                .map(|approval| approval.action_id.as_str()),
+            Some("action-1")
+        );
+    }
+
+    #[test]
+    fn run_detail_clears_approval_after_policy_decision() {
+        let snapshot = json!({
+            "runId": "run-approval",
+            "status": "paused",
+            "messages": [],
+            "events": [
+                {
+                    "eventKind": "approval_required",
+                    "payload": {
+                        "actionId": "action-1",
+                        "title": "Run command?"
+                    }
+                },
+                {
+                    "eventKind": "policy_decision",
+                    "payload": {
+                        "kind": "approval",
+                        "actionId": "action-1",
+                        "decision": "rejected"
+                    }
+                }
+            ]
+        });
+
+        let detail = run_detail_from_snapshot(&snapshot);
+
+        assert!(detail.pending_approval.is_none());
+    }
+
+    #[test]
+    fn composer_approval_panel_uses_arrow_selection() {
+        let globals = test_only_globals();
+        let mut app = empty_app();
+        app.run_detail = Some(RunDetail {
+            run_id: "run-approval".into(),
+            status: "paused".into(),
+            messages: Vec::new(),
+            events: Vec::new(),
+            in_progress_text: None,
+            in_progress_reasoning: None,
+            tokens_used: None,
+            context_window: None,
+            pending_approval: Some(PendingApprovalRequest {
+                action_id: "action-1".into(),
+                action_type: "command".into(),
+                title: "Run command?".into(),
+                detail: "pnpm test".into(),
+            }),
+            started_at: None,
+        });
+        let mut active_run = None;
+
+        let text = render_to_string(&app, 100, desired_inline_height(&app, 40));
+        assert!(text.contains("> Approve"));
+
+        dispatch_key(&mut app, key(KeyCode::Down), &mut active_run, &globals);
+        let text = render_to_string(&app, 100, desired_inline_height(&app, 40));
+
+        assert!(text.contains("> Deny"));
+    }
+
+    #[test]
+    fn composer_approval_enter_dispatches_selected_decision() {
+        let adapter = RecordingAdapter::default();
+        let calls = Arc::clone(&adapter.calls);
+        let mut globals = test_only_globals();
+        globals.tui_adapter = Some(Arc::new(adapter));
+        let mut app = empty_app();
+        app.project.project_id = Some("project-1".into());
+        app.active_session_id = Some("session-1".into());
+        app.approval_choice_index = 1;
+        app.run_detail = Some(RunDetail {
+            run_id: "run-approval".into(),
+            status: "paused".into(),
+            messages: Vec::new(),
+            events: Vec::new(),
+            in_progress_text: None,
+            in_progress_reasoning: None,
+            tokens_used: None,
+            context_window: None,
+            pending_approval: Some(PendingApprovalRequest {
+                action_id: "action-1".into(),
+                action_type: "command".into(),
+                title: "Run command?".into(),
+                detail: "pnpm test".into(),
+            }),
+            started_at: None,
+        });
+        let mut active_run = None;
+
+        let outcome = dispatch_key(&mut app, enter_key(), &mut active_run, &globals);
+
+        assert!(matches!(outcome, KeyOutcome::Continue));
+        let job = active_run.as_mut().expect("approval job");
+        assert!(job.receiver.recv().expect("approval result").is_ok());
+        let calls = calls.lock().expect("recorded calls");
+        let args = calls.last().expect("approval call");
+        assert_eq!(args[0], "conversation");
+        assert_eq!(args[1], "deny");
+        assert!(has_arg_pair(args, "--project-id", "project-1"));
+        assert!(has_arg_pair(args, "--action-id", "action-1"));
+        assert_eq!(args.last().map(String::as_str), Some("run-approval"));
+    }
+
+    #[test]
+    fn start_prompt_job_passes_selected_controls_to_agent_exec() {
         let adapter = RecordingAdapter::default();
         let calls = Arc::clone(&adapter.calls);
         let mut globals = test_only_globals();
@@ -5504,6 +6087,7 @@ mod tests {
             .position(|agent| agent.definition_id == "ask")
             .expect("ask agent");
         app.thinking_effort = ThinkingEffort::XHigh;
+        app.approval_mode = ApprovalMode::Suggest;
         app.active_session_id = Some("session-ask".into());
 
         let job = start_prompt_job(&globals, &mut app, "What is this project about?")
@@ -5516,6 +6100,7 @@ mod tests {
         assert!(has_arg_pair(args, "--runtime-agent-id", "ask"));
         assert!(has_arg_pair(args, "--agent-definition-id", "ask"));
         assert!(has_arg_pair(args, "--thinking-effort", "x_high"));
+        assert!(has_arg_pair(args, "--approval-mode", "suggest"));
         assert!(has_arg_pair(args, "--session-id", "session-ask"));
         assert!(has_arg_pair(args, "--project-id", "project-1"));
     }
@@ -5671,6 +6256,7 @@ mod tests {
             in_progress_reasoning: None,
             tokens_used: Some(36_400),
             context_window: Some(1_000_000),
+            pending_approval: None,
             started_at: None,
         });
 
@@ -5679,6 +6265,10 @@ mod tests {
         assert!(
             viewport.contains("think:"),
             "viewport missing thinking-effort indicator",
+        );
+        assert!(
+            viewport.contains("approval:"),
+            "viewport missing approval-mode indicator",
         );
         assert!(
             viewport.contains("ctrl+p /commands"),

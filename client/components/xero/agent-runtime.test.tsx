@@ -226,7 +226,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
         approvalMode: 'suggest',
-        approvalModeLabel: 'Suggest',
+        approvalModeLabel: 'Ask first',
         planModeRequired: false,
         autoCompactEnabled: true,
         revision: 1,
@@ -244,7 +244,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
         approvalMode: 'suggest',
-        approvalModeLabel: 'Suggest',
+        approvalModeLabel: 'Ask first',
         planModeRequired: false,
         autoCompactEnabled: true,
         revision: 1,
@@ -2995,7 +2995,7 @@ describe('AgentRuntime current UI', () => {
 
     expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Debug')
     fireEvent.click(screen.getByRole('button', { name: 'Composer settings' }))
-    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveTextContent('Auto edit')
+    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveTextContent('Auto-edit files')
   })
 
   it('renders Agent Create as a built-in suggest-only composer agent', () => {
@@ -3153,7 +3153,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByRole('combobox', { name: 'Model and thinking selector' })).toHaveTextContent('Claude 3.5 Haiku')
     expect(screen.getByRole('combobox', { name: 'Model and thinking selector' })).toHaveTextContent('Low')
     fireEvent.click(screen.getByRole('button', { name: 'Composer settings' }))
-    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveTextContent('YOLO')
+    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveTextContent('Full auto')
     expect(screen.getByRole('switch', { name: 'Auto-compact before sending' })).toHaveAttribute(
       'aria-checked',
       'true',
@@ -3264,7 +3264,7 @@ describe('AgentRuntime current UI', () => {
     fireEvent.click(await screen.findByRole('option', { name: /Engineer/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Composer settings' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'Approval mode' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'YOLO' }))
+    fireEvent.click(await screen.findByRole('option', { name: /Full auto/ }))
     fireEvent.click(screen.getByRole('switch', { name: 'Auto-compact before sending' }))
 
     await waitFor(() => {
@@ -3386,7 +3386,7 @@ describe('AgentRuntime current UI', () => {
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
             approvalMode: 'suggest',
-            approvalModeLabel: 'Suggest',
+            approvalModeLabel: 'Ask first',
             planModeRequired: false,
             autoCompactEnabled: true,
             revision: 1,
@@ -3402,7 +3402,7 @@ describe('AgentRuntime current UI', () => {
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
             approvalMode: 'yolo',
-            approvalModeLabel: 'YOLO',
+            approvalModeLabel: 'Full auto',
             planModeRequired: false,
             autoCompactEnabled: true,
             revision: 2,
@@ -3450,7 +3450,7 @@ describe('AgentRuntime current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
     expect(screen.queryByText('Queued prompt pending the next model-call boundary.')).not.toBeInTheDocument()
-    expect(screen.queryByText('Approval pending · YOLO')).not.toBeInTheDocument()
+    expect(screen.queryByText('Approval pending · Full auto')).not.toBeInTheDocument()
 
     expect(onUpdateRuntimeRunControls).not.toHaveBeenCalled()
   })
@@ -3516,7 +3516,7 @@ describe('AgentRuntime current UI', () => {
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
             approvalMode: 'suggest',
-            approvalModeLabel: 'Suggest',
+            approvalModeLabel: 'Ask first',
             planModeRequired: false,
             autoCompactEnabled: true,
             revision: 1,
@@ -3532,7 +3532,7 @@ describe('AgentRuntime current UI', () => {
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
             approvalMode: 'suggest',
-            approvalModeLabel: 'Suggest',
+            approvalModeLabel: 'Ask first',
             planModeRequired: false,
             autoCompactEnabled: true,
             revision: 2,
@@ -3721,7 +3721,7 @@ describe('AgentRuntime current UI', () => {
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
             approvalMode: 'yolo',
-            approvalModeLabel: 'YOLO',
+            approvalModeLabel: 'Full auto',
             planModeRequired: false,
             autoCompactEnabled: true,
             revision: 3,
@@ -3744,7 +3744,7 @@ describe('AgentRuntime current UI', () => {
     )
     await waitFor(() => expect(screen.getByLabelText('Agent input')).toHaveValue(''))
     fireEvent.click(screen.getByRole('button', { name: 'Composer settings' }))
-    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveTextContent('YOLO')
+    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveTextContent('Full auto')
   })
 
   it('queues runtime agent changes against the active run controls', async () => {

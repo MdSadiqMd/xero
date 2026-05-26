@@ -1255,11 +1255,22 @@ export function getRuntimeRunCheckpointKindLabel(kind: RuntimeRunCheckpointKindD
 export function getRuntimeRunApprovalModeLabel(mode: RuntimeRunApprovalModeDto): string {
   switch (mode) {
     case 'suggest':
-      return 'Suggest'
+      return 'Ask first'
     case 'auto_edit':
-      return 'Auto edit'
+      return 'Auto-edit files'
     case 'yolo':
-      return 'YOLO'
+      return 'Full auto'
+  }
+}
+
+export function getRuntimeRunApprovalModeDescription(mode: RuntimeRunApprovalModeDto): string {
+  switch (mode) {
+    case 'suggest':
+      return 'Review edits and commands'
+    case 'auto_edit':
+      return 'Edit files; ask before commands'
+    case 'yolo':
+      return 'Edit and run safe commands'
   }
 }
 

@@ -293,7 +293,12 @@ export function ComposerDock({
   )
 
   const approvalComposerOptions = useMemo<ComposerSelectOption[]>(
-    () => composerApprovalOptions.map((option) => ({ id: option.value, label: option.label })),
+    () =>
+      composerApprovalOptions.map((option) => ({
+        id: option.value,
+        label: option.label,
+        sublabel: option.sublabel,
+      })),
     [composerApprovalOptions],
   )
 

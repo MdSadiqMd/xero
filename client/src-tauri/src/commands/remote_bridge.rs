@@ -2358,6 +2358,12 @@ fn remote_run_controls_from_payload(
         Some(value) => Some(parse_thinking_effort(value)?),
         None => fallback.and_then(|controls| controls.thinking_effort.clone()),
     };
+    let approval_mode = match payload_string(payload, &["approvalMode", "approval_mode"]) {
+        Some(value) => parse_approval_mode(value)?,
+        None => fallback
+            .map(|controls| controls.approval_mode.clone())
+            .unwrap_or(RuntimeRunApprovalModeDto::Suggest),
+    };
     Ok(Some(RuntimeRunControlInputDto {
         runtime_agent_id,
         agent_definition_id: Some(runtime_agent_id.as_str().to_string()),
@@ -2366,9 +2372,7 @@ fn remote_run_controls_from_payload(
             .or_else(|| fallback.and_then(|controls| controls.provider_profile_id.clone())),
         model_id: model_id.to_string(),
         thinking_effort,
-        approval_mode: fallback
-            .map(|controls| controls.approval_mode.clone())
-            .unwrap_or(RuntimeRunApprovalModeDto::Suggest),
+        approval_mode,
         plan_mode_required: payload_bool(payload, &["planModeRequired", "plan_mode_required"])
             .or_else(|| fallback.map(|controls| controls.plan_mode_required))
             .unwrap_or(false),
@@ -2420,6 +2424,18 @@ fn parse_thinking_effort(value: &str) -> CommandResult<ProviderModelThinkingEffo
         other => Err(CommandError::user_fixable(
             "remote_thinking_effort_unsupported",
             format!("Remote command does not support thinking effort `{other}`."),
+        )),
+    }
+}
+
+fn parse_approval_mode(value: &str) -> CommandResult<RuntimeRunApprovalModeDto> {
+    match value.trim().replace('-', "_").to_ascii_lowercase().as_str() {
+        "suggest" => Ok(RuntimeRunApprovalModeDto::Suggest),
+        "auto_edit" | "autoedit" => Ok(RuntimeRunApprovalModeDto::AutoEdit),
+        "yolo" => Ok(RuntimeRunApprovalModeDto::Yolo),
+        other => Err(CommandError::user_fixable(
+            "remote_approval_mode_unsupported",
+            format!("Remote command does not support approval mode `{other}`."),
         )),
     }
 }
@@ -2654,6 +2670,24 @@ mod tests {
         );
         assert_eq!(controls.approval_mode, RuntimeRunApprovalModeDto::Yolo);
         assert!(controls.plan_mode_required);
+    }
+
+    #[test]
+    fn remote_controls_use_payload_approval_mode_when_present() {
+        let fallback = fallback_controls("gpt-5.4");
+        let controls = remote_run_controls_from_payload(
+            &json!({
+                "agent": "engineer",
+                "modelId": "gpt-5.5",
+                "approvalMode": "auto_edit",
+            }),
+            Some(&fallback),
+            None,
+        )
+        .expect("controls should parse")
+        .expect("controls should be present");
+
+        assert_eq!(controls.approval_mode, RuntimeRunApprovalModeDto::AutoEdit);
     }
 
     #[test]

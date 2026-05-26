@@ -13,6 +13,14 @@ import {
 	ConversationSection,
 	type ConversationTurn,
 } from "@xero/ui/components/transcript/conversation-section";
+import {
+	getRuntimeAgentDescriptor,
+	getRuntimeRunApprovalModeDescription,
+	getRuntimeRunApprovalModeLabel,
+	type RuntimeAgentIdDto,
+	type RuntimeRunApprovalModeDto,
+	runtimeAgentIdSchema,
+} from "@xero/ui/model/runtime";
 import type { Channel } from "phoenix";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoadingScreen } from "#/components/loading-screen";
@@ -43,6 +51,7 @@ interface ControlUpdateOverrides {
 	agentId?: string | null;
 	modelId?: string | null;
 	thinkingEffort?: SessionThinkingEffort | null;
+	approvalMode?: RuntimeRunApprovalModeDto | null;
 	autoCompactEnabled?: boolean | null;
 }
 
@@ -94,12 +103,14 @@ function SessionView() {
 		agentId: string | null;
 		modelId: string | null;
 		thinkingEffort: SessionThinkingEffort | null;
+		approvalMode: RuntimeRunApprovalModeDto | null;
 		autoCompactEnabled: boolean | null;
 	}>({
 		key,
 		agentId: null,
 		modelId: null,
 		thinkingEffort: null,
+		approvalMode: null,
 		autoCompactEnabled: null,
 	});
 	const selectedAgentId =
@@ -108,8 +119,11 @@ function SessionView() {
 		selectedControls.key === key ? selectedControls.modelId : null;
 	const selectedThinkingEffort =
 		selectedControls.key === key ? selectedControls.thinkingEffort : null;
+	const selectedApprovalMode =
+		selectedControls.key === key ? selectedControls.approvalMode : null;
 	const selectedAutoCompactEnabled =
 		selectedControls.key === key ? selectedControls.autoCompactEnabled : null;
+	const currentApprovalMode = transcript?.currentApprovalMode ?? "suggest";
 	const currentAutoCompactEnabled =
 		transcript?.currentAutoCompactEnabled ?? true;
 	const autoCompactEnabled =
@@ -129,6 +143,11 @@ function SessionView() {
 	const resolvedAgentId = isComputerUseSession
 		? "computer_use"
 		: (selectedAgentId ?? currentAgentId ?? selectableAgents[0]?.id ?? null);
+	const resolvedRuntimeAgentId = runtimeAgentIdFromString(resolvedAgentId);
+	const resolvedApprovalMode = resolveApprovalModeForAgent(
+		resolvedRuntimeAgentId,
+		selectedApprovalMode ?? currentApprovalMode,
+	);
 	const resolvedModelId =
 		selectedModelId ?? currentModelId ?? availableModels[0]?.id ?? null;
 	const resolvedModelOption =
@@ -140,6 +159,7 @@ function SessionView() {
 		currentAgentId ?? "",
 		currentModelId ?? "",
 		currentThinkingEffort ?? "",
+		currentApprovalMode,
 		currentAutoCompactEnabled ? "1" : "0",
 	].join("\u0000");
 	const baseThinkingOptionsForModel =
@@ -165,6 +185,14 @@ function SessionView() {
 			label: formatThinkingEffortLabel(effort),
 		}));
 	}, [resolvedModelOption?.thinkingSupported, thinkingOptionsForModel]);
+	const approvalComposerOptions = useMemo<ComposerSelectOption[]>(() => {
+		const descriptor = getRuntimeAgentDescriptor(resolvedRuntimeAgentId);
+		return descriptor.allowedApprovalModes.map((mode) => ({
+			id: mode,
+			label: getRuntimeRunApprovalModeLabel(mode),
+			sublabel: getRuntimeRunApprovalModeDescription(mode),
+		}));
+	}, [resolvedRuntimeAgentId]);
 	const modelGroups = useMemo<ComposerSelectGroup[]>(
 		() => buildComposerModelGroups(availableModels),
 		[availableModels],
@@ -234,6 +262,7 @@ function SessionView() {
 				current.agentId === null &&
 				current.modelId === null &&
 				current.thinkingEffort === null &&
+				current.approvalMode === null &&
 				current.autoCompactEnabled === null
 			) {
 				return current;
@@ -243,6 +272,7 @@ function SessionView() {
 				agentId: null,
 				modelId: null,
 				thinkingEffort: null,
+				approvalMode: null,
 				autoCompactEnabled: null,
 			};
 		});
@@ -323,6 +353,11 @@ function SessionView() {
 				: (overrides.agentId ?? resolvedAgentId);
 			const nextModelId = overrides.modelId ?? resolvedModelId;
 			if (!nextAgentId || !nextModelId) return;
+			const nextRuntimeAgentId = runtimeAgentIdFromString(nextAgentId);
+			const nextApprovalMode = resolveApprovalModeForAgent(
+				nextRuntimeAgentId,
+				overrides.approvalMode ?? resolvedApprovalMode,
+			);
 			const nextModelOption =
 				availableModels.find((option) => option.id === nextModelId) ??
 				resolvedModelOption;
@@ -333,6 +368,7 @@ function SessionView() {
 			const payload: Record<string, unknown> = {
 				agent: nextAgentId,
 				modelId: nextModelOption?.modelId ?? nextModelId,
+				approvalMode: nextApprovalMode,
 				autoCompactEnabled: overrides.autoCompactEnabled ?? autoCompactEnabled,
 			};
 			if (nextModelOption?.providerId) {
@@ -360,6 +396,7 @@ function SessionView() {
 			channel,
 			computerId,
 			resolvedAgentId,
+			resolvedApprovalMode,
 			resolvedModelId,
 			resolvedModelOption,
 			resolvedThinkingEffort,
@@ -392,6 +429,7 @@ function SessionView() {
 				if (resolvedThinkingEffort && resolvedModelOption?.thinkingSupported) {
 					payload.thinkingEffort = resolvedThinkingEffort;
 				}
+				payload.approvalMode = resolvedApprovalMode;
 				payload.autoCompactEnabled = autoCompactEnabled;
 			}
 			const command: InboundCommand = {
@@ -410,6 +448,7 @@ function SessionView() {
 				agentId: null,
 				modelId: null,
 				thinkingEffort: null,
+				approvalMode: null,
 				autoCompactEnabled: null,
 			});
 			attachmentsHook.clearAttachments();
@@ -424,6 +463,7 @@ function SessionView() {
 			followLatestConversation,
 			key,
 			resolvedAgentId,
+			resolvedApprovalMode,
 			resolvedModelId,
 			resolvedModelOption,
 			resolvedThinkingEffort,
@@ -440,6 +480,7 @@ function SessionView() {
 				agentId: current.key === key ? current.agentId : null,
 				modelId: current.key === key ? current.modelId : null,
 				thinkingEffort: current.key === key ? current.thinkingEffort : null,
+				approvalMode: current.key === key ? current.approvalMode : null,
 				autoCompactEnabled: next,
 			}));
 			pushControlUpdate({ autoCompactEnabled: next });
@@ -450,17 +491,22 @@ function SessionView() {
 	const handleAgentChange = useCallback(
 		(agentId: string) => {
 			if (isComputerUseSession) return;
+			const nextApprovalMode = resolveApprovalModeForAgent(
+				runtimeAgentIdFromString(agentId),
+				resolvedApprovalMode,
+			);
 			setSelectedControls((current) => ({
 				key,
 				agentId,
 				modelId: current.key === key ? current.modelId : null,
 				thinkingEffort: current.key === key ? current.thinkingEffort : null,
+				approvalMode: nextApprovalMode,
 				autoCompactEnabled:
 					current.key === key ? current.autoCompactEnabled : null,
 			}));
-			pushControlUpdate({ agentId });
+			pushControlUpdate({ agentId, approvalMode: nextApprovalMode });
 		},
-		[isComputerUseSession, key, pushControlUpdate],
+		[isComputerUseSession, key, pushControlUpdate, resolvedApprovalMode],
 	);
 
 	const handleModelChange = useCallback(
@@ -473,6 +519,7 @@ function SessionView() {
 				agentId: current.key === key ? current.agentId : null,
 				modelId,
 				thinkingEffort: nextThinkingEffort,
+				approvalMode: current.key === key ? current.approvalMode : null,
 				autoCompactEnabled:
 					current.key === key ? current.autoCompactEnabled : null,
 			}));
@@ -492,12 +539,33 @@ function SessionView() {
 				agentId: current.key === key ? current.agentId : null,
 				modelId: current.key === key ? current.modelId : null,
 				thinkingEffort,
+				approvalMode: current.key === key ? current.approvalMode : null,
 				autoCompactEnabled:
 					current.key === key ? current.autoCompactEnabled : null,
 			}));
 			pushControlUpdate({ thinkingEffort });
 		},
 		[key, pushControlUpdate],
+	);
+
+	const handleApprovalModeChange = useCallback(
+		(value: string) => {
+			const approvalMode = resolveApprovalModeForAgent(
+				resolvedRuntimeAgentId,
+				value as RuntimeRunApprovalModeDto,
+			);
+			setSelectedControls((current) => ({
+				key,
+				agentId: current.key === key ? current.agentId : null,
+				modelId: current.key === key ? current.modelId : null,
+				thinkingEffort: current.key === key ? current.thinkingEffort : null,
+				approvalMode,
+				autoCompactEnabled:
+					current.key === key ? current.autoCompactEnabled : null,
+			}));
+			pushControlUpdate({ approvalMode });
+		},
+		[key, pushControlUpdate, resolvedRuntimeAgentId],
 	);
 
 	const hiddenDictation = useMemo<ComposerDictationLike>(
@@ -581,6 +649,13 @@ function SessionView() {
 						thinkingOptions={thinkingComposerOptions}
 						selectedThinkingId={resolvedThinkingEffort}
 						onThinkingChange={handleThinkingChange}
+						approvalOptions={
+							isComputerUseSession ? undefined : approvalComposerOptions
+						}
+						selectedApprovalId={resolvedApprovalMode}
+						onApprovalChange={
+							isComputerUseSession ? undefined : handleApprovalModeChange
+						}
 						pendingAttachments={attachmentsHook.pendingAttachments}
 						onAddFiles={attachmentsHook.addFiles}
 						onRemoveAttachment={attachmentsHook.removeAttachment}
@@ -627,8 +702,9 @@ function useResolvedRemoteMedia({
 			if (!isRuntimeMediaArtifactPayload(payload)) return;
 			if (!payload.ok || !payload.bytesBase64) return;
 			const bytes = base64ToBytes(payload.bytesBase64);
+			const blobBytes = new Uint8Array(bytes);
 			const url = URL.createObjectURL(
-				new Blob([bytes], { type: payload.mediaType }),
+				new Blob([blobBytes.buffer], { type: payload.mediaType }),
 			);
 			const previousUrl = objectUrlsRef.current.get(payload.artifactId);
 			if (previousUrl) URL.revokeObjectURL(previousUrl);
@@ -864,6 +940,22 @@ function defaultThinkingEffortForModel(
 			? option.thinkingEffortOptions[0]
 			: null)
 	);
+}
+
+function runtimeAgentIdFromString(value: string | null): RuntimeAgentIdDto {
+	const parsed = runtimeAgentIdSchema.safeParse(value);
+	return parsed.success ? parsed.data : "ask";
+}
+
+function resolveApprovalModeForAgent(
+	runtimeAgentId: RuntimeAgentIdDto,
+	approvalMode: RuntimeRunApprovalModeDto | null | undefined,
+): RuntimeRunApprovalModeDto {
+	const descriptor = getRuntimeAgentDescriptor(runtimeAgentId);
+	if (approvalMode && descriptor.allowedApprovalModes.includes(approvalMode)) {
+		return approvalMode;
+	}
+	return descriptor.defaultApprovalMode;
 }
 
 function providerLabelForId(providerId: string | null): string | null {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	modelOptionId,
 	normalizeModelOptions,
+	parseApprovalMode,
 	parseThinkingEffort,
 	useSessionStore,
 	type VisibleSessionSummary,
@@ -556,11 +557,13 @@ describe("session store", () => {
 		useSessionStore.getState().updateControls(key, {
 			agentId: "ask",
 			modelId: "gpt-5.5",
+			approvalMode: "auto_edit",
 		});
 
 		expect(useSessionStore.getState().transcripts[key]).toMatchObject({
 			currentAgentId: "ask",
 			currentModelId: "gpt-5.5",
+			currentApprovalMode: "auto_edit",
 			availableModels: [
 				{
 					id: "gpt-5.5",
@@ -628,6 +631,12 @@ describe("session store", () => {
 
 	it("accepts disabled thinking as a synced control value", () => {
 		expect(parseThinkingEffort("none")).toBe("none");
+	});
+
+	it("accepts approval modes as synced control values", () => {
+		expect(parseApprovalMode("auto-edit")).toBe("auto_edit");
+		expect(parseApprovalMode("yolo")).toBe("yolo");
+		expect(parseApprovalMode("ship_it")).toBeNull();
 	});
 
 	it("preserves provider labels when normalizing cloud model options", () => {

@@ -25,6 +25,7 @@ describe("remoteVisibleSessionUpdateFromEnvelope", () => {
 					providerProfileId: "xai-default",
 					modelId: "grok-4.3",
 					thinkingEffort: "low",
+					approvalMode: "auto_edit",
 					autoCompactEnabled: false,
 				},
 			}),
@@ -35,6 +36,7 @@ describe("remoteVisibleSessionUpdateFromEnvelope", () => {
 			providerId: "xai",
 			providerProfileId: "xai-default",
 			thinkingEffort: "low",
+			approvalMode: "auto_edit",
 			autoCompactEnabled: false,
 		});
 	});
@@ -62,6 +64,7 @@ describe("remoteVisibleSessionUpdateFromEnvelope", () => {
 					providerId: "xai",
 					providerProfileId: "xai-default",
 					modelId: "grok-4.3",
+					approvalMode: "yolo",
 				},
 			}),
 		).toMatchObject({
@@ -69,6 +72,7 @@ describe("remoteVisibleSessionUpdateFromEnvelope", () => {
 			modelId: "xai-default:grok-4.3",
 			rawModelId: "grok-4.3",
 			providerId: "xai",
+			approvalMode: "yolo",
 		});
 	});
 

@@ -25,6 +25,9 @@ const INPUT_FOOTER_GAP_ROWS: u16 = 1;
 const VERTICAL_PAD_ROWS: u16 = 1;
 
 pub fn height(app: &App) -> u16 {
+    if app.pending_approval().is_some() {
+        return approval_panel_rows(app) + 2 * VERTICAL_PAD_ROWS + INPUT_FOOTER_GAP_ROWS + 1;
+    }
     let display = app.composer_display();
     let typed_rows = input_rows(&display.text).len();
     let input_rows = typed_rows.clamp(VISIBLE_INPUT_ROWS, MAX_INPUT_ROWS) as u16;
@@ -58,6 +61,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(surface, surface_area);
 
     let bg = theme::composer_bg_color();
+    if app.pending_approval().is_some() {
+        render_approval_panel(frame, surface_area, app, bg);
+        return;
+    }
+
     let display = app.composer_display();
     let typed_rows = input_rows(&display.text);
     let cursor = display.cursor;
@@ -155,6 +163,90 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .style(theme::composer_bg())
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, surface_area);
+}
+
+fn render_approval_panel(
+    frame: &mut Frame<'_>,
+    surface_area: Rect,
+    app: &App,
+    bg: ratatui::style::Color,
+) {
+    let footer_rows = u16::from(surface_area.height >= 2);
+    let top_pad_rows = u16::from(surface_area.height >= 4);
+    let bottom_pad_rows = u16::from(surface_area.height >= 5);
+    let gap_rows = u16::from(surface_area.height >= 6);
+    let available_approval_rows = surface_area
+        .height
+        .saturating_sub(footer_rows + top_pad_rows + bottom_pad_rows + gap_rows);
+
+    let mut lines = Vec::with_capacity(surface_area.height as usize);
+    for _ in 0..top_pad_rows {
+        lines.push(stripe_only_line(bg));
+    }
+    lines.extend(
+        approval_panel_lines(app, surface_area.width, bg)
+            .into_iter()
+            .take(available_approval_rows as usize),
+    );
+    for _ in 0..gap_rows {
+        lines.push(stripe_only_line(bg));
+    }
+    if footer_rows > 0 {
+        lines.push(agent_footer_line(app));
+    }
+    for _ in 0..bottom_pad_rows {
+        lines.push(stripe_only_line(bg));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .style(theme::composer_bg())
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, surface_area);
+}
+
+fn approval_panel_rows(app: &App) -> u16 {
+    let Some(approval) = app.pending_approval() else {
+        return 0;
+    };
+    let detail_rows = u16::from(!approval.detail.trim().is_empty());
+    1 + detail_rows + app.approval_decision_choices().len() as u16
+}
+
+fn approval_panel_lines(app: &App, width: u16, bg: ratatui::style::Color) -> Vec<Line<'static>> {
+    let Some(approval) = app.pending_approval() else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    let title = truncate_for_width(&approval.title, width.saturating_sub(2) as usize);
+    lines.push(Line::from(vec![
+        Span::styled(format!("{} ", theme::STRIPE_GLYPH), theme::accent().bg(bg)),
+        Span::styled(title, theme::accent().bg(bg)),
+    ]));
+    if !approval.detail.trim().is_empty() {
+        let detail = truncate_for_width(approval.detail.trim(), width.saturating_sub(2) as usize);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", theme::STRIPE_GLYPH), theme::accent().bg(bg)),
+            Span::styled(detail, theme::muted().bg(bg)),
+        ]));
+    }
+    let selected = app.selected_approval_decision_index();
+    for (index, choice) in app.approval_decision_choices().iter().enumerate() {
+        let selected_option = index == selected;
+        let prefix = if selected_option { "> " } else { "  " };
+        let label = format!("{prefix}{}", choice.label());
+        let description = format!("  {}", choice.description());
+        let label_style = if selected_option {
+            cursor_style()
+        } else {
+            theme::fg().bg(bg)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", theme::STRIPE_GLYPH), theme::accent().bg(bg)),
+            Span::styled(label, label_style),
+            Span::styled(description, theme::muted().bg(bg)),
+        ]));
+    }
+    lines
 }
 
 #[derive(Clone, Copy)]
@@ -295,6 +387,7 @@ fn agent_footer_line(app: &App) -> Line<'static> {
         theme::muted().bg(bg)
     };
     let effort = format!("think:{}", app.thinking_effort.label());
+    let approval = format!("approval:{}", app.selected_approval_mode().footer_label());
 
     Line::from(vec![
         Span::styled(format!("{} ", theme::STRIPE_GLYPH), theme::accent().bg(bg)),
@@ -305,6 +398,8 @@ fn agent_footer_line(app: &App) -> Line<'static> {
         Span::styled(profile, profile_style),
         Span::styled(" · ", theme::dim().bg(bg)),
         Span::styled(effort, theme::muted().bg(bg)),
+        Span::styled(" · ", theme::dim().bg(bg)),
+        Span::styled(approval, theme::muted().bg(bg)),
     ])
 }
 

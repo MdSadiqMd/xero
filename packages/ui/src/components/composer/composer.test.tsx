@@ -227,7 +227,7 @@ describe("Composer", () => {
 
 	it("shows the approval selector only when more than one option is available", () => {
 		const { onSubmit } = renderComposer({
-			approvalOptions: [{ id: "suggest", label: "Suggest" }],
+			approvalOptions: [{ id: "suggest", label: "Ask first" }],
 			selectedApprovalId: "suggest",
 			onApprovalChange: vi.fn(),
 		});
@@ -238,8 +238,8 @@ describe("Composer", () => {
 	it("renders the approval selector with multiple options", () => {
 		renderComposer({
 			approvalOptions: [
-				{ id: "suggest", label: "Suggest" },
-				{ id: "auto", label: "Auto-edit" },
+				{ id: "suggest", label: "Ask first" },
+				{ id: "auto", label: "Auto-edit files" },
 			],
 			selectedApprovalId: "suggest",
 			onApprovalChange: vi.fn(),

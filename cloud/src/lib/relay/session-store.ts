@@ -1,4 +1,5 @@
 import type { ConversationTurn } from "@xero/ui/components/transcript/conversation-section";
+import type { RuntimeRunApprovalModeDto } from "@xero/ui/model/runtime";
 import { create } from "zustand";
 import { appendConversationTurn } from "./stream-projection";
 
@@ -33,6 +34,8 @@ export type SessionThinkingEffort =
 	| "medium"
 	| "high"
 	| "x_high";
+export type SessionApprovalMode = RuntimeRunApprovalModeDto;
+export const DEFAULT_SESSION_APPROVAL_MODE: SessionApprovalMode = "suggest";
 
 export interface SessionModelOption {
 	id: string;
@@ -113,6 +116,7 @@ export interface SessionTranscript {
 	currentAgentId: string | null;
 	currentModelId: string | null;
 	currentThinkingEffort: SessionThinkingEffort | null;
+	currentApprovalMode?: SessionApprovalMode;
 	currentAutoCompactEnabled: boolean;
 	contextSnapshot?: SessionContextSnapshot | null;
 	contextSnapshotError?: SessionContextError | null;
@@ -153,6 +157,7 @@ interface SessionStoreState {
 			providerId?: string | null;
 			providerProfileId?: string | null;
 			thinkingEffort?: SessionThinkingEffort | null;
+			approvalMode?: SessionApprovalMode;
 			autoCompactEnabled?: boolean;
 		},
 	) => void;
@@ -499,6 +504,10 @@ export const useSessionStore = create<SessionStoreState>((set) => ({
 				controls.thinkingEffort === undefined
 					? current.currentThinkingEffort
 					: controls.thinkingEffort;
+			const currentApprovalMode =
+				controls.approvalMode === undefined
+					? (current.currentApprovalMode ?? DEFAULT_SESSION_APPROVAL_MODE)
+					: controls.approvalMode;
 			const currentAutoCompactEnabled =
 				controls.autoCompactEnabled === undefined
 					? current.currentAutoCompactEnabled
@@ -511,6 +520,7 @@ export const useSessionStore = create<SessionStoreState>((set) => ({
 						currentAgentId: currentAgentId ?? null,
 						currentModelId: currentModelId ?? null,
 						currentThinkingEffort: currentThinkingEffort ?? null,
+						currentApprovalMode,
 						currentAutoCompactEnabled,
 						availableModels: ensureModelOption(
 							current.availableModels,
@@ -635,6 +645,24 @@ export function parseThinkingEffort(
 			return trimmed;
 		case "xhigh":
 			return "x_high";
+		default:
+			return null;
+	}
+}
+
+export function parseApprovalMode(
+	value: string | null | undefined,
+): SessionApprovalMode | null {
+	if (typeof value !== "string") return null;
+	switch (value.trim().toLowerCase()) {
+		case "suggest":
+			return "suggest";
+		case "auto_edit":
+		case "auto-edit":
+		case "autoedit":
+			return "auto_edit";
+		case "yolo":
+			return "yolo";
 		default:
 			return null;
 	}

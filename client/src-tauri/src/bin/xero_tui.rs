@@ -1213,6 +1213,10 @@ fn handle_agent_exec_command(state_dir: &Path, args: &[String]) -> Result<JsonVa
     let thinking_effort = option_value(args, "--thinking-effort")
         .map(|value| parse_thinking_effort(&value))
         .transpose()?;
+    let approval_mode = option_value(args, "--approval-mode")
+        .map(|value| parse_approval_mode(&value))
+        .transpose()?
+        .unwrap_or(RuntimeRunApprovalModeDto::Suggest);
     let attachments = parse_staged_attachments(
         option_value(args, "--attachments-json")
             .as_deref()
@@ -1236,7 +1240,7 @@ fn handle_agent_exec_command(state_dir: &Path, args: &[String]) -> Result<JsonVa
                 provider_profile_id: Some(provider_profile_id),
                 model_id,
                 thinking_effort,
-                approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                approval_mode,
                 plan_mode_required: false,
                 auto_compact_enabled: true,
             }),
@@ -1299,6 +1303,18 @@ fn parse_thinking_effort(value: &str) -> Result<ProviderModelThinkingEffortDto, 
             format!(
                 "Unknown thinking effort `{other}`. Use none, minimal, low, medium, high, or x_high."
             ),
+        )),
+    }
+}
+
+fn parse_approval_mode(value: &str) -> Result<RuntimeRunApprovalModeDto, CommandError> {
+    match value.trim().replace('-', "_").to_ascii_lowercase().as_str() {
+        "suggest" => Ok(RuntimeRunApprovalModeDto::Suggest),
+        "auto_edit" | "autoedit" => Ok(RuntimeRunApprovalModeDto::AutoEdit),
+        "yolo" => Ok(RuntimeRunApprovalModeDto::Yolo),
+        other => Err(CommandError::user_fixable(
+            "xero_tui_approval_mode_invalid",
+            format!("Unknown approval mode `{other}`. Use suggest, auto_edit, or yolo."),
         )),
     }
 }

@@ -628,7 +628,7 @@ fn command_agent_exec(
     if take_help(&args) {
         return Ok(response(
             &globals,
-            "Usage: xero agent exec [PROMPT] [--project-id ID] [--session-id ID] [--run-id ID] [--runtime-agent-id ID] [--agent-definition-id ID] [--thinking-effort minimal|low|medium|high|x_high] [--attachments-json JSON] --provider ID [--model ID]\nRuns a headless owned-agent turn through the shared Xero runtime. Attachments require the desktop-backed TUI runtime. Use --provider fake_provider only for harness tests.",
+            "Usage: xero agent exec [PROMPT] [--project-id ID] [--session-id ID] [--run-id ID] [--runtime-agent-id ID] [--agent-definition-id ID] [--thinking-effort minimal|low|medium|high|x_high] [--approval-mode suggest|auto_edit|yolo] [--attachments-json JSON] --provider ID [--model ID]\nRuns a headless owned-agent turn through the shared Xero runtime. Attachments require the desktop-backed TUI runtime. Use --provider fake_provider only for harness tests.",
             json!({ "command": "agent exec" }),
         ));
     }
@@ -646,6 +646,7 @@ fn command_agent_exec(
     let thinking_effort = take_option(&mut args, "--thinking-effort")?
         .map(|effort| normalize_cli_thinking_effort(&effort))
         .transpose()?;
+    let requested_approval_mode = take_option(&mut args, "--approval-mode")?;
     if take_option(&mut args, "--attachments-json")?.is_some() {
         return Err(CliError::usage(
             "Attachments require the desktop-backed Xero TUI runtime.",
@@ -664,6 +665,14 @@ fn command_agent_exec(
     let (project_id, store) = open_run_store_for_provider(&globals, project_id, &provider)?;
     let agent_definition = store
         .resolve_agent_definition_for_run(agent_definition_id.as_deref(), &runtime_agent_id)?;
+    let default_approval_mode = if globals.ci {
+        "strict"
+    } else if headless_runtime_agent_allows_writes(&runtime_agent_id) {
+        "on_request"
+    } else {
+        "suggest"
+    };
+    let approval_mode = requested_approval_mode.unwrap_or_else(|| default_approval_mode.into());
     let provider = provider
         .with_project_workspace(&store)
         .with_workspace_writes(headless_runtime_agent_allows_writes(&runtime_agent_id));
@@ -695,15 +704,8 @@ fn command_agent_exec(
                 agent_definition_id: Some(agent_definition.definition_id),
                 agent_definition_version: Some(agent_definition.version),
                 thinking_effort,
-                approval_mode: if globals.ci {
-                    "strict"
-                } else if headless_runtime_agent_allows_writes(&runtime_agent_id) {
-                    "on_request"
-                } else {
-                    "suggest"
-                }
-                .into(),
-                plan_mode_required: globals.ci,
+                approval_mode: approval_mode.clone(),
+                plan_mode_required: globals.ci || approval_mode == "strict",
             }),
         })
         .map_err(core_error)?;

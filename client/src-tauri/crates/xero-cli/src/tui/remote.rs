@@ -21,21 +21,13 @@ use xero_remote_bridge::{
     InboundCommand, InboundCommandKind, RemoteBridge,
 };
 
-use crate::{
-    generate_id,
-    project_cli::{
-        ensure_global_computer_use_project, GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
-        GLOBAL_COMPUTER_USE_PROJECT_ID, GLOBAL_COMPUTER_USE_PROJECT_NAME,
-    },
-    CliError, GlobalOptions,
-};
+use crate::{generate_id, CliError, GlobalOptions};
 
 use super::app::invoke_json;
 
 type TuiRemoteBridge = RemoteBridge<FileIdentityStore>;
 const REMOTE_RUN_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const REMOTE_RUN_FINAL_LOAD_RETRY_LIMIT: u8 = 20;
-const REMOTE_COMPUTER_USE_SESSION_ID: &str = "__computer_use__";
 
 #[derive(Default)]
 struct TuiRemoteBridgeState {
@@ -91,6 +83,7 @@ struct ProviderChoice {
 struct TuiRemotePreferences {
     runtime_agent_id: Option<String>,
     thinking_effort: Option<String>,
+    approval_mode: Option<String>,
     provider_id: Option<String>,
     model_id: Option<String>,
 }
@@ -102,6 +95,7 @@ pub(crate) struct RemoteControlsUpdate {
     pub model_id: String,
     pub runtime_agent_id: String,
     pub thinking_effort: String,
+    pub approval_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +114,7 @@ struct RemoteRunSpec {
     choice: ProviderChoice,
     runtime_agent_id: String,
     thinking_effort: String,
+    approval_mode: String,
     prompt: String,
     attachments: Vec<JsonValue>,
 }
@@ -151,7 +146,7 @@ pub(crate) fn publish_session_added(
         return Ok(());
     };
     let located = locate_remote_session_in_project(globals, project_id, session_id, true)?;
-    if located.remote_session_id == REMOTE_COMPUTER_USE_SESSION_ID {
+    if remote_session_kind_value(&located.session) == "computer_use" {
         return Ok(());
     }
     publish_session_added_to_bridge(&bridge, &located)
@@ -167,6 +162,9 @@ pub(crate) fn publish_session_snapshot_with_run(
         return Ok(());
     };
     let located = locate_remote_session_in_project(globals, project_id, session_id, false)?;
+    if remote_session_kind_value(&located.session) == "computer_use" {
+        return Ok(());
+    }
     publish_session_snapshot_to_bridge(&bridge, globals, &located, latest_run)
 }
 
@@ -178,18 +176,26 @@ pub(crate) fn publish_session_controls(
     model_id: &str,
     runtime_agent_id: &str,
     thinking_effort: &str,
+    approval_mode: &str,
 ) -> Result<(), CliError> {
     let Some(bridge) = remote_state().start_if_registered(globals)? else {
         return Ok(());
     };
+    if runtime_agent_id == "computer_use" {
+        return Ok(());
+    }
     let payload = json!({
         "providerId": provider_id,
         "modelId": model_id,
         "agent": runtime_agent_id,
         "thinkingEffort": thinking_effort,
+        "approvalMode": approval_mode,
     });
     let choice = provider_choice_from_payload(globals, &payload)?;
     let located = locate_remote_session_in_project(globals, project_id, session_id, true)?;
+    if remote_session_kind_value(&located.session) == "computer_use" {
+        return Ok(());
+    }
     let run = remote_runtime_run_payload(
         project_id,
         session_id,
@@ -197,6 +203,7 @@ pub(crate) fn publish_session_controls(
         &choice,
         runtime_agent_id,
         thinking_effort,
+        approval_mode,
         "completed",
     );
     send_command_ok(
@@ -464,11 +471,6 @@ fn route_archive_session(
             "session_id",
         ],
     )?;
-    if session_id == REMOTE_COMPUTER_USE_SESSION_ID {
-        return Err(CliError::usage(
-            "Computer Use is global and cannot be archived from the project session list.",
-        ));
-    }
     invoke_json(
         globals,
         &["session", "archive", "--project-id", project_id, session_id],
@@ -520,11 +522,6 @@ fn route_start_session(
 ) -> Result<(), CliError> {
     let session_kind = remote_session_kind_from_payload(&command.payload)?;
     ensure_remote_payload_matches_session_kind(&command.payload, session_kind)?;
-    if session_kind == "computer_use" {
-        let prompt =
-            payload_string(&command.payload, &["prompt", "message"]).map(ToOwned::to_owned);
-        return route_start_computer_use_session(globals, bridge, command, prompt.as_deref());
-    }
 
     let project = locate_project_for_remote_start(globals, &command.payload)?;
     let session_id = generate_id("session");
@@ -575,43 +572,6 @@ fn route_start_session(
     run_remote_prompt(globals, bridge, &located, &command.payload, prompt)
 }
 
-fn route_start_computer_use_session(
-    globals: &GlobalOptions,
-    bridge: Arc<TuiRemoteBridge>,
-    command: InboundCommand,
-    prompt: Option<&str>,
-) -> Result<(), CliError> {
-    let located = locate_global_computer_use_session(globals)?;
-    let mut session_payload = remote_session_result_payload(&located);
-    if let Some(payload) = session_payload.as_object_mut() {
-        payload.insert("run".to_owned(), JsonValue::Null);
-    }
-
-    bridge
-        .forward_control_event(
-            REMOTE_COMPUTER_USE_SESSION_ID,
-            json!({
-                "schema": "xero.remote_session_started.v1",
-                "result": session_payload.clone(),
-            }),
-        )
-        .map_err(map_bridge_error)?;
-    bridge
-        .forward_control_event(
-            "__new__",
-            json!({
-                "schema": "xero.remote_session_started.v1",
-                "result": session_payload,
-            }),
-        )
-        .map_err(map_bridge_error)?;
-
-    let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) else {
-        return Ok(());
-    };
-    run_remote_prompt(globals, bridge, &located, &command.payload, prompt)
-}
-
 fn route_send_message(
     globals: &GlobalOptions,
     bridge: Arc<TuiRemoteBridge>,
@@ -640,17 +600,17 @@ fn run_remote_prompt(
     let attachments = remote_attachments_from_payload(payload)?;
     let choice = provider_choice_from_payload(globals, payload)?;
     let session_kind = remote_session_kind_value(&located.session);
+    ensure_tui_remote_session_kind_supported(session_kind)?;
     ensure_remote_payload_matches_session_kind(payload, session_kind)?;
     let runtime_agent_id =
         payload_string(payload, &["agent", "runtimeAgentId", "runtime_agent_id"])
-            .unwrap_or(if session_kind == "computer_use" {
-                "computer_use"
-            } else {
-                "engineer"
-            })
+            .unwrap_or("engineer")
             .to_owned();
     let thinking_effort = payload_string(payload, &["thinkingEffort", "thinking_effort"])
         .unwrap_or("high")
+        .to_owned();
+    let approval_mode = payload_string(payload, &["approvalMode", "approval_mode"])
+        .unwrap_or("suggest")
         .to_owned();
     let run_id = generate_id("tui-run");
     let accepted_run = remote_runtime_run_payload(
@@ -660,6 +620,7 @@ fn run_remote_prompt(
         &choice,
         &runtime_agent_id,
         &thinking_effort,
+        &approval_mode,
         "running",
     );
     send_command_ok(
@@ -679,6 +640,7 @@ fn run_remote_prompt(
         choice,
         runtime_agent_id,
         thinking_effort,
+        approval_mode,
         prompt: prompt.to_owned(),
         attachments,
     };
@@ -710,6 +672,8 @@ fn invoke_agent_prompt(
         spec.runtime_agent_id.clone(),
         "--thinking-effort".to_owned(),
         spec.thinking_effort.clone(),
+        "--approval-mode".to_owned(),
+        spec.approval_mode.clone(),
         "--prompt".to_owned(),
         spec.prompt.clone(),
     ];
@@ -962,9 +926,10 @@ fn publish_remote_run_snapshot_best_effort(
                 remote_session_id: spec.remote_session_id.clone(),
             });
     located.remote_session_id = spec.remote_session_id.clone();
-    if located.remote_session_id != REMOTE_COMPUTER_USE_SESSION_ID {
-        let _ = publish_session_added_to_bridge(bridge, &located);
+    if remote_session_kind_value(&located.session) == "computer_use" {
+        return;
     }
+    let _ = publish_session_added_to_bridge(bridge, &located);
     let _ = publish_session_snapshot_to_bridge(bridge, globals, &located, latest_snapshot);
 }
 
@@ -1139,19 +1104,18 @@ fn route_update_session_controls(
     let located = locate_remote_session(globals, session_id)?;
     let local_session_id = required_session_id(&located.session)?.to_owned();
     let session_kind = remote_session_kind_value(&located.session);
+    ensure_tui_remote_session_kind_supported(session_kind)?;
     ensure_remote_payload_matches_session_kind(&command.payload, session_kind)?;
     let choice = provider_choice_from_payload(globals, &command.payload)?;
     let runtime_agent_id = payload_string(
         &command.payload,
         &["agent", "runtimeAgentId", "runtime_agent_id"],
     )
-    .unwrap_or(if session_kind == "computer_use" {
-        "computer_use"
-    } else {
-        "engineer"
-    });
+    .unwrap_or("engineer");
     let thinking_effort =
         payload_string(&command.payload, &["thinkingEffort", "thinking_effort"]).unwrap_or("high");
+    let approval_mode =
+        payload_string(&command.payload, &["approvalMode", "approval_mode"]).unwrap_or("suggest");
     let run = remote_runtime_run_payload(
         &located.project_id,
         &local_session_id,
@@ -1159,6 +1123,7 @@ fn route_update_session_controls(
         &choice,
         runtime_agent_id,
         thinking_effort,
+        approval_mode,
         "completed",
     );
     send_command_ok(
@@ -1173,6 +1138,7 @@ fn route_update_session_controls(
         model_id: choice.model_id,
         runtime_agent_id: runtime_agent_id.to_owned(),
         thinking_effort: thinking_effort.to_owned(),
+        approval_mode: approval_mode.to_owned(),
     }));
     Ok(())
 }
@@ -1469,22 +1435,25 @@ fn draft_runtime_run_from_preferences(
     });
     let choice = provider_choice_from_payload(globals, &payload)?;
     let session_kind = remote_session_kind_value(&located.session);
-    let runtime_agent_id = if session_kind == "computer_use" {
-        "computer_use"
-    } else {
-        preferences
-            .runtime_agent_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("generalist")
-    };
+    ensure_tui_remote_session_kind_supported(session_kind)?;
+    let runtime_agent_id = preferences
+        .runtime_agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("generalist");
     let thinking_effort = preferences
         .thinking_effort
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("high");
+    let approval_mode = preferences
+        .approval_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("suggest");
     Ok(Some(remote_runtime_run_payload(
         &located.project_id,
         session_id,
@@ -1492,6 +1461,7 @@ fn draft_runtime_run_from_preferences(
         &choice,
         runtime_agent_id,
         thinking_effort,
+        approval_mode,
         "completed",
     )))
 }
@@ -1647,7 +1617,6 @@ fn merge_latest_run_snapshot(runs: &mut Vec<JsonValue>, latest_run: &JsonValue) 
 fn remote_available_agents() -> Vec<JsonValue> {
     vec![
         json!({ "id": "ask", "label": "Ask" }),
-        json!({ "id": "computer_use", "label": "Computer Use" }),
         json!({ "id": "plan", "label": "Plan" }),
         json!({ "id": "engineer", "label": "Engineer" }),
         json!({ "id": "debug", "label": "Debug" }),
@@ -1922,9 +1891,6 @@ fn locate_remote_session(
     if session_id.trim().is_empty() {
         return Err(CliError::usage("Missing agent session id."));
     }
-    if session_id == REMOTE_COMPUTER_USE_SESSION_ID {
-        return locate_global_computer_use_session(globals);
-    }
     for project in remote_project_summaries(globals)? {
         let Some(project_id) = string_field(&project, "projectId") else {
             continue;
@@ -1932,6 +1898,7 @@ fn locate_remote_session(
         if let Ok(located) =
             locate_remote_session_in_project(globals, &project_id, session_id, false)
         {
+            ensure_tui_remote_session_kind_supported(remote_session_kind_value(&located.session))?;
             return Ok(located);
         }
     }
@@ -1939,21 +1906,6 @@ fn locate_remote_session(
         "xero_tui_remote_session_not_found",
         format!("Xero TUI could not find session `{session_id}`."),
     ))
-}
-
-fn locate_global_computer_use_session(
-    globals: &GlobalOptions,
-) -> Result<LocatedRemoteSession, CliError> {
-    ensure_global_computer_use_project(globals)?;
-    let mut located = locate_remote_session_in_project(
-        globals,
-        GLOBAL_COMPUTER_USE_PROJECT_ID,
-        GLOBAL_COMPUTER_USE_AGENT_SESSION_ID,
-        true,
-    )?;
-    located.project_name = Some(GLOBAL_COMPUTER_USE_PROJECT_NAME.to_owned());
-    located.remote_session_id = REMOTE_COMPUTER_USE_SESSION_ID.to_owned();
-    Ok(located)
 }
 
 fn locate_remote_session_in_project(
@@ -1980,19 +1932,8 @@ fn locate_remote_session_in_project(
                 format!("Xero TUI could not find session `{session_id}`."),
             )
         })?;
-    let project_name = if project_id == GLOBAL_COMPUTER_USE_PROJECT_ID {
-        Some(GLOBAL_COMPUTER_USE_PROJECT_NAME.to_owned())
-    } else {
-        project_name_for_id(globals, project_id).ok().flatten()
-    };
-    let remote_session_id = if project_id == GLOBAL_COMPUTER_USE_PROJECT_ID
-        && session_id == GLOBAL_COMPUTER_USE_AGENT_SESSION_ID
-    {
-        REMOTE_COMPUTER_USE_SESSION_ID
-    } else {
-        session_id
-    }
-    .to_owned();
+    let project_name = project_name_for_id(globals, project_id).ok().flatten();
+    let remote_session_id = session_id.to_owned();
     Ok(LocatedRemoteSession {
         project_id: project_id.to_owned(),
         project_name,
@@ -2033,6 +1974,7 @@ fn remote_runtime_run_payload(
     choice: &ProviderChoice,
     runtime_agent_id: &str,
     thinking_effort: &str,
+    approval_mode: &str,
     status: &str,
 ) -> JsonValue {
     json!({
@@ -2049,6 +1991,7 @@ fn remote_runtime_run_payload(
                 "providerProfileId": choice.provider_profile_id,
                 "modelId": choice.model_id,
                 "thinkingEffort": thinking_effort,
+                "approvalMode": approval_mode,
                 "autoCompactEnabled": true,
             }
         }
@@ -2099,7 +2042,7 @@ fn remote_session_kind_from_payload(payload: &JsonValue) -> Result<&'static str,
     if let Some(value) = payload_string(payload, &["sessionKind", "session_kind"]) {
         return match value {
             "standard" => Ok("standard"),
-            "computer_use" => Ok("computer_use"),
+            "computer_use" => Err(tui_computer_use_unavailable_error()),
             other => Err(CliError::usage(format!(
                 "Unsupported remote session kind `{other}`."
             ))),
@@ -2107,7 +2050,7 @@ fn remote_session_kind_from_payload(payload: &JsonValue) -> Result<&'static str,
     }
 
     if remote_payload_agent_id(payload) == Some("computer_use") {
-        return Ok("computer_use");
+        return Err(tui_computer_use_unavailable_error());
     }
 
     Ok("standard")
@@ -2138,16 +2081,25 @@ fn ensure_remote_agent_matches_session_kind(
     session_kind: &str,
     agent_id: &str,
 ) -> Result<(), CliError> {
-    match (session_kind, agent_id) {
-        ("computer_use", "computer_use") => Ok(()),
-        ("computer_use", other) => Err(CliError::usage(format!(
-            "Computer Use sessions must use the `computer_use` agent, got `{other}`."
-        ))),
-        ("standard", "computer_use") => Err(CliError::usage(
-            "The `computer_use` agent requires a Computer Use session.",
-        )),
-        _ => Ok(()),
+    ensure_tui_remote_session_kind_supported(session_kind)?;
+    if agent_id == "computer_use" {
+        return Err(tui_computer_use_unavailable_error());
     }
+    Ok(())
+}
+
+fn ensure_tui_remote_session_kind_supported(session_kind: &str) -> Result<(), CliError> {
+    if session_kind == "computer_use" {
+        return Err(tui_computer_use_unavailable_error());
+    }
+    Ok(())
+}
+
+fn tui_computer_use_unavailable_error() -> CliError {
+    CliError::user_fixable(
+        "xero_tui_computer_use_unavailable",
+        "Computer Use is only available from the desktop client app, not TUI sync.",
+    )
 }
 
 fn required_payload_string<'a>(payload: &'a JsonValue, keys: &[&str]) -> Result<&'a str, CliError> {
@@ -2314,6 +2266,55 @@ mod tests {
     }
 
     #[test]
+    fn remote_runtime_run_payload_includes_approval_mode() {
+        let choice = ProviderChoice {
+            provider_id: "openai_codex".into(),
+            provider_profile_id: Some("openai-default".into()),
+            model_id: "gpt-5.5".into(),
+        };
+
+        let run = remote_runtime_run_payload(
+            "project-1",
+            "session-1",
+            "run-1",
+            &choice,
+            "engineer",
+            "high",
+            "auto_edit",
+            "completed",
+        );
+
+        assert_eq!(
+            run["controls"]["active"]["approvalMode"],
+            json!("auto_edit")
+        );
+    }
+
+    #[test]
+    fn remote_available_agents_omits_computer_use_for_tui_sync() {
+        let agents = remote_available_agents();
+
+        assert!(
+            agents
+                .iter()
+                .all(|agent| agent.get("id") != Some(&json!("computer_use"))),
+            "TUI sync must not advertise Computer Use"
+        );
+    }
+
+    #[test]
+    fn remote_start_rejects_computer_use_for_tui_sync() {
+        let by_session_kind =
+            remote_session_kind_from_payload(&json!({ "sessionKind": "computer_use" }))
+                .expect_err("computer use session kind should be rejected");
+        let by_agent = remote_session_kind_from_payload(&json!({ "agent": "computer_use" }))
+            .expect_err("computer use agent should be rejected");
+
+        assert_eq!(by_session_kind.code, "xero_tui_computer_use_unavailable");
+        assert_eq!(by_agent.code, "xero_tui_computer_use_unavailable");
+    }
+
+    #[test]
     fn remote_runtime_event_payload_matches_desktop_bridge_contract() {
         let spec = remote_run_spec_fixture();
         let event = json!({
@@ -2378,6 +2379,7 @@ mod tests {
             },
             runtime_agent_id: "engineer".into(),
             thinking_effort: "high".into(),
+            approval_mode: "suggest".into(),
             prompt: "hello".into(),
             attachments: Vec::new(),
         }

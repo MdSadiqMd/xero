@@ -12,12 +12,15 @@ import {
 	requestThemeSnapshot,
 } from "./relay-client";
 import {
+	DEFAULT_SESSION_APPROVAL_MODE,
 	GLOBAL_COMPUTER_USE_PROJECT_ID,
 	modelOptionId,
 	normalizeModelOptions,
+	parseApprovalMode,
 	parseThinkingEffort,
 	REMOTE_COMPUTER_USE_SESSION_ID,
 	type RemoteProjectSummary,
+	type SessionApprovalMode,
 	type SessionContextError,
 	type SessionContextSnapshot,
 	type SessionKind,
@@ -71,6 +74,7 @@ interface RemoteControlSelection {
 	providerId: string | null;
 	providerProfileId: string | null;
 	thinkingEffort: SessionThinkingEffort | null;
+	approvalMode: SessionApprovalMode;
 	autoCompactEnabled: boolean;
 }
 
@@ -174,6 +178,7 @@ export function useSessionStream({
 					currentAgentId: controls.agentId,
 					currentModelId: controls.modelId,
 					currentThinkingEffort: controls.thinkingEffort,
+					currentApprovalMode: controls.approvalMode,
 					currentAutoCompactEnabled: controls.autoCompactEnabled,
 					contextSnapshot: snapshot.contextSnapshot ?? null,
 					contextSnapshotError: snapshot.contextSnapshotError ?? null,
@@ -199,6 +204,7 @@ export function useSessionStream({
 							currentAgentId: null,
 							currentModelId: null,
 							currentThinkingEffort: null,
+							currentApprovalMode: DEFAULT_SESSION_APPROVAL_MODE,
 							currentAutoCompactEnabled: true,
 							contextSnapshot: null,
 							contextSnapshotError: null,
@@ -788,6 +794,7 @@ function remoteRunControlSelection(run: unknown): RemoteControlSelection {
 			providerId: null,
 			providerProfileId: null,
 			thinkingEffort: null,
+			approvalMode: DEFAULT_SESSION_APPROVAL_MODE,
 			autoCompactEnabled: true,
 		};
 	}
@@ -804,6 +811,7 @@ function remoteRunControlSelection(run: unknown): RemoteControlSelection {
 			providerId: null,
 			providerProfileId: null,
 			thinkingEffort: null,
+			approvalMode: DEFAULT_SESSION_APPROVAL_MODE,
 			autoCompactEnabled: true,
 		}
 	);
@@ -849,6 +857,10 @@ function remoteControlSelectionFromRecord(
 		thinkingEffort: parseThinkingEffort(
 			stringField(selected, "thinkingEffort", "thinking_effort"),
 		),
+		approvalMode:
+			parseApprovalMode(
+				stringField(selected, "approvalMode", "approval_mode"),
+			) ?? DEFAULT_SESSION_APPROVAL_MODE,
 		autoCompactEnabled:
 			typeof autoCompactEnabledRaw === "boolean" ? autoCompactEnabledRaw : true,
 	};

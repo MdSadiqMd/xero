@@ -24,6 +24,7 @@ const streamMock = vi.hoisted(() => ({
 	projects: [] as RemoteProjectSummary[],
 	startSession: vi.fn(() => true),
 	archiveSession: vi.fn(() => true),
+	composerProps: [] as Array<Record<string, unknown>>,
 	accountHookMounts: 0,
 	accountHookUnmounts: 0,
 }));
@@ -44,7 +45,10 @@ vi.mock("#/components/pwa-service-worker-manager", () => ({
 }));
 
 vi.mock("@xero/ui/components/composer", () => ({
-	Composer: () => <div data-testid="composer" />,
+	Composer: (props: Record<string, unknown>) => {
+		streamMock.composerProps.push(props);
+		return <div data-testid="composer" />;
+	},
 	WebComposerContextIndicator: () => <div data-testid="context-indicator" />,
 }));
 
@@ -176,6 +180,7 @@ beforeEach(() => {
 	streamMock.projects = projects;
 	streamMock.startSession.mockClear();
 	streamMock.archiveSession.mockClear();
+	streamMock.composerProps = [];
 	streamMock.accountHookMounts = 0;
 	streamMock.accountHookUnmounts = 0;
 	useSessionStore.setState({
@@ -271,6 +276,51 @@ describe("cloud sessions shell", () => {
 		expect(loading.className).toContain("flex-1");
 		expect(loading.className).not.toContain("min-h-dvh");
 		expect(screen.getByLabelText("Desktop sessions")).toBeTruthy();
+	});
+
+	it("passes synced approval mode controls into the cloud composer", async () => {
+		useSessionStore.getState().replaceWithSnapshot("desktop-1:session-1", {
+			turns: [],
+			lastSeq: 1,
+			isLive: true,
+			availableAgents: [
+				{ id: "engineer", label: "Engineer" },
+				{ id: "ask", label: "Ask" },
+			],
+			availableModels: [
+				{
+					id: "openai-default:gpt-5.5",
+					label: "GPT-5.5",
+					modelId: "gpt-5.5",
+					providerId: "openai_codex",
+					providerLabel: "OpenAI Codex",
+					providerProfileId: "openai-default",
+					thinkingSupported: false,
+					thinkingEffortOptions: [],
+					defaultThinkingEffort: null,
+				},
+			],
+			currentAgentId: "engineer",
+			currentModelId: "openai-default:gpt-5.5",
+			currentThinkingEffort: null,
+			currentApprovalMode: "yolo",
+			currentAutoCompactEnabled: true,
+		});
+
+		renderCloudRoute("/sessions/desktop-1/session-1");
+
+		await screen.findByTestId("composer");
+		const props = streamMock.composerProps.at(-1);
+
+		expect(props).toMatchObject({
+			selectedApprovalId: "yolo",
+		});
+		expect(props?.approvalOptions).toEqual([
+			expect.objectContaining({ id: "suggest", label: "Ask first" }),
+			expect.objectContaining({ id: "auto_edit", label: "Auto-edit files" }),
+			expect.objectContaining({ id: "yolo", label: "Full auto" }),
+		]);
+		expect(typeof props?.onApprovalChange).toBe("function");
 	});
 });
 

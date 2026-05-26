@@ -6,6 +6,7 @@
 //! Detail → Browse → closed.
 
 mod agents;
+mod approval;
 mod auth;
 mod context;
 mod events;
@@ -210,7 +211,7 @@ impl Category {
 pub(crate) fn category_for(id: &str) -> Category {
     let root = id.split_whitespace().next().unwrap_or("");
     match root {
-        "sessions" | "new" | "computer" | "session" | "conversation" => Category::Session,
+        "sessions" | "new" | "session" | "conversation" => Category::Session,
         "register" | "project" | "project-state" => Category::Project,
         "files" | "file" | "workspace" => Category::Workspace,
         "git" | "commit-message" => Category::Git,
@@ -218,7 +219,9 @@ pub(crate) fn category_for(id: &str) -> Category {
             Category::Provider
         }
         "mcp" => Category::Mcp,
-        "agents" | "agent" | "agent-definition" | "skills" | "plugins" => Category::Agent,
+        "agents" | "agent" | "agent-definition" | "approval" | "skills" | "plugins" => {
+            Category::Agent
+        }
         "processes" | "process" => Category::Process,
         "environment" | "tool-pack" | "suggest-command" => Category::Environment,
         "notification" => Category::Notification,
@@ -233,8 +236,8 @@ pub(crate) fn category_for(id: &str) -> Category {
 const ESSENTIALS: &[&str] = &[
     "sessions",
     "new",
-    "computer",
     "model",
+    "approval",
     "providers",
     "files",
     "git",
@@ -283,12 +286,6 @@ static COMMANDS: &[Command] = &[
         action: CommandAction::Open(new::open),
     },
     Command {
-        id: "computer",
-        title: "computer",
-        hint: "open global Computer Use",
-        action: CommandAction::Open(new::open_computer_use),
-    },
-    Command {
         id: "files",
         title: "files",
         hint: "browse files",
@@ -317,6 +314,12 @@ static COMMANDS: &[Command] = &[
         title: "model",
         hint: "switch active model",
         action: CommandAction::Open(models::open),
+    },
+    Command {
+        id: "approval",
+        title: "approval",
+        hint: "switch approval mode",
+        action: CommandAction::Open(approval::open),
     },
     Command {
         id: "auth",
@@ -1551,6 +1554,7 @@ fn dispatch_detail_key(
         "sessions" => sessions::handle_key(app, detail, key, globals),
         "providers" => providers::handle_key(app, detail, key, globals),
         "model" => models::handle_key(app, detail, key, globals),
+        "approval" => approval::handle_key(app, detail, key, globals),
         "auth" => auth::handle_key(app, detail, key, globals),
         "files" => files::handle_key(app, detail, key, globals),
         "git" => git::handle_key(app, detail, key, globals),
@@ -2484,7 +2488,6 @@ mod tests {
         for expected in [
             "sessions",
             "new",
-            "computer",
             "files",
             "git",
             "processes",

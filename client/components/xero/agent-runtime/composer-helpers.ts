@@ -20,6 +20,7 @@ import type {
 import {
   getRuntimeAgentDescriptor,
   getProviderModelThinkingEffortLabel,
+  getRuntimeRunApprovalModeDescription,
   getRuntimeRunApprovalModeLabel,
 } from '@/src/lib/xero-model'
 
@@ -46,6 +47,7 @@ export interface ComposerThinkingOption {
 export interface ComposerApprovalOption {
   value: RuntimeRunApprovalModeDto
   label: string
+  sublabel?: string
 }
 
 export interface ComposerCatalogStatusCopy {
@@ -159,6 +161,7 @@ export function getComposerApprovalOptions(runtimeAgentId: RuntimeAgentIdDto): C
   return composerApprovalModes.filter((mode) => allowedModes.includes(mode)).map((mode) => ({
     value: mode,
     label: getRuntimeRunApprovalModeLabel(mode),
+    sublabel: getRuntimeRunApprovalModeDescription(mode),
   }))
 }
 
@@ -350,12 +353,12 @@ export function getComposerControlStatusCopy(options: {
   if (options.pendingLabel && options.pendingRevision && options.pendingAt) {
     const activeDetail = `${displayValue(options.activeLabel, 'Unavailable')} (${formatComposerRevision(options.activeRevision)} at ${formatComposerTimestamp(options.activeAt, 'an unknown time')})`
 
-    if (options.label === 'Approval' && options.pendingLabel === 'YOLO') {
+    if (options.label === 'Approval' && options.pendingLabel === 'Full auto') {
       return {
         tone: 'pending',
         badgeLabel: 'Pending',
         summary: `${options.label} pending · ${options.pendingLabel}`,
-        detail: `Queued ${formatComposerRevision(options.pendingRevision)} at ${formatComposerTimestamp(options.pendingAt, 'an unknown time')}. Pending YOLO does not apply until the next model-call boundary. Active approval remains ${activeDetail}.`,
+        detail: `Queued ${formatComposerRevision(options.pendingRevision)} at ${formatComposerTimestamp(options.pendingAt, 'an unknown time')}. Pending full auto does not apply until the next model-call boundary. Active approval remains ${activeDetail}.`,
       }
     }
 
