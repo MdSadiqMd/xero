@@ -1,5 +1,4 @@
-import type { NotificationRouteHealthView } from "@/src/features/xero/use-xero-desktop-state"
-import { Bell, Check, FolderGit2, Sparkles } from "lucide-react"
+import { Check, FolderGit2, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { StepHeader } from "./providers-step"
 
@@ -7,12 +6,9 @@ interface ConfirmationStepProps {
   providerValue: string
   providerReady: boolean
   projectName: string | null
-  notifications: NotificationRouteHealthView[]
 }
 
-export function ConfirmationStep({ providerValue, providerReady, projectName, notifications }: ConfirmationStepProps) {
-  const enabledRoutes = notifications.filter((route) => route.enabled)
-
+export function ConfirmationStep({ providerValue, providerReady, projectName }: ConfirmationStepProps) {
   const rows: Array<{ label: string; value: string; ready: boolean; Icon: React.ElementType }> = [
     {
       label: "Provider",
@@ -25,15 +21,6 @@ export function ConfirmationStep({ providerValue, providerReady, projectName, no
       ready: Boolean(projectName),
       value: projectName ?? "Not imported",
       Icon: FolderGit2,
-    },
-    {
-      label: "Notifications",
-      ready: enabledRoutes.length > 0,
-      value:
-        enabledRoutes.length === 0
-          ? "Not configured"
-          : enabledRoutes.map((route) => route.routeKindLabel).join(", "),
-      Icon: Bell,
     },
   ]
 

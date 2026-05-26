@@ -141,8 +141,6 @@ import type {
   ImportMcpServersResponseDto,
   ImportRepositoryResponseDto,
   ListProjectFileIndexResponseDto,
-  ListNotificationDispatchesResponseDto,
-  ListNotificationRoutesResponseDto,
   ListProjectFilesResponseDto,
   ListProjectsResponseDto,
   McpImportDiagnosticDto,
@@ -167,9 +165,7 @@ import type {
   RuntimeUpdatedPayloadDto,
   SubscribeRuntimeStreamResponseDto,
   SkillRegistryDto,
-  SyncNotificationAdaptersResponseDto,
   UpsertMcpServerRequestDto,
-  UpsertNotificationRouteRequestDto,
   XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
 import type {
@@ -246,8 +242,6 @@ function makeSnapshot(projectId = 'project-1', name = 'Xero'): ProjectSnapshotRe
     verificationRecords: [],
     resumeHistory: [],
     agentSessions: [makeAgentSession(projectId)],
-    notificationDispatches: [],
-    notificationReplyClaims: [],
   }
 }
 
@@ -260,8 +254,6 @@ function makeComputerUseSnapshot(): ProjectSnapshotResponseDto {
     verificationRecords: [],
     resumeHistory: [],
     agentSessions: [makeComputerUseAgentSession()],
-    notificationDispatches: [],
-    notificationReplyClaims: [],
   }
 }
 
@@ -1215,7 +1207,6 @@ function createAdapter(options?: {
   skillRegistry?: SkillRegistryDto
   runtimeRun?: RuntimeRunDto | null
   autonomousState?: AutonomousRunStateDto | null
-  notificationRoutes?: ListNotificationRoutesResponseDto['routes']
   environmentDiscoveryStatus?: EnvironmentDiscoveryStatusDto
   projectFiles?: ListProjectFilesResponseDto
   pickedRepositoryPath?: string | null
@@ -1242,7 +1233,6 @@ function createAdapter(options?: {
   let currentMcpImportDiagnostics: McpImportDiagnosticDto[] = []
   let currentRuntimeRun = options?.runtimeRun ?? null
   let currentAutonomousState = options?.autonomousState ?? null
-  let currentNotificationRoutes = options?.notificationRoutes ?? []
   let currentEnvironmentDiscoveryStatus =
     options?.environmentDiscoveryStatus ?? makeEnvironmentDiscoveryStatus()
   let currentProjects = options?.projects ?? [makeProjectSummary('project-1', 'Xero')]
@@ -1707,27 +1697,6 @@ function createAdapter(options?: {
     }
 
     return currentMcpRegistry
-  })
-
-  const upsertNotificationRoute = vi.fn(async (request: UpsertNotificationRouteRequestDto) => {
-    const route = {
-      projectId: request.projectId,
-      routeId: request.routeId,
-      routeKind: request.routeKind,
-      routeTarget: request.routeTarget,
-      enabled: request.enabled,
-      metadataJson: request.metadataJson ?? null,
-      credentialReadiness: null,
-      createdAt: '2026-04-16T12:59:00Z',
-      updatedAt: request.updatedAt,
-    }
-
-    currentNotificationRoutes = [
-      ...currentNotificationRoutes.filter((item) => item.routeId !== route.routeId),
-      route,
-    ]
-
-    return { route }
   })
 
   const startRuntimeRun = vi.fn(async (projectId: string, agentSessionId: string, options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) =>
@@ -2400,101 +2369,6 @@ function createAdapter(options?: {
     resumeOperatorRun: async () => {
       throw new Error('not used')
     },
-    listNotificationRoutes: async () => ({ routes: currentNotificationRoutes }),
-    listNotificationDispatches: async (): Promise<ListNotificationDispatchesResponseDto> => ({ dispatches: [] }),
-    upsertNotificationRoute,
-    upsertNotificationRouteCredentials: async (request) => ({
-      projectId: request.projectId,
-      routeId: request.routeId,
-      routeKind: request.routeKind,
-      credentialScope: 'app_local',
-      hasBotToken: Boolean(request.credentials.botToken),
-      hasChatId: Boolean(request.credentials.chatId),
-      hasWebhookUrl: Boolean(request.credentials.webhookUrl),
-      updatedAt: request.updatedAt,
-    }),
-    recordNotificationDispatchOutcome: async (request) => ({ dispatch: request as never }),
-    submitNotificationReply: async (request) => ({
-      claim: {
-        id: 1,
-        projectId: request.projectId,
-        actionId: request.actionId,
-        routeId: request.routeId,
-        correlationKey: request.correlationKey,
-        responderId: request.responderId ?? null,
-        status: request.decision === 'approve' ? 'accepted' : 'rejected',
-        rejectionCode: request.decision === 'approve' ? null : 'notification_reply_rejected',
-        rejectionMessage: request.decision === 'approve' ? null : 'Operator rejected the notification reply.',
-        createdAt: request.receivedAt,
-      },
-      dispatch: {
-        id: 1,
-        projectId: request.projectId,
-        actionId: request.actionId,
-        routeId: request.routeId,
-        correlationKey: request.correlationKey,
-        status: request.decision === 'approve' ? 'claimed' : 'failed',
-        attemptCount: 1,
-        lastAttemptAt: request.receivedAt,
-        deliveredAt: request.decision === 'approve' ? request.receivedAt : null,
-        claimedAt: request.decision === 'approve' ? request.receivedAt : null,
-        lastErrorCode: request.decision === 'approve' ? null : 'notification_reply_rejected',
-        lastErrorMessage: request.decision === 'approve' ? null : 'Operator rejected the notification reply.',
-        createdAt: request.receivedAt,
-        updatedAt: request.receivedAt,
-      },
-      resolveResult: {
-        approvalRequest: {
-          actionId: request.actionId,
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          actionType: 'review_worktree',
-          title: 'Review worktree changes',
-          detail: 'Inspect the pending repository diff before continuing.',
-          status: request.decision === 'approve' ? 'approved' : 'rejected',
-          decisionNote: null,
-          createdAt: request.receivedAt,
-          updatedAt: request.receivedAt,
-          resolvedAt: request.receivedAt,
-        },
-        verificationRecord: {
-          id: 1,
-          sourceActionId: request.actionId,
-          status: request.decision === 'approve' ? 'passed' : 'failed',
-          summary: request.decision === 'approve' ? 'Approved operator action.' : 'Rejected operator action.',
-          detail: null,
-          recordedAt: request.receivedAt,
-        },
-      },
-      resumeResult: null,
-    }),
-    syncNotificationAdapters: async (_projectId): Promise<SyncNotificationAdaptersResponseDto> => ({
-      projectId: 'project-1',
-      dispatch: {
-        projectId: 'project-1',
-        pendingCount: 0,
-        attemptedCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-        attemptLimit: 64,
-        attemptsTruncated: false,
-        attempts: [],
-        errorCodeCounts: [],
-      },
-      replies: {
-        projectId: 'project-1',
-        routeCount: 0,
-        polledRouteCount: 0,
-        messageCount: 0,
-        acceptedCount: 0,
-        rejectedCount: 0,
-        attemptLimit: 256,
-        attemptsTruncated: false,
-        attempts: [],
-        errorCodeCounts: [],
-      },
-      syncedAt: '2026-04-16T13:00:00Z',
-    }),
     getEnvironmentDiscoveryStatus,
     resolveEnvironmentPermissionRequests,
     startEnvironmentDiscovery,
@@ -2579,7 +2453,6 @@ function createAdapter(options?: {
   return {
     adapter,
     streamSubscriptions,
-    upsertNotificationRoute,
     listProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,
@@ -2817,8 +2690,6 @@ describe('XeroApp current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     expect(await screen.findByRole('heading', { name: 'Add a project' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    expect(await screen.findByRole('heading', { name: 'Add notification routes' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByRole('heading', { name: 'Review environment access' })).toBeVisible()
     expect(screen.getByText('Developer folder access')).toBeVisible()
@@ -2867,7 +2738,6 @@ describe('XeroApp current UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByRole('heading', { name: 'Review environment access' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
@@ -2885,7 +2755,7 @@ describe('XeroApp current UI', () => {
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
   })
 
-  it('goes straight from notifications to confirmation when no environment permission is needed', async () => {
+  it('goes straight from project setup to confirmation when no environment permission is needed', async () => {
     const { adapter, getEnvironmentDiscoveryStatus, startEnvironmentDiscovery } = createAdapter({
       projects: [],
       runtimeSession: makeRuntimeSession('project-1', {
@@ -2906,7 +2776,6 @@ describe('XeroApp current UI', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
@@ -3109,44 +2978,6 @@ describe('XeroApp current UI', () => {
     )
   })
 
-
-  it('imports a project and creates a notification route from onboarding', async () => {
-    const { adapter, pickRepositoryFolder, importRepository, upsertNotificationRoute } = createAdapter({
-      projects: [],
-      pickedRepositoryPath: '/tmp/Xero',
-      runtimeSession: makeRuntimeSession('project-1', {
-        phase: 'idle',
-        sessionId: null,
-        accountId: null,
-      }),
-    })
-
-    render(<XeroApp adapter={adapter} />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    expect(await screen.findByRole('heading', { name: 'Add a project' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: /Choose a folder/i }))
-
-    await waitFor(() => expect(pickRepositoryFolder).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(importRepository).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(screen.getByText('/tmp/Xero')).toBeVisible())
-
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Add route' }))[0])
-    fireEvent.change(screen.getByPlaceholderText('Chat ID or @channel'), { target: { value: '@ops-room' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save route' }))
-
-    await waitFor(() => expect(upsertNotificationRoute).toHaveBeenCalledTimes(1))
-    expect(upsertNotificationRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        routeId: 'telegram-primary',
-        routeKind: 'telegram',
-        routeTarget: 'telegram:@ops-room',
-        enabled: true,
-      }),
-    )
-  })
 
   it('renders the workflow tab as a blank slate for an imported project', async () => {
     const { adapter } = createAdapter()
@@ -4107,52 +3938,6 @@ describe('XeroApp current UI', () => {
 
 
 
-
-  it('opens Settings and runs the current provider and notification flows', async () => {
-    const { adapter, upsertNotificationRoute } = createAdapter({
-      runtimeRun: null,
-      runtimeSession: makeRuntimeSession('project-1', {
-        phase: 'idle',
-        sessionId: null,
-        accountId: null,
-        lastErrorCode: 'auth_session_not_found',
-        lastError: {
-          code: 'auth_session_not_found',
-          message: 'Sign in with OpenAI to create a runtime session for this project.',
-          retryable: false,
-        },
-      }),
-    })
-
-    render(<XeroApp adapter={adapter} />)
-
-    await waitFor(() =>
-      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
-    )
-
-    fireEvent.click(screen.getByLabelText('Settings'))
-    expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
-    const openAiCodexCard = getProviderCard('OpenAI Codex')
-    expect(within(openAiCodexCard).getByRole('button', { name: 'Sign in' })).toBeVisible()
-
-    fireEvent.click(within(openAiCodexCard).getByRole('button', { name: 'Sign in' }))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
-    expect(await screen.findByText('Telegram')).toBeVisible()
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Add route' })[0])
-    fireEvent.change(screen.getByLabelText('Route name'), { target: { value: 'ops-alerts' } })
-    fireEvent.change(screen.getByLabelText('Target'), { target: { value: '@ops-room' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create route' }))
-
-    await waitFor(() => expect(upsertNotificationRoute).toHaveBeenCalledTimes(1))
-    expect(upsertNotificationRoute.mock.calls[0][0]).toMatchObject({
-      routeId: 'ops-alerts',
-      routeKind: 'telegram',
-      routeTarget: 'telegram:@ops-room',
-      enabled: true,
-    })
-  })
 
   it('switches to Editor and loads the selected project files', async () => {
     const { adapter } = createAdapter()

@@ -1568,8 +1568,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
     removePluginRoot,
     setPluginEnabled,
     removePlugin,
-    refreshNotificationRoutes,
-    upsertNotificationRoute,
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
@@ -2119,7 +2117,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
     const bundle = resolvedAdapter.getProjectLoadBundle
       ? await resolvedAdapter.getProjectLoadBundle({
           projectId: GLOBAL_COMPUTER_USE_PROJECT_ID,
-          includeNotificationRoutes: false,
         })
       : null
     const snapshot = bundle
@@ -2139,9 +2136,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           .catch(() => null)
     const project = applyRuntimeRun(
       applyRuntimeSession(
-        mapProjectSnapshot(snapshot, {
-          notificationDispatches: bundle?.notificationDispatches ?? [],
-        }),
+        mapProjectSnapshot(snapshot),
         runtimeSession,
       ),
       runtimeRun,
@@ -2270,15 +2265,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         runtimeRunErrorMessage: computerUseRuntimeRunActionError?.message ?? null,
         autonomousRunErrorMessage: null,
         runtimeStream: null,
-        notificationRoutes: [],
-        notificationRouteLoadStatus: 'ready',
-        notificationRouteError: null,
-        notificationSyncSummary: null,
-        notificationSyncError: null,
-        blockedNotificationSyncPollTarget: null,
-        notificationRouteMutationStatus: 'idle',
-        pendingNotificationRouteId: null,
-        notificationRouteMutationError: null,
         previousTrustSnapshot: null,
         operatorActionStatus: 'idle',
         pendingOperatorActionId: null,
@@ -4336,20 +4322,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
     ) => submitOpenAiCallback(flowId, { manualInput }),
     [submitOpenAiCallback],
   )
-  const handleAgentRefreshNotificationRoutes = useCallback(
-    (
-      _paneId: string,
-      options?: Parameters<NonNullable<AgentRuntimeProps['onRefreshNotificationRoutes']>>[0],
-    ) => refreshNotificationRoutes(options),
-    [refreshNotificationRoutes],
-  )
-  const handleAgentUpsertNotificationRoute = useCallback(
-    (
-      _paneId: string,
-      request: Parameters<NonNullable<AgentRuntimeProps['onUpsertNotificationRoute']>>[0],
-    ) => upsertNotificationRoute(request),
-    [upsertNotificationRoute],
-  )
   const handleAgentCodeUndoApplied = useCallback(() => retry(), [retry])
   const handleStartWorkflowRun = useCallback(() => startRuntimeRun(), [startRuntimeRun])
 
@@ -4677,7 +4649,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onOpenDiagnostics={handleOpenAgentDiagnostics}
                 onResolveOperatorAction={handleAgentResolveOperatorAction}
                 onResumeOperatorRun={handleAgentResumeOperatorRun}
-                onRefreshNotificationRoutes={handleAgentRefreshNotificationRoutes}
                 onRetryStream={retry}
                 onStartLogin={handleAgentStartLogin}
                 onStartAutonomousRun={handleAgentStartAutonomousRun}
@@ -4689,7 +4660,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onStartRuntimeSession={handleAgentStartRuntimeSession}
                 onStopRuntimeRun={handleAgentStopRuntimeRun}
                 onSubmitManualCallback={handleAgentSubmitManualCallback}
-                onUpsertNotificationRoute={handleAgentUpsertNotificationRoute}
                 onCodeUndoApplied={handleAgentCodeUndoApplied}
                 pendingComposerInsert={
                   pendingBrowserComposerInsert?.target === 'agent-view'
@@ -4867,10 +4837,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
           isImporting={isImporting}
           isProjectLoading={isProjectLoading}
           projectErrorMessage={errorMessage}
-          notificationRoutes={agentView?.notificationRoutes ?? []}
-          notificationRouteMutationStatus={agentView?.notificationRouteMutationStatus ?? 'idle'}
-          pendingNotificationRouteId={agentView?.pendingNotificationRouteId ?? null}
-          notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
           environmentPermissionRequests={environmentDiscoveryStatus?.permissionRequests ?? []}
           onResolveEnvironmentPermissions={resolveEnvironmentPermissions}
           launchMode={launchMode}
@@ -4883,7 +4849,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onStartOAuthLogin={(request) => startOAuthLogin(request)}
           onStartXaiDeviceCodeLogin={(request) => startXaiDeviceCodeLogin(request)}
           onPollXaiDeviceCodeLogin={(request) => pollXaiDeviceCodeLogin(request)}
-          onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
           onComplete={() => {
             setOnboardingDismissed(true)
             setOnboardingOpen(false)
@@ -5185,8 +5150,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onResumeOperatorRun={(actionId, options) =>
                   resumeOperatorRun(actionId, { userAnswer: options?.userAnswer ?? null })
                 }
-                onRefreshNotificationRoutes={(options) => refreshNotificationRoutes(options)}
-                onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
                 onCodeUndoApplied={handleAgentCodeUndoApplied}
                 onRetryStream={retry}
                 agentCreateCanvasIncluded={agentCreateCanvasIncluded}
@@ -5283,9 +5246,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 resolveProjectRunnerSuggestRequest={resolveProjectRunnerSuggestRequest}
                 onSuggestProjectStartTargets={handleSuggestProjectStartTargets}
                 projectRunnerModelOptions={projectRunnerModelOptions}
-                onUpsertNotificationRoute={(request) =>
-                  upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })
-                }
                 mcpRegistry={mcpRegistry}
                 mcpImportDiagnostics={mcpImportDiagnostics}
                 mcpRegistryLoadStatus={mcpRegistryLoadStatus}

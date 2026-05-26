@@ -36,7 +36,6 @@ import type {
   VerifyUserToolResponseDto,
 } from '@/src/lib/xero-model'
 
-type NotificationRouteRequest = Parameters<NonNullable<SettingsDialogProps['onUpsertNotificationRoute']>>[0]
 type McpUpsertRequest = Parameters<NonNullable<SettingsDialogProps['onUpsertMcpServer']>>[0]
 type SetSkillEnabledRequest = Parameters<NonNullable<SettingsDialogProps['onSetSkillEnabled']>>[0]
 type RemoveSkillRequest = Parameters<NonNullable<SettingsDialogProps['onRemoveSkill']>>[0]
@@ -287,17 +286,7 @@ function makeDoctorReport(): XeroDoctorReportDto {
         remediation: 'Open Providers settings, repair credentials, then restart the runtime session.',
       }),
     ],
-    settingsDependencyChecks: [
-      createXeroDiagnosticCheck({
-        subject: 'settings_dependency',
-        status: 'skipped',
-        severity: 'info',
-        retryable: false,
-        code: 'notification_routes_not_configured',
-        message: 'No notification routes are configured.',
-        remediation: 'Add a notification route before checking notification credential readiness.',
-      }),
-    ],
+    settingsDependencyChecks: [],
   })
 }
 
@@ -387,35 +376,6 @@ function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): Runtim
     needsManualInput: false,
     isSignedOut: true,
     isFailed: false,
-    ...overrides,
-  }
-}
-
-function makeNotificationRoute(
-  overrides: Partial<AgentPaneView['notificationRoutes'][number]> = {},
-): AgentPaneView['notificationRoutes'][number] {
-  return {
-    projectId: 'project-1',
-    routeId: 'ops-alerts',
-    routeKind: 'telegram',
-    routeKindLabel: 'Telegram',
-    routeTarget: 'telegram:@ops-room',
-    enabled: true,
-    metadataJson: null,
-    credentialReadiness: null,
-    credentialDiagnosticCode: null,
-    createdAt: '2026-04-20T00:00:00Z',
-    updatedAt: '2026-04-20T00:00:00Z',
-    dispatchCount: 0,
-    pendingCount: 0,
-    sentCount: 0,
-    failedCount: 0,
-    claimedCount: 0,
-    latestDispatchAt: null,
-    latestFailureCode: null,
-    latestFailureMessage: null,
-    health: 'healthy',
-    healthLabel: 'Ready',
     ...overrides,
   }
 }
@@ -659,35 +619,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     runtimeStreamItems: [],
     activityItems: [],
     actionRequiredItems: [],
-    notificationBroker: {
-      dispatches: [],
-      actions: [],
-      routes: [],
-      byActionId: {},
-      byRouteId: {},
-      dispatchCount: 0,
-      routeCount: 0,
-      pendingCount: 0,
-      sentCount: 0,
-      failedCount: 0,
-      claimedCount: 0,
-      latestUpdatedAt: null,
-      isTruncated: false,
-      totalBeforeTruncation: 0,
-    },
-    notificationRoutes: [],
-    notificationChannelHealth: [],
-    notificationRouteLoadStatus: 'idle',
-    notificationRouteIsRefreshing: false,
-    notificationRouteError: null,
-    notificationSyncSummary: null,
-    notificationSyncError: null,
-    notificationSyncPollingActive: false,
-    notificationSyncPollingActionId: null,
-    notificationSyncPollingBoundaryId: null,
-    notificationRouteMutationStatus: 'idle',
-    pendingNotificationRouteId: null,
-    notificationRouteMutationError: null,
     trustSnapshot: undefined,
     approvalRequests: [],
     pendingApprovalCount: 0,
@@ -1345,104 +1276,6 @@ describe('SettingsDialog', () => {
     expect(screen.getByRole('switch', { name: 'Adrenaline Mode' })).toBeDisabled()
     expect(screen.getByRole('switch', { name: 'Closed-Lid Mode' })).toBeDisabled()
   })
-
-  it('shows route target validation errors and omits project metadata when creating routes', async () => {
-    const onUpsertNotificationRoute = vi.fn(async (_request: NotificationRouteRequest) => ({ route: makeNotificationRoute() }))
-
-    render(
-      <SettingsDialog
-        {...makeSettingsDialogProps({
-          onUpsertNotificationRoute,
-        })}
-      />,
-    )
-
-    await openSettingsSection('Notifications')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Add route' })[0])
-
-    fireEvent.change(screen.getByLabelText('Route name'), { target: { value: 'ops-alerts' } })
-    fireEvent.change(screen.getByLabelText('Target'), { target: { value: 'discord:12345' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create route' }))
-
-    expect(
-      screen.getByText('Route target prefix `discord` does not match the selected route kind `telegram`.'),
-    ).toBeVisible()
-    expect(onUpsertNotificationRoute).not.toHaveBeenCalled()
-
-    fireEvent.change(screen.getByLabelText('Target'), { target: { value: '@ops-room' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create route' }))
-
-    await waitFor(() => expect(onUpsertNotificationRoute).toHaveBeenCalledTimes(1))
-
-    expect(onUpsertNotificationRoute.mock.calls[0][0]).toEqual({
-      routeId: 'ops-alerts',
-      routeKind: 'telegram',
-      routeTarget: 'telegram:@ops-room',
-      enabled: true,
-      metadataJson: null,
-    })
-  })
-
-  it('keeps truthful stored targets for edit fallback and toggles existing routes', async () => {
-    const onUpsertNotificationRoute = vi.fn(async (_request: NotificationRouteRequest) => ({ route: makeNotificationRoute() }))
-
-    render(
-      <SettingsDialog
-        {...makeSettingsDialogProps({
-          agent: makeAgent({
-            notificationRoutes: [
-              makeNotificationRoute({
-                routeTarget: 'ops-room',
-                enabled: false,
-              }),
-            ],
-          }),
-          onUpsertNotificationRoute,
-        })}
-      />,
-    )
-
-    await openSettingsSection('Notifications')
-
-    expect(screen.getByText('ops-room')).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
-    expect(screen.getByLabelText('Target')).toHaveValue('ops-room')
-
-    fireEvent.change(screen.getByLabelText('Target'), { target: { value: '@pager-room' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
-
-    await waitFor(() => expect(onUpsertNotificationRoute).toHaveBeenCalledTimes(1))
-    expect(onUpsertNotificationRoute.mock.calls[0][0]).toEqual({
-      routeId: 'ops-alerts',
-      routeKind: 'telegram',
-      routeTarget: 'telegram:@pager-room',
-      enabled: false,
-      metadataJson: null,
-    })
-
-    fireEvent.click(screen.getByLabelText('Off'))
-
-    await waitFor(() => expect(onUpsertNotificationRoute).toHaveBeenCalledTimes(2))
-    expect(onUpsertNotificationRoute.mock.calls[1][0]).toEqual({
-      routeId: 'ops-alerts',
-      routeKind: 'telegram',
-      routeTarget: 'ops-room',
-      enabled: true,
-      metadataJson: null,
-    })
-  })
-
-
-
-
-
-
-
-
-
-
-
 
   it('manages MCP servers from settings with validation, import, remove, and status refresh actions', async () => {
     const onUpsertMcpServer = vi.fn(async (_request: McpUpsertRequest) => makeMcpRegistry())

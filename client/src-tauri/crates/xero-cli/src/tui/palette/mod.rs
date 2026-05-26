@@ -149,7 +149,6 @@ pub enum Category {
     Agent,
     Process,
     Environment,
-    Notification,
     Settings,
     Danger,
 }
@@ -166,7 +165,6 @@ impl Category {
             Category::Agent => "Agents & Skills",
             Category::Process => "Processes",
             Category::Environment => "Environment",
-            Category::Notification => "Notifications",
             Category::Settings => "Settings & Info",
             Category::Danger => "Danger Zone",
         }
@@ -184,9 +182,8 @@ impl Category {
             Category::Agent => 6,
             Category::Process => 7,
             Category::Environment => 8,
-            Category::Notification => 9,
-            Category::Settings => 10,
-            Category::Danger => 11,
+            Category::Settings => 9,
+            Category::Danger => 10,
         }
     }
 
@@ -201,7 +198,6 @@ impl Category {
             Category::Agent,
             Category::Process,
             Category::Environment,
-            Category::Notification,
             Category::Settings,
             Category::Danger,
         ]
@@ -224,7 +220,6 @@ pub(crate) fn category_for(id: &str) -> Category {
         }
         "processes" | "process" => Category::Process,
         "environment" | "tool-pack" | "suggest-command" => Category::Environment,
-        "notification" => Category::Notification,
         "settings" | "context" | "usage" | "events" | "recovery" => Category::Settings,
         "wipe" | "quit" => Category::Danger,
         _ => Category::Settings,
@@ -776,45 +771,6 @@ static COMMANDS: &[Command] = &[
         title: "plugins remove",
         hint: "remove plugin",
         action: preview_cli(&["plugins", "remove"], CommandScope::ProjectOptional),
-    },
-    Command {
-        id: "notification routes",
-        title: "notification routes",
-        hint: "approval routes",
-        action: run_cli(&["notification", "routes"], CommandScope::ProjectRequired),
-    },
-    Command {
-        id: "notification upsert-route",
-        title: "notification upsert-route",
-        hint: "add approval route",
-        action: preview_cli(
-            &["notification", "upsert-route"],
-            CommandScope::ProjectRequired,
-        ),
-    },
-    Command {
-        id: "notification remove-route",
-        title: "notification remove-route",
-        hint: "remove approval route",
-        action: preview_cli(
-            &["notification", "remove-route"],
-            CommandScope::ProjectRequired,
-        ),
-    },
-    Command {
-        id: "notification dispatches",
-        title: "notification dispatches",
-        hint: "approval dispatch log",
-        action: run_cli(
-            &["notification", "dispatches"],
-            CommandScope::ProjectRequired,
-        ),
-    },
-    Command {
-        id: "notification replies",
-        title: "notification replies",
-        hint: "approval replies",
-        action: run_cli(&["notification", "replies"], CommandScope::ProjectRequired),
     },
     Command {
         id: "environment status",

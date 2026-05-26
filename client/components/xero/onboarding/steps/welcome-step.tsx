@@ -1,4 +1,4 @@
-import { ArrowRight, Bell, FolderGit2, Sparkles } from "lucide-react"
+import { ArrowRight, FolderGit2, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AppLogo } from "@xero/ui/components/app-logo"
 
@@ -27,9 +27,9 @@ const HIGHLIGHTS: Array<{
   },
   {
     step: "03",
-    Icon: Bell,
-    label: "Wire notifications",
-    hint: "Optional Telegram or Discord routes per project",
+    Icon: FolderGit2,
+    label: "Start working",
+    hint: "Open your workspace and launch an agent run",
   },
 ]
 

@@ -169,33 +169,6 @@ import {
   type SubscribeAgentStreamResponseDto,
 } from '@/src/lib/xero-model/agent'
 import {
-  listNotificationDispatchesRequestSchema,
-  listNotificationDispatchesResponseSchema,
-  listNotificationRoutesRequestSchema,
-  listNotificationRoutesResponseSchema,
-  recordNotificationDispatchOutcomeRequestSchema,
-  recordNotificationDispatchOutcomeResponseSchema,
-  submitNotificationReplyRequestSchema,
-  submitNotificationReplyResponseSchema,
-  syncNotificationAdaptersRequestSchema,
-  syncNotificationAdaptersResponseSchema,
-  upsertNotificationRouteCredentialsRequestSchema,
-  upsertNotificationRouteCredentialsResponseSchema,
-  upsertNotificationRouteRequestSchema,
-  upsertNotificationRouteResponseSchema,
-  type ListNotificationDispatchesResponseDto,
-  type ListNotificationRoutesResponseDto,
-  type RecordNotificationDispatchOutcomeRequestDto,
-  type RecordNotificationDispatchOutcomeResponseDto,
-  type SubmitNotificationReplyRequestDto,
-  type SubmitNotificationReplyResponseDto,
-  type SyncNotificationAdaptersResponseDto,
-  type UpsertNotificationRouteCredentialsRequestDto,
-  type UpsertNotificationRouteCredentialsResponseDto,
-  type UpsertNotificationRouteRequestDto,
-  type UpsertNotificationRouteResponseDto,
-} from '@/src/lib/xero-model/notifications'
-import {
   importMcpServersRequestSchema,
   importMcpServersResponseSchema,
   mcpRegistrySchema,
@@ -788,13 +761,6 @@ const COMMANDS = {
   logoutRuntimeSession: 'logout_runtime_session',
   resolveOperatorAction: 'resolve_operator_action',
   resumeOperatorRun: 'resume_operator_run',
-  listNotificationRoutes: 'list_notification_routes',
-  listNotificationDispatches: 'list_notification_dispatches',
-  upsertNotificationRoute: 'upsert_notification_route',
-  upsertNotificationRouteCredentials: 'upsert_notification_route_credentials',
-  recordNotificationDispatchOutcome: 'record_notification_dispatch_outcome',
-  submitNotificationReply: 'submit_notification_reply',
-  syncNotificationAdapters: 'sync_notification_adapters',
   speechDictationStatus: 'speech_dictation_status',
   speechDictationSettings: 'speech_dictation_settings',
   speechDictationUpdateSettings: 'speech_dictation_update_settings',
@@ -1435,22 +1401,6 @@ export interface XeroDesktopAdapter {
     actionId: string,
     options?: { userAnswer?: string | null },
   ): Promise<ResumeOperatorRunResponseDto>
-  listNotificationRoutes(projectId: string): Promise<ListNotificationRoutesResponseDto>
-  listNotificationDispatches(
-    projectId: string,
-    options?: { actionId?: string | null },
-  ): Promise<ListNotificationDispatchesResponseDto>
-  upsertNotificationRoute(
-    request: UpsertNotificationRouteRequestDto,
-  ): Promise<UpsertNotificationRouteResponseDto>
-  upsertNotificationRouteCredentials(
-    request: UpsertNotificationRouteCredentialsRequestDto,
-  ): Promise<UpsertNotificationRouteCredentialsResponseDto>
-  recordNotificationDispatchOutcome(
-    request: RecordNotificationDispatchOutcomeRequestDto,
-  ): Promise<RecordNotificationDispatchOutcomeResponseDto>
-  submitNotificationReply(request: SubmitNotificationReplyRequestDto): Promise<SubmitNotificationReplyResponseDto>
-  syncNotificationAdapters(projectId: string): Promise<SyncNotificationAdaptersResponseDto>
   getEnvironmentDiscoveryStatus?(): Promise<EnvironmentDiscoveryStatusDto>
   getEnvironmentProfileSummary?(): Promise<EnvironmentProfileSummaryDto>
   refreshEnvironmentDiscovery?(): Promise<EnvironmentDiscoveryStatusDto>
@@ -3619,67 +3569,6 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
 
     return invokeTyped(COMMANDS.resumeOperatorRun, resumeOperatorRunResponseSchema, {
-      request,
-    })
-  },
-
-  listNotificationRoutes(projectId) {
-    const request = listNotificationRoutesRequestSchema.parse({ projectId })
-    return invokeTyped(COMMANDS.listNotificationRoutes, listNotificationRoutesResponseSchema, {
-      request,
-    })
-  },
-
-  listNotificationDispatches(projectId, options) {
-    const request = listNotificationDispatchesRequestSchema.parse({
-      projectId,
-      actionId: options?.actionId ?? null,
-    })
-
-    return invokeTyped(COMMANDS.listNotificationDispatches, listNotificationDispatchesResponseSchema, {
-      request,
-    })
-  },
-
-  upsertNotificationRoute(request) {
-    const parsedRequest = upsertNotificationRouteRequestSchema.parse(request)
-    return invokeTyped(COMMANDS.upsertNotificationRoute, upsertNotificationRouteResponseSchema, {
-      request: parsedRequest,
-    })
-  },
-
-  upsertNotificationRouteCredentials(request) {
-    const parsedRequest = upsertNotificationRouteCredentialsRequestSchema.parse(request)
-    return invokeTyped(
-      COMMANDS.upsertNotificationRouteCredentials,
-      upsertNotificationRouteCredentialsResponseSchema,
-      {
-        request: parsedRequest,
-      },
-    )
-  },
-
-  recordNotificationDispatchOutcome(request) {
-    const parsedRequest = recordNotificationDispatchOutcomeRequestSchema.parse(request)
-    return invokeTyped(
-      COMMANDS.recordNotificationDispatchOutcome,
-      recordNotificationDispatchOutcomeResponseSchema,
-      {
-        request: parsedRequest,
-      },
-    )
-  },
-
-  submitNotificationReply(request) {
-    const parsedRequest = submitNotificationReplyRequestSchema.parse(request)
-    return invokeTyped(COMMANDS.submitNotificationReply, submitNotificationReplyResponseSchema, {
-      request: parsedRequest,
-    })
-  },
-
-  syncNotificationAdapters(projectId) {
-    const request = syncNotificationAdaptersRequestSchema.parse({ projectId })
-    return invokeTyped(COMMANDS.syncNotificationAdapters, syncNotificationAdaptersResponseSchema, {
       request,
     })
   },

@@ -2660,7 +2660,6 @@ fn apply_slash_scope(mut args: Vec<String>, app: &App) -> Vec<String> {
             "agent-definition"
                 | "agent-definitions"
                 | "conversation"
-                | "notification"
                 | "process"
                 | "runner"
                 | "project-state"

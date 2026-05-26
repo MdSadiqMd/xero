@@ -11,12 +11,6 @@ import {
 } from '@/src/lib/xero-model'
 import { mapAutonomousRunInspection } from '@/src/lib/xero-model/autonomous'
 import {
-  mapNotificationBroker,
-  type NotificationDispatchDto,
-  type NotificationRouteDto,
-  type SyncNotificationAdaptersResponseDto,
-} from '@/src/lib/xero-model/notifications'
-import {
   applyRepositoryStatus,
   mapProjectSummary,
   mapRepositoryStatus,
@@ -33,8 +27,6 @@ import {
 import type {
   AutonomousRunActionKind,
   AutonomousRunActionStatus,
-  NotificationRoutesLoadResult,
-  NotificationRoutesLoadStatus,
   OperatorActionErrorView,
   OperatorActionStatus,
   RefreshSource,
@@ -48,10 +40,6 @@ type SetState<T> = Dispatch<SetStateAction<T>>
 type RuntimeSessionRecords = Record<string, RuntimeSessionView>
 type RuntimeRunRecords = Record<string, RuntimeRunView>
 type AutonomousRunRecords = Record<string, NonNullable<ProjectDetailView['autonomousRun']>>
-type NotificationSyncSummaryRecords = Record<string, SyncNotificationAdaptersResponseDto | null>
-type NotificationRouteRecords = Record<string, NotificationRouteDto[]>
-type NotificationRouteErrorRecords = Record<string, OperatorActionErrorView | null>
-type NotificationRouteStatusRecords = Record<string, NotificationRoutesLoadStatus>
 type RuntimeLoadErrorRecords = Record<string, string | null>
 type RuntimeLoadResult = {
   ok: true
@@ -140,126 +128,12 @@ function isSupersededProjectLoadError(error: unknown): boolean {
   return code === 'project_load_bundle_superseded' || code === 'backend_job_stale_result'
 }
 
-interface NotificationRouteLoaderArgs {
-  adapter: XeroDesktopAdapter
-  projectId: string
-  force?: boolean
-  notificationRoutesRef: MutableRefObject<NotificationRouteRecords>
-  notificationRouteLoadErrorsRef: MutableRefObject<NotificationRouteErrorRecords>
-  notificationRouteLoadRequestRef: MutableRefObject<Record<string, number>>
-  notificationRouteLoadInFlightRef: MutableRefObject<Record<string, Promise<NotificationRoutesLoadResult>>>
-  setNotificationRoutes: SetState<NotificationRouteRecords>
-  setNotificationRouteLoadStatuses: SetState<NotificationRouteStatusRecords>
-  setNotificationRouteLoadErrors: SetState<NotificationRouteErrorRecords>
-  getOperatorActionError: (error: unknown, fallback: string) => OperatorActionErrorView
-}
-
-export function loadNotificationRoutesForProject({
-  adapter,
-  projectId,
-  force = false,
-  notificationRoutesRef,
-  notificationRouteLoadErrorsRef,
-  notificationRouteLoadRequestRef,
-  notificationRouteLoadInFlightRef,
-  setNotificationRoutes,
-  setNotificationRouteLoadStatuses,
-  setNotificationRouteLoadErrors,
-  getOperatorActionError,
-}: NotificationRouteLoaderArgs): Promise<NotificationRoutesLoadResult> {
-  const inFlightRequest = notificationRouteLoadInFlightRef.current[projectId]
-  if (!force && inFlightRequest) {
-    return inFlightRequest
-  }
-
-  const cachedRoutes = notificationRoutesRef.current[projectId] ?? []
-  const cachedLoadError = notificationRouteLoadErrorsRef.current[projectId] ?? null
-  const nextRequestId = (notificationRouteLoadRequestRef.current[projectId] ?? 0) + 1
-  notificationRouteLoadRequestRef.current[projectId] = nextRequestId
-
-  setNotificationRouteLoadStatuses((currentStatuses) => ({
-    ...currentStatuses,
-    [projectId]: 'loading',
-  }))
-  setNotificationRouteLoadErrors((currentErrors) => ({
-    ...currentErrors,
-    [projectId]: null,
-  }))
-
-  const requestPromise: Promise<NotificationRoutesLoadResult> = adapter
-    .listNotificationRoutes(projectId)
-    .then((response) => {
-      if (notificationRouteLoadRequestRef.current[projectId] !== nextRequestId) {
-        return {
-          routes: notificationRoutesRef.current[projectId] ?? cachedRoutes,
-          loadError: notificationRouteLoadErrorsRef.current[projectId] ?? cachedLoadError,
-        }
-      }
-
-      const inScopeRoutes = response.routes.filter(
-        (route) => route.projectId === projectId && route.routeId.trim().length > 0,
-      )
-
-      setNotificationRoutes((currentRoutes) => ({
-        ...currentRoutes,
-        [projectId]: inScopeRoutes,
-      }))
-      setNotificationRouteLoadStatuses((currentStatuses) => ({
-        ...currentStatuses,
-        [projectId]: 'ready',
-      }))
-      setNotificationRouteLoadErrors((currentErrors) => ({
-        ...currentErrors,
-        [projectId]: null,
-      }))
-
-      return {
-        routes: inScopeRoutes,
-        loadError: null,
-      }
-    })
-    .catch((error) => {
-      if (notificationRouteLoadRequestRef.current[projectId] !== nextRequestId) {
-        return {
-          routes: notificationRoutesRef.current[projectId] ?? cachedRoutes,
-          loadError: notificationRouteLoadErrorsRef.current[projectId] ?? cachedLoadError,
-        }
-      }
-
-      const loadError = getOperatorActionError(error, 'Xero could not load notification routes for this project.')
-      setNotificationRouteLoadStatuses((currentStatuses) => ({
-        ...currentStatuses,
-        [projectId]: 'error',
-      }))
-      setNotificationRouteLoadErrors((currentErrors) => ({
-        ...currentErrors,
-        [projectId]: loadError,
-      }))
-
-      return {
-        routes: notificationRoutesRef.current[projectId] ?? cachedRoutes,
-        loadError,
-      }
-    })
-    .finally(() => {
-      if (notificationRouteLoadInFlightRef.current[projectId] === requestPromise) {
-        delete notificationRouteLoadInFlightRef.current[projectId]
-      }
-    })
-
-  notificationRouteLoadInFlightRef.current[projectId] = requestPromise
-  return requestPromise
-}
-
 interface ProjectLoadRefs {
   latestLoadRequestRef: MutableRefObject<number>
   projectDetailsRef: MutableRefObject<Record<string, ProjectDetailView>>
   runtimeSessionsRef: MutableRefObject<RuntimeSessionRecords>
   runtimeRunsRef: MutableRefObject<RuntimeRunRecords>
   autonomousRunsRef: MutableRefObject<AutonomousRunRecords>
-  notificationSyncSummariesRef: MutableRefObject<NotificationSyncSummaryRecords>
-  notificationDispatchesRef: MutableRefObject<Record<string, NotificationDispatchDto[]>>
-  notificationRoutesRef: MutableRefObject<NotificationRouteRecords>
 }
 
 interface ProjectLoadSetters {
@@ -270,11 +144,6 @@ interface ProjectLoadSetters {
   setRuntimeSessions: SetState<RuntimeSessionRecords>
   setRuntimeRuns: SetState<RuntimeRunRecords>
   setAutonomousRuns: SetState<AutonomousRunRecords>
-  setNotificationSyncSummaries: SetState<NotificationSyncSummaryRecords>
-  setNotificationSyncErrors: SetState<NotificationRouteErrorRecords>
-  setNotificationRoutes: SetState<NotificationRouteRecords>
-  setNotificationRouteLoadStatuses: SetState<NotificationRouteStatusRecords>
-  setNotificationRouteLoadErrors: SetState<NotificationRouteErrorRecords>
   setRuntimeLoadErrors: SetState<RuntimeLoadErrorRecords>
   setRuntimeRunLoadErrors: SetState<RuntimeLoadErrorRecords>
   setAutonomousRunLoadErrors: SetState<RuntimeLoadErrorRecords>
@@ -290,7 +159,6 @@ interface ProjectLoadSetters {
   setAutonomousRunActionError: SetState<OperatorActionErrorView | null>
   setPendingAutonomousRunAction: SetState<AutonomousRunActionKind | null>
   setAutonomousRunActionStatus: SetState<AutonomousRunActionStatus>
-  setNotificationRouteMutationError: SetState<OperatorActionErrorView | null>
 }
 
 interface ProjectLoadArgs {
@@ -301,7 +169,6 @@ interface ProjectLoadArgs {
   refs: ProjectLoadRefs
   setters: ProjectLoadSetters
   resetRepositoryDiffs: (status: RepositoryStatusView | null) => void
-  loadNotificationRoutes: (projectId: string, options?: { force?: boolean }) => Promise<NotificationRoutesLoadResult>
   getOperatorActionError: (error: unknown, fallback: string) => OperatorActionErrorView
 }
 
@@ -355,16 +222,6 @@ function bundleDiagnostic(
   return bundle.diagnostics.find((diagnostic) => diagnostic.section === section) ?? null
 }
 
-function operatorErrorFromDiagnostic(
-  diagnostic: ProjectLoadBundleDiagnosticDto,
-): OperatorActionErrorView {
-  return {
-    code: diagnostic.code,
-    message: diagnostic.message,
-    retryable: diagnostic.retryable,
-  }
-}
-
 function diagnosticMessage(
   bundle: ProjectLoadBundleDto,
   section: string,
@@ -377,7 +234,6 @@ async function loadProjectStateFromBundle({
   projectId,
   requestId,
   bundleLoader,
-  includeNotificationRoutes,
   cachedRepositoryStatus,
   refs,
   setters,
@@ -385,27 +241,17 @@ async function loadProjectStateFromBundle({
 }: ProjectLoadArgs & {
   requestId: number
   bundleLoader: NonNullable<XeroDesktopAdapter['getProjectLoadBundle']>
-  includeNotificationRoutes: boolean
   cachedRepositoryStatus: RepositoryStatusView | null
 }): Promise<ProjectDetailView | null> {
   const bundle = await bundleLoader({
     projectId,
-    includeNotificationRoutes,
   })
 
   if (refs.latestLoadRequestRef.current !== requestId) {
     return null
   }
 
-  const finalDispatches =
-    bundle.notificationDispatches.length > 0
-      ? bundle.notificationDispatches
-      : bundle.projectSnapshot.notificationDispatches ?? []
-  refs.notificationDispatchesRef.current[projectId] = finalDispatches
-
-  const snapshotProject = mapProjectSnapshot(bundle.projectSnapshot, {
-    notificationDispatches: finalDispatches,
-  })
+  const snapshotProject = mapProjectSnapshot(bundle.projectSnapshot)
   const selectedAgentSessionId = snapshotProject.selectedAgentSession?.agentSessionId ?? null
   const runtimeRunDiagnostic = bundleDiagnostic(bundle, 'runtimeRun')
   const status = bundle.repositoryStatus ? mapRepositoryStatus(bundle.repositoryStatus) : cachedRepositoryStatus
@@ -451,44 +297,12 @@ async function loadProjectStateFromBundle({
     ),
     autonomousRun,
   )
-  const finalizedProjectWithBroker = {
-    ...finalizedProject,
-    notificationBroker: mapNotificationBroker(projectId, finalDispatches),
-  }
-
   setters.setProjects((currentProjects) =>
     upsertProjectListItem(
       currentProjects,
       runtime ? applyRuntimeToProjectList(nextSummary, runtime) : nextSummary,
     ),
   )
-
-  if (includeNotificationRoutes) {
-    const routeDiagnostic = bundleDiagnostic(bundle, 'notificationRoutes')
-    if (routeDiagnostic) {
-      setters.setNotificationRouteLoadStatuses((currentStatuses) => ({
-        ...currentStatuses,
-        [projectId]: 'error',
-      }))
-      setters.setNotificationRouteLoadErrors((currentErrors) => ({
-        ...currentErrors,
-        [projectId]: operatorErrorFromDiagnostic(routeDiagnostic),
-      }))
-    } else {
-      setters.setNotificationRoutes((currentRoutes) => ({
-        ...currentRoutes,
-        [projectId]: bundle.notificationRoutes,
-      }))
-      setters.setNotificationRouteLoadStatuses((currentStatuses) => ({
-        ...currentStatuses,
-        [projectId]: 'ready',
-      }))
-      setters.setNotificationRouteLoadErrors((currentErrors) => ({
-        ...currentErrors,
-        [projectId]: null,
-      }))
-    }
-  }
 
   startTransition(() => {
     if (runtime) {
@@ -525,19 +339,17 @@ async function loadProjectStateFromBundle({
   setters.setRepositoryStatus(status)
   resetRepositoryDiffs(status)
   setters.setActiveProjectId(projectId)
-  setters.setActiveProject(finalizedProjectWithBroker)
+  setters.setActiveProject(finalizedProject)
   setters.setErrorMessage(
     combineLoadErrors(
       diagnosticMessage(bundle, 'repositoryStatus'),
-      diagnosticMessage(bundle, 'notificationDispatches'),
-      diagnosticMessage(bundle, 'notificationRoutes'),
       diagnosticMessage(bundle, 'runtimeSession'),
       runtimeRunLoadError,
       diagnosticMessage(bundle, 'autonomousRun'),
     ),
   )
 
-  return finalizedProjectWithBroker
+  return finalizedProject
 }
 
 export async function loadProjectState({
@@ -548,7 +360,6 @@ export async function loadProjectState({
   refs,
   setters,
   resetRepositoryDiffs,
-  loadNotificationRoutes,
   getOperatorActionError,
 }: ProjectLoadArgs): Promise<ProjectDetailView | null> {
   const requestId = refs.latestLoadRequestRef.current + 1
@@ -569,7 +380,6 @@ export async function loadProjectState({
   setters.setAutonomousRunActionError(null)
   setters.setPendingAutonomousRunAction(null)
   setters.setAutonomousRunActionStatus('idle')
-  setters.setNotificationRouteMutationError(null)
 
   const cachedProject = refs.projectDetailsRef.current[projectId] ?? null
   const cachedRepositoryStatus = cachedProject?.repositoryStatus ?? null
@@ -580,8 +390,6 @@ export async function loadProjectState({
     resetRepositoryDiffs(cachedRepositoryStatus)
   }
 
-  const shouldRefreshRoutes =
-    source !== 'runtime_run:updated' && source !== 'runtime_stream:action_required'
   // Project rail clicks must land after the lightweight snapshot; the bundle
   // hydrates secondary state and can include expensive git/runtime work.
   const bundleLoader = source === 'selection' ? undefined : adapter.getProjectLoadBundle
@@ -595,11 +403,9 @@ export async function loadProjectState({
         refs,
         setters,
         resetRepositoryDiffs,
-        loadNotificationRoutes,
         getOperatorActionError,
         requestId,
         bundleLoader,
-        includeNotificationRoutes: shouldRefreshRoutes,
         cachedRepositoryStatus,
       })
       if (refs.latestLoadRequestRef.current === requestId) {
@@ -631,42 +437,6 @@ export async function loadProjectState({
       error: getDesktopErrorMessage(error),
     }))
 
-  const cachedDispatches = refs.notificationDispatchesRef.current[projectId] ?? []
-  const brokerPromise: Promise<{
-    ok: boolean
-    dispatches: NotificationDispatchDto[]
-    error: string | null
-  }> = adapter
-    .listNotificationDispatches(projectId)
-    .then((response) => ({
-      ok: true as const,
-      dispatches: response.dispatches,
-      error: null,
-    }))
-    .catch((error) => ({
-      ok: false as const,
-      dispatches: cachedDispatches,
-      error: getDesktopErrorMessage(error),
-    }))
-
-  const routePromise: Promise<{
-    ok: boolean
-    routes: NotificationRouteDto[]
-    error: string | null
-  }> = shouldRefreshRoutes
-    ? loadNotificationRoutes(projectId, {
-        force: source === 'startup' || source === 'selection' || source === 'import',
-      }).then((result) => ({
-        ok: result.loadError === null,
-        routes: result.routes,
-        error: result.loadError?.message ?? null,
-      }))
-    : Promise.resolve({
-        ok: true as const,
-        routes: refs.notificationRoutesRef.current[projectId] ?? [],
-        error: null,
-      })
-
   const snapshotPromise = adapter.getProjectSnapshot(projectId)
   const repositoryStatusPromise: Promise<RepositoryStatusLoadResult> = adapter
     .getRepositoryStatus(projectId)
@@ -688,12 +458,7 @@ export async function loadProjectState({
       return null
     }
 
-    const snapshotDispatches = cachedDispatches.length > 0
-      ? cachedDispatches
-      : snapshotResponse.notificationDispatches ?? []
-    const snapshotProject = mapProjectSnapshot(snapshotResponse, {
-      notificationDispatches: snapshotDispatches,
-    })
+    const snapshotProject = mapProjectSnapshot(snapshotResponse)
     const agentSessionId = snapshotProject.selectedAgentSessionId
     const runtimeRunPromise: Promise<RuntimeRunLoadResult> = adapter
       .getRuntimeRun(projectId, agentSessionId)
@@ -759,15 +524,11 @@ export async function loadProjectState({
 
     const [
       statusResult,
-      brokerResult,
-      routeResult,
       runtimeResult,
       runtimeRunResult,
       autonomousRunResult,
     ] = await Promise.all([
       repositoryStatusPromise,
-      brokerPromise,
-      routePromise,
       runtimePromise,
       runtimeRunPromise,
       autonomousRunPromise,
@@ -776,8 +537,6 @@ export async function loadProjectState({
       return nextProject
     }
 
-    const finalDispatches = brokerResult.ok ? brokerResult.dispatches : snapshotDispatches
-    refs.notificationDispatchesRef.current[projectId] = finalDispatches
     const finalStatus = statusResult.status
     const finalRuntime = runtimeResult.runtime ?? cachedRuntime
     const finalRuntimeRun = runtimeRunResult.ok ? runtimeRunResult.runtimeRun : runtimeRunResult.runtimeRun ?? cachedRuntimeRun
@@ -796,11 +555,6 @@ export async function loadProjectState({
       ),
       finalAutonomousRun,
     )
-    const finalizedProjectWithBroker = {
-      ...finalizedProject,
-      notificationBroker: mapNotificationBroker(projectId, finalDispatches),
-    }
-
     // Runtime/run/autonomous records and their load-error flags are secondary
     // data that the import UI (and most other UI) doesn't depend on directly.
     // Wrapping them in startTransition tells React these are non-urgent updates:
@@ -871,20 +625,18 @@ export async function loadProjectState({
         return currentProject
       }
 
-      return finalizedProjectWithBroker
+      return finalizedProject
     })
     setters.setErrorMessage(
       combineLoadErrors(
         statusResult.error,
-        brokerResult.error,
-        routeResult.error,
         runtimeResult.error,
         runtimeRunResult.error,
         autonomousRunResult.error,
       ),
     )
 
-    return finalizedProjectWithBroker
+    return finalizedProject
   } catch (error) {
     if (refs.latestLoadRequestRef.current === requestId) {
       const nextMessage = getDesktopErrorMessage(error)

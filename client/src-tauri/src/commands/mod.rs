@@ -38,8 +38,6 @@ pub mod global_computer_use;
 pub mod import_mcp_servers;
 pub mod import_repository;
 pub mod list_mcp_servers;
-pub mod list_notification_dispatches;
-pub mod list_notification_routes;
 pub mod list_projects;
 pub mod local_environment;
 pub mod logout_runtime_session;
@@ -53,7 +51,6 @@ pub mod project_state;
 pub mod provider_credentials;
 pub mod provider_model_catalog;
 pub mod provider_preflight;
-pub mod record_notification_dispatch_outcome;
 pub mod remote_bridge;
 pub mod remove_mcp_server;
 pub mod remove_project;
@@ -72,14 +69,10 @@ pub mod start_openai_login;
 pub mod start_runtime_run;
 pub mod start_runtime_session;
 pub mod stop_runtime_run;
-pub mod submit_notification_reply;
 pub mod submit_openai_callback;
 pub mod subscribe_runtime_stream;
-pub mod sync_notification_adapters;
 pub mod update_runtime_run_controls;
 pub mod upsert_mcp_server;
-pub mod upsert_notification_route;
-pub mod upsert_notification_route_credentials;
 pub mod wipe_data;
 pub mod workflow_agents;
 pub mod workflows;
@@ -201,8 +194,6 @@ pub use global_computer_use::{ensure_global_computer_use_session, GlobalComputer
 pub use import_mcp_servers::import_mcp_servers;
 pub use import_repository::import_repository;
 pub use list_mcp_servers::{list_mcp_servers, refresh_mcp_server_statuses};
-pub use list_notification_dispatches::list_notification_dispatches;
-pub use list_notification_routes::list_notification_routes;
 pub use list_projects::list_projects;
 pub use local_environment::{
     get_launch_mode, get_local_environment_config, regenerate_secret_key_base,
@@ -246,7 +237,6 @@ pub use provider_credentials::{
 };
 pub use provider_model_catalog::get_provider_model_catalog;
 pub use provider_preflight::preflight_provider_profile;
-pub use record_notification_dispatch_outcome::record_notification_dispatch_outcome;
 pub use remote_bridge::{
     bridge_poll_github_login, bridge_publish_theme, bridge_revoke_device, bridge_sign_in,
     bridge_sign_out, bridge_status, BridgePollGithubLoginRequestDto, BridgeRevokeDeviceRequestDto,
@@ -300,14 +290,10 @@ pub use start_openai_login::start_openai_login;
 pub use start_runtime_run::start_runtime_run;
 pub use start_runtime_session::start_runtime_session;
 pub use stop_runtime_run::stop_runtime_run;
-pub use submit_notification_reply::submit_notification_reply;
 pub use submit_openai_callback::submit_openai_callback;
 pub use subscribe_runtime_stream::subscribe_runtime_stream;
-pub use sync_notification_adapters::sync_notification_adapters;
 pub use update_runtime_run_controls::update_runtime_run_controls;
 pub use upsert_mcp_server::upsert_mcp_server;
-pub use upsert_notification_route::upsert_notification_route;
-pub use upsert_notification_route_credentials::upsert_notification_route_credentials;
 pub use wipe_data::{
     wipe_all_xero_data, wipe_project_data, WipeAllDataResponseDto, WipeProjectDataResponseDto,
 };
@@ -330,16 +316,9 @@ pub use xai_device_code_login::{poll_xai_device_code_login, start_xai_device_cod
 pub use crate::environment::service::EnvironmentDiscoveryStatus;
 pub use contracts::{
     agent::*, autonomous::*, code_history::*, developer_tool_harness::*, dictation::*, error::*,
-    mcp::*, notifications::*, runtime::*, session_context::*, skills::*, surface::*, usage::*,
-    workflow::*, workflow_agents::*, workflows::*,
+    mcp::*, runtime::*, session_context::*, skills::*, surface::*, usage::*, workflow::*,
+    workflow_agents::*, workflows::*,
 };
 
-pub(crate) use contracts::{
-    error::validate_non_empty,
-    notifications::{
-        map_notification_dispatch_record, map_notification_reply_claim_record,
-        map_notification_route_credential_readiness, map_notification_route_record,
-        parse_notification_route_kind,
-    },
-};
+pub(crate) use contracts::error::validate_non_empty;
 pub(crate) use soul_settings::{default_soul_settings, load_soul_settings, soul_prompt_fragment};

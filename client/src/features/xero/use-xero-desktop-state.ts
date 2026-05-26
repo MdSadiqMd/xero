@@ -29,8 +29,6 @@ import {
   type XeroDoctorReportDto,
   type McpImportDiagnosticDto,
   type McpRegistryDto,
-  type NotificationDispatchDto,
-  type NotificationRouteDto,
   type AgentSessionView,
   type Phase,
   type ProjectDetailView,
@@ -47,19 +45,13 @@ import {
   runtimeAgentIdSchema,
   type RuntimeAgentIdDto,
   type SkillRegistryDto,
-  type SyncNotificationAdaptersResponseDto,
 } from '@/src/lib/xero-model'
-import { mapNotificationBroker } from '@/src/lib/xero-model/notifications'
 import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
 
-import {
-  type BlockedNotificationSyncPollTarget,
-} from './use-xero-desktop-state/notification-health'
 import { useXeroDesktopMutations } from './use-xero-desktop-state/mutations'
 import {
   applyAutonomousRunState,
   applyRuntimeToProjectList,
-  loadNotificationRoutesForProject,
   loadProjectState,
   removeProjectRecord,
   type ProjectLoadSource,
@@ -101,9 +93,6 @@ import type {
   AutonomousRunActionStatus,
   DoctorReportRunStatus,
   ExecutionPaneView,
-  NotificationRouteMutationStatus,
-  NotificationRoutesLoadResult,
-  NotificationRoutesLoadStatus,
   OperatorActionErrorView,
   OperatorActionStatus,
   ProjectRemovalStatus,
@@ -136,11 +125,6 @@ export type {
   DoctorReportRunStatus,
   DiffScopeSummary,
   ExecutionPaneView,
-  NotificationChannelHealthView,
-  NotificationRouteHealthState,
-  NotificationRouteHealthView,
-  NotificationRouteMutationStatus,
-  NotificationRoutesLoadStatus,
   OperatorActionDecision,
   OperatorActionErrorView,
   OperatorActionStatus,
@@ -161,7 +145,6 @@ export type {
   UseXeroDesktopStateResult,
   WorkflowPaneView,
 } from './use-xero-desktop-state/types'
-export { BLOCKED_NOTIFICATION_SYNC_POLL_MS } from './use-xero-desktop-state/notification-health'
 export {
   selectRepositoryShellStatus,
   selectRuntimeStreamForProject,
@@ -462,7 +445,6 @@ function createProjectShell(project: ProjectListItem): ProjectDetailView {
     agentSessions: [],
     selectedAgentSession: null,
     selectedAgentSessionId: selectAgentSessionId([]),
-    notificationBroker: mapNotificationBroker(project.id, []),
     runtimeSession: null,
     runtimeRun: null,
     autonomousRun: null,
@@ -910,19 +892,6 @@ export function useXeroDesktopState(
   const [runtimeSessions, setRuntimeSessions] = useState<Record<string, RuntimeSessionView>>({})
   const [runtimeRuns, setRuntimeRuns] = useState<Record<string, RuntimeRunView>>({})
   const [autonomousRuns, setAutonomousRuns] = useState<Record<string, NonNullable<ProjectDetailView['autonomousRun']>>>({})
-  const [notificationRoutes, setNotificationRoutes] = useState<Record<string, NotificationRouteDto[]>>({})
-  const [notificationRouteLoadStatuses, setNotificationRouteLoadStatuses] = useState<
-    Record<string, NotificationRoutesLoadStatus>
-  >({})
-  const [notificationRouteLoadErrors, setNotificationRouteLoadErrors] = useState<
-    Record<string, OperatorActionErrorView | null>
-  >({})
-  const [notificationSyncSummaries, setNotificationSyncSummaries] = useState<
-    Record<string, SyncNotificationAdaptersResponseDto | null>
-  >({})
-  const [notificationSyncErrors, setNotificationSyncErrors] = useState<
-    Record<string, OperatorActionErrorView | null>
-  >({})
   const [runtimeLoadErrors, setRuntimeLoadErrors] = useState<Record<string, string | null>>({})
   const [runtimeRunLoadErrors, setRuntimeRunLoadErrors] = useState<Record<string, string | null>>({})
   const [autonomousRunLoadErrors, setAutonomousRunLoadErrors] = useState<Record<string, string | null>>({})
@@ -942,11 +911,6 @@ export function useXeroDesktopState(
   const [runtimeRunActionStatus, setRuntimeRunActionStatus] = useState<RuntimeRunActionStatus>('idle')
   const [pendingRuntimeRunAction, setPendingRuntimeRunAction] = useState<RuntimeRunActionKind | null>(null)
   const [runtimeRunActionError, setRuntimeRunActionError] = useState<OperatorActionErrorView | null>(null)
-  const [notificationRouteMutationStatus, setNotificationRouteMutationStatus] =
-    useState<NotificationRouteMutationStatus>('idle')
-  const [pendingNotificationRouteId, setPendingNotificationRouteId] = useState<string | null>(null)
-  const [notificationRouteMutationError, setNotificationRouteMutationError] =
-    useState<OperatorActionErrorView | null>(null)
   const [providerCredentials, setProviderCredentials] =
     useState<ProviderCredentialsSnapshotDto | null>(null)
   const [providerCredentialsLoadStatus, setProviderCredentialsLoadStatus] =
@@ -1020,13 +984,6 @@ export function useXeroDesktopState(
   const agentWorkspaceLayoutsRef = useRef<Record<string, AgentWorkspaceLayoutState>>(agentWorkspaceLayouts)
   const projectUiStateLayoutHydratedRef = useRef<Set<string>>(new Set())
   const pendingSpawnPaneIdsRef = useRef<Set<string>>(new Set())
-  const notificationRoutesRef = useRef<Record<string, NotificationRouteDto[]>>({})
-  const notificationRouteLoadStatusesRef = useRef<Record<string, NotificationRoutesLoadStatus>>({})
-  const notificationRouteLoadErrorsRef = useRef<Record<string, OperatorActionErrorView | null>>({})
-  const notificationRouteLoadRequestRef = useRef<Record<string, number>>({})
-  const notificationRouteLoadInFlightRef = useRef<Record<string, Promise<NotificationRoutesLoadResult>>>({})
-  const notificationSyncSummariesRef = useRef<Record<string, SyncNotificationAdaptersResponseDto | null>>({})
-  const notificationDispatchesRef = useRef<Record<string, NotificationDispatchDto[]>>({})
   const trustSnapshotRef = useRef<Record<string, AgentTrustSnapshotView>>({})
   const providerCredentialsRef = useRef<ProviderCredentialsSnapshotDto | null>(null)
   const providerCredentialsLoadInFlightRef = useRef<Promise<ProviderCredentialsSnapshotDto> | null>(
@@ -1334,23 +1291,6 @@ export function useXeroDesktopState(
       trimRuntimeStreamSessionCache(cacheKey)
     }
   }, [activeProject, activeProjectId, autonomousRuns, runtimeRuns, runtimeStreams, trimRuntimeStreamSessionCache])
-
-  useEffect(() => {
-    notificationRoutesRef.current = notificationRoutes
-  }, [notificationRoutes])
-
-  useEffect(() => {
-    notificationRouteLoadStatusesRef.current = notificationRouteLoadStatuses
-  }, [notificationRouteLoadStatuses])
-
-  useEffect(() => {
-    notificationRouteLoadErrorsRef.current = notificationRouteLoadErrors
-  }, [notificationRouteLoadErrors])
-
-  useEffect(() => {
-    notificationSyncSummariesRef.current = notificationSyncSummaries
-  }, [notificationSyncSummaries])
-
 
   useEffect(() => {
     providerCredentialsRef.current = providerCredentials
@@ -1785,24 +1725,6 @@ export function useXeroDesktopState(
     [adapter, applyAutonomousRunStateUpdate],
   )
 
-  const loadNotificationRoutes = useCallback(
-    async (projectId: string, options: { force?: boolean } = {}): Promise<NotificationRoutesLoadResult> =>
-      loadNotificationRoutesForProject({
-        adapter,
-        projectId,
-        force: options.force,
-        notificationRoutesRef,
-        notificationRouteLoadErrorsRef,
-        notificationRouteLoadRequestRef,
-        notificationRouteLoadInFlightRef,
-        setNotificationRoutes,
-        setNotificationRouteLoadStatuses,
-        setNotificationRouteLoadErrors,
-        getOperatorActionError,
-      }),
-    [adapter],
-  )
-
   const applyAgentSessionRuntimeState = useCallback(
     (
       projectId: string,
@@ -2208,13 +2130,7 @@ export function useXeroDesktopState(
           .then(mapRepositoryStatus)
           .catch(() => null)
         const snapshotResponse = await adapter.getProjectSnapshot(trimmedProjectId)
-        const dispatches =
-          notificationDispatchesRef.current[trimmedProjectId] ??
-          snapshotResponse.notificationDispatches ??
-          []
-        const snapshotProject = mapProjectSnapshot(snapshotResponse, {
-          notificationDispatches: dispatches,
-        })
+        const snapshotProject = mapProjectSnapshot(snapshotResponse)
         const cachedRuntime = runtimeSessionsRef.current[trimmedProjectId] ?? null
         const cachedRuntimeRun = runtimeRunsRef.current[trimmedProjectId] ?? null
         const cachedAutonomousRun =
@@ -2497,9 +2413,6 @@ export function useXeroDesktopState(
           runtimeSessionsRef,
           runtimeRunsRef,
           autonomousRunsRef,
-          notificationSyncSummariesRef,
-          notificationDispatchesRef,
-          notificationRoutesRef,
         },
         setters: {
           setProjects,
@@ -2509,11 +2422,6 @@ export function useXeroDesktopState(
           setRuntimeSessions,
           setRuntimeRuns,
           setAutonomousRuns,
-          setNotificationSyncSummaries,
-          setNotificationSyncErrors,
-          setNotificationRoutes,
-          setNotificationRouteLoadStatuses,
-          setNotificationRouteLoadErrors,
           setRuntimeLoadErrors,
           setRuntimeRunLoadErrors,
           setAutonomousRunLoadErrors,
@@ -2529,13 +2437,11 @@ export function useXeroDesktopState(
           setAutonomousRunActionError,
           setPendingAutonomousRunAction,
           setAutonomousRunActionStatus,
-          setNotificationRouteMutationError,
         },
         resetRepositoryDiffs,
-        loadNotificationRoutes,
         getOperatorActionError,
       }),
-    [adapter, loadNotificationRoutes, resetRepositoryDiffs],
+    [adapter, resetRepositoryDiffs],
   )
 
   const scheduleRuntimeMetadataRefresh = useCallback(
@@ -2579,14 +2485,6 @@ export function useXeroDesktopState(
         setRepositoryStatus(null)
         setRuntimeRuns({})
         setAutonomousRuns({})
-        setNotificationRoutes({})
-        setNotificationRouteLoadStatuses({})
-        setNotificationRouteLoadErrors({})
-        setNotificationSyncSummaries({})
-        setNotificationSyncErrors({})
-        setNotificationRouteMutationStatus('idle')
-        setPendingNotificationRouteId(null)
-        setNotificationRouteMutationError(null)
         setRuntimeStreams({})
         setRuntimeLoadErrors({})
         setRuntimeRunLoadErrors({})
@@ -2915,8 +2813,6 @@ export function useXeroDesktopState(
     removePluginRoot,
     setPluginEnabled,
     removePlugin,
-    refreshNotificationRoutes,
-    upsertNotificationRoute,
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
@@ -2952,12 +2848,6 @@ export function useXeroDesktopState(
       setRuntimeRunActionStatus,
       setPendingRuntimeRunAction,
       setRuntimeRunActionError,
-      setNotificationRoutes,
-      setNotificationRouteLoadStatuses,
-      setNotificationRouteLoadErrors,
-      setNotificationRouteMutationStatus,
-      setPendingNotificationRouteId,
-      setNotificationRouteMutationError,
       setProviderCredentials,
       setProviderCredentialsLoadStatus,
       setProviderCredentialsLoadError,
@@ -2980,7 +2870,6 @@ export function useXeroDesktopState(
     operations: {
       bootstrap,
       loadProject,
-      loadNotificationRoutes,
       syncRuntimeSession,
       syncRuntimeRun,
       syncAutonomousRun,
@@ -3582,28 +3471,6 @@ export function useXeroDesktopState(
     activeRuntimeStreamCandidate?.agentSessionId === activeAgentSessionId
       ? activeRuntimeStreamCandidate
       : null
-  const activeNotificationRoutes = useMemo(
-    () =>
-      activeProject
-        ? (notificationRoutes[activeProject.id] ?? []).filter(
-            (route) => route.projectId === activeProject.id && route.routeId.trim().length > 0,
-          )
-        : [],
-    [activeProject, notificationRoutes],
-  )
-  const activeNotificationRouteLoadStatus: NotificationRoutesLoadStatus = activeProject
-    ? notificationRouteLoadStatuses[activeProject.id] ?? 'idle'
-    : 'idle'
-  const activeNotificationRouteLoadError = activeProject
-    ? notificationRouteLoadErrors[activeProject.id] ?? null
-    : null
-  const activeNotificationSyncSummary = activeProject
-    ? notificationSyncSummaries[activeProject.id] ?? null
-    : null
-  const activeNotificationSyncError = activeProject
-    ? notificationSyncErrors[activeProject.id] ?? null
-    : null
-  const activeBlockedNotificationSyncPollTarget: BlockedNotificationSyncPollTarget | null = null
   const activeProjectUnreadCompletedSessionCount = useMemo(
     () => countUnreadCompletedAgentSessions(completedAgentSessionNotifications, activeProjectId),
     [activeProjectId, completedAgentSessionNotifications],
@@ -3640,15 +3507,6 @@ export function useXeroDesktopState(
         runtimeRunErrorMessage: activeRuntimeRunErrorMessage,
         autonomousRunErrorMessage: activeAutonomousRunErrorMessage,
         runtimeStream: activeRuntimeStream,
-        notificationRoutes: activeNotificationRoutes,
-        notificationRouteLoadStatus: activeNotificationRouteLoadStatus,
-        notificationRouteError: activeNotificationRouteLoadError,
-        notificationSyncSummary: activeNotificationSyncSummary,
-        notificationSyncError: activeNotificationSyncError,
-        blockedNotificationSyncPollTarget: activeBlockedNotificationSyncPollTarget,
-        notificationRouteMutationStatus,
-        pendingNotificationRouteId,
-        notificationRouteMutationError,
         previousTrustSnapshot: activeProject ? trustSnapshotRef.current[activeProject.id] ?? null : null,
         operatorActionStatus,
         pendingOperatorActionId,
@@ -3661,11 +3519,6 @@ export function useXeroDesktopState(
         runtimeRunActionError,
       }),
     [
-      activeNotificationRouteLoadError,
-      activeNotificationRouteLoadStatus,
-      activeNotificationRoutes,
-      activeNotificationSyncError,
-      activeNotificationSyncSummary,
       activePhase,
       activeProject,
       providerModelCatalogs,
@@ -3676,18 +3529,14 @@ export function useXeroDesktopState(
       activeProviderModelCatalogLoadStatus,
       activeAutonomousRun,
       activeAutonomousRunErrorMessage,
-      activeBlockedNotificationSyncPollTarget,
       activeRuntimeErrorMessage,
       activeRuntimeRun,
       activeRuntimeRunErrorMessage,
       activeRuntimeSession,
       activeRuntimeStream,
-      notificationRouteMutationError,
-      notificationRouteMutationStatus,
       operatorActionError,
       operatorActionStatus,
       pendingAutonomousRunAction,
-      pendingNotificationRouteId,
       pendingOperatorActionId,
       pendingRuntimeRunAction,
       repositoryStatus,
@@ -3725,15 +3574,6 @@ export function useXeroDesktopState(
           runtimeRunErrorMessage: null,
           autonomousRunErrorMessage: null,
           runtimeStream: null,
-          notificationRoutes: activeNotificationRoutes,
-          notificationRouteLoadStatus: activeNotificationRouteLoadStatus,
-          notificationRouteError: activeNotificationRouteLoadError,
-          notificationSyncSummary: activeNotificationSyncSummary,
-          notificationSyncError: activeNotificationSyncError,
-          blockedNotificationSyncPollTarget: activeBlockedNotificationSyncPollTarget,
-          notificationRouteMutationStatus,
-          pendingNotificationRouteId,
-          notificationRouteMutationError,
           previousTrustSnapshot: null,
           operatorActionStatus,
           pendingOperatorActionId,
@@ -3776,15 +3616,6 @@ export function useXeroDesktopState(
               runtimeRunErrorMessage: activeRuntimeRunErrorMessage,
               autonomousRunErrorMessage: activeAutonomousRunErrorMessage,
               runtimeStream: activeRuntimeStream,
-              notificationRoutes: activeNotificationRoutes,
-              notificationRouteLoadStatus: activeNotificationRouteLoadStatus,
-              notificationRouteError: activeNotificationRouteLoadError,
-              notificationSyncSummary: activeNotificationSyncSummary,
-              notificationSyncError: activeNotificationSyncError,
-              blockedNotificationSyncPollTarget: activeBlockedNotificationSyncPollTarget,
-              notificationRouteMutationStatus,
-              pendingNotificationRouteId,
-              notificationRouteMutationError,
               previousTrustSnapshot: activeProject ? trustSnapshotRef.current[activeProject.id] ?? null : null,
               operatorActionStatus,
               pendingOperatorActionId,
@@ -3832,15 +3663,6 @@ export function useXeroDesktopState(
         runtimeRunErrorMessage: activeRuntimeRunErrorMessage,
         autonomousRunErrorMessage: activeAutonomousRunErrorMessage,
         runtimeStream: cachedRuntimeStream,
-        notificationRoutes: activeNotificationRoutes,
-        notificationRouteLoadStatus: activeNotificationRouteLoadStatus,
-        notificationRouteError: activeNotificationRouteLoadError,
-        notificationSyncSummary: activeNotificationSyncSummary,
-        notificationSyncError: activeNotificationSyncError,
-        blockedNotificationSyncPollTarget: activeBlockedNotificationSyncPollTarget,
-        notificationRouteMutationStatus,
-        pendingNotificationRouteId,
-        notificationRouteMutationError,
         previousTrustSnapshot: null,
         operatorActionStatus,
         pendingOperatorActionId,
@@ -3866,12 +3688,6 @@ export function useXeroDesktopState(
   }, [
     activeAgentSessionId,
     activeAutonomousRunErrorMessage,
-    activeBlockedNotificationSyncPollTarget,
-    activeNotificationRouteLoadError,
-    activeNotificationRouteLoadStatus,
-    activeNotificationRoutes,
-    activeNotificationSyncError,
-    activeNotificationSyncSummary,
     activePhase,
     activeProject,
     activeProviderModelCatalog,
@@ -3884,12 +3700,9 @@ export function useXeroDesktopState(
     agentWorkspaceLayout,
     autonomousRunActionError,
     autonomousRunActionStatus,
-    notificationRouteMutationError,
-    notificationRouteMutationStatus,
     operatorActionError,
     operatorActionStatus,
     pendingAutonomousRunAction,
-    pendingNotificationRouteId,
     pendingOperatorActionId,
     pendingRuntimeRunAction,
     providerCredentials,
@@ -4035,8 +3848,6 @@ export function useXeroDesktopState(
     removePluginRoot,
     setPluginEnabled,
     removePlugin,
-    refreshNotificationRoutes,
-    upsertNotificationRoute,
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,

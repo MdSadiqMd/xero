@@ -70,11 +70,6 @@ static SETTINGS_ACTIONS: &[SettingsAction] = &[
         spec: run(&["mcp", "status"], CommandScope::None),
     },
     SettingsAction {
-        title: "notification routes",
-        subtitle: "Approval notification routes for this project.",
-        spec: run(&["notification", "routes"], CommandScope::ProjectRequired),
-    },
-    SettingsAction {
         title: "usage summary",
         subtitle: "Token and cost summary for this project.",
         spec: run(&["usage", "summary"], CommandScope::ProjectRequired),

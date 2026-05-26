@@ -451,7 +451,7 @@ function PingWaveVisual() {
 
       {/* Caption */}
       <text x="140" y="186" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="8.5" fill="var(--muted-foreground)" opacity="0.7" letterSpacing="2">
-        notification · diff · one tap
+        review · diff · one tap
       </text>
     </svg>
   )

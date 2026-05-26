@@ -27,7 +27,7 @@ function createSkillRegistrySyncKey(registry: SkillRegistryDto | null): string {
   return JSON.stringify(registry)
 }
 
-export function useRuntimeSettingsNotificationMutations({
+export function useRuntimeSettingsMutations({
   adapter,
   refs,
   setters,
@@ -53,8 +53,6 @@ export function useRuntimeSettingsNotificationMutations({
   | 'removePluginRoot'
   | 'setPluginEnabled'
   | 'removePlugin'
-  | 'refreshNotificationRoutes'
-  | 'upsertNotificationRoute'
 > {
   const {
     activeProjectIdRef,
@@ -64,12 +62,6 @@ export function useRuntimeSettingsNotificationMutations({
     skillRegistryLoadInFlightRef,
   } = refs
   const {
-    setNotificationRoutes,
-    setNotificationRouteLoadStatuses,
-    setNotificationRouteLoadErrors,
-    setNotificationRouteMutationStatus,
-    setPendingNotificationRouteId,
-    setNotificationRouteMutationError,
     setMcpRegistry,
     setMcpImportDiagnostics,
     setMcpRegistryLoadStatus,
@@ -84,8 +76,6 @@ export function useRuntimeSettingsNotificationMutations({
     setPendingSkillSourceId,
     setSkillRegistryMutationError,
   } = setters
-  const { loadNotificationRoutes } = operations
-
   const applyMcpRegistrySnapshot = useCallback(
     (response: McpRegistryDto) => {
       const currentRegistry = mcpRegistryRef.current
@@ -792,109 +782,6 @@ export function useRuntimeSettingsNotificationMutations({
     ],
   )
 
-  const refreshNotificationRoutes = useCallback(
-    async (options: { force?: boolean } = {}) => {
-      const projectId = getActiveProjectId(
-        activeProjectIdRef,
-        'Select an imported project before loading notification routes.',
-      )
-
-      const result = await loadNotificationRoutes(projectId, {
-        force: options.force ?? false,
-      })
-
-      if (result.loadError) {
-        setNotificationRouteLoadStatuses((currentStatuses) => ({
-          ...currentStatuses,
-          [projectId]: 'error',
-        }))
-        setNotificationRouteLoadErrors((currentErrors) => ({
-          ...currentErrors,
-          [projectId]: result.loadError,
-        }))
-      }
-
-      return result.routes
-    },
-    [
-      activeProjectIdRef,
-      loadNotificationRoutes,
-      setNotificationRouteLoadErrors,
-      setNotificationRouteLoadStatuses,
-    ],
-  )
-
-  const upsertNotificationRoute = useCallback(
-    async (request: Parameters<XeroDesktopMutationActions['upsertNotificationRoute']>[0]) => {
-      const projectId = getActiveProjectId(
-        activeProjectIdRef,
-        'Select an imported project before saving a notification route.',
-      )
-
-      const trimmedRouteId = request.routeId.trim()
-      setNotificationRouteMutationStatus('running')
-      setPendingNotificationRouteId(trimmedRouteId.length > 0 ? trimmedRouteId : null)
-      setNotificationRouteMutationError(null)
-
-      try {
-        const response = await adapter.upsertNotificationRoute({
-          ...request,
-          projectId,
-        })
-
-        setNotificationRoutes((currentRoutes) => {
-          const existingRoutes = currentRoutes[projectId] ?? []
-          const nextRoutes = [
-            response.route,
-            ...existingRoutes.filter((route) => route.routeId !== response.route.routeId),
-          ]
-
-          return {
-            ...currentRoutes,
-            [projectId]: nextRoutes,
-          }
-        })
-        setNotificationRouteLoadStatuses((currentStatuses) => ({
-          ...currentStatuses,
-          [projectId]: 'ready',
-        }))
-        setNotificationRouteLoadErrors((currentErrors) => ({
-          ...currentErrors,
-          [projectId]: null,
-        }))
-
-        void loadNotificationRoutes(projectId, { force: true })
-        return response.route
-      } catch (error) {
-        setNotificationRouteMutationError(
-          getOperatorActionError(error, 'Xero could not save the notification route for this project.'),
-        )
-
-        try {
-          await loadNotificationRoutes(projectId, { force: true })
-        } catch {
-          // Preserve the last truthful route list when refresh-after-failure also fails.
-        }
-
-        throw error
-      } finally {
-        setNotificationRouteMutationStatus('idle')
-        setPendingNotificationRouteId(null)
-      }
-    },
-    [
-      activeProjectIdRef,
-      adapter,
-      loadNotificationRoutes,
-      setNotificationRouteLoadErrors,
-      setNotificationRouteLoadStatuses,
-      setNotificationRouteMutationError,
-      setNotificationRouteMutationStatus,
-      setNotificationRoutes,
-      setPendingNotificationRouteId,
-    ],
-  )
-
   return {
     refreshMcpRegistry,
     upsertMcpServer,
@@ -913,7 +800,5 @@ export function useRuntimeSettingsNotificationMutations({
     removePluginRoot,
     setPluginEnabled,
     removePlugin,
-    refreshNotificationRoutes,
-    upsertNotificationRoute,
   }
 }

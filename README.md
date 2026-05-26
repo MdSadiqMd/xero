@@ -13,7 +13,6 @@ It combines:
 - Skill/plugin discovery and execution support
 - Session memory, transcript search, compaction, branch, and rewind workflows
 - MCP server registry management
-- Notification routing (Telegram, Discord)
 - Phoenix/Postgres sidecar services for web callbacks and shared backend features
 
 > Important: this is a **desktop-first Tauri app**. For end-to-end behavior, run via Tauri (`tauri dev`), not as a plain browser app.
@@ -95,7 +94,6 @@ Onboarding flow covers:
 
 - Provider profile setup
 - Project import
-- Notification route setup
 
 ---
 
@@ -323,8 +321,6 @@ Provider and settings surfaces use the same app-data contracts as the desktop/ba
 
 Agent definitions are exposed through the shared app-data contract with `xero agent-definition list|show|versions|diff|archive`. Inside `dev:tui`, the `:` command palette also routes `agent-definition draft|validate|preview|save|update|clone|attachable-skills --project-id ID --definition-file FILE` through the shared autonomous definition service, including validation, effective runtime preview, write approval review, skill attachment catalog, and JSON-file Stage snapshots.
 
-Approval notification state is visible through the same app-data tables used by desktop notification dispatch with `xero notification routes|upsert-route|remove-route|dispatches|replies`.
-
 Terminal-compatible Solana workbench operations are exposed in `dev:tui` through the existing desktop Solana module: `solana catalog|cluster-list|scenario-list|persona-roles|pda-scan|pda-derive|secrets-scan|doc-catalog|doc-snippets|wallet-scaffold-list|token-extension-matrix`.
 
 Maintenance usage totals are exposed with `xero usage summary`, reading the existing project `agent_usage` table.
@@ -416,7 +412,6 @@ Major groups:
 - **Project/repo:** import/list/remove projects, snapshot, git status/diff, file operations, search/replace
 - **Runtime:** auth/session, start/stop runtime runs, stream subscription, operator action resolution
 - **MCP:** list/upsert/remove/import MCP servers, refresh connection status
-- **Notifications:** route management, credentials, dispatch records, reply submission
 - **Browser:** tabbed in-app browser automation (navigate/click/type/query/cookies/storage/screenshot/diagnostics/state), plus configurable native browser fallback for owned agents
 - **Emulator:** SDK status, device lifecycle/input, screenshots, UI tree/find/tap/swipe/type, app lifecycle helpers
 - **Solana:** cluster lifecycle, snapshots, personas, scenario runs, tx build/sim/send/explain, ALT/IDL/PDA/program deploy flows

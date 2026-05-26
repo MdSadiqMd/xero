@@ -279,8 +279,6 @@ mod tests {
         let expected_tables = [
             "openai_codex_sessions",
             "provider_credentials",
-            "notification_credentials",
-            "notification_inbound_cursors",
             "runtime_settings",
             "dictation_settings",
             "browser_control_settings",

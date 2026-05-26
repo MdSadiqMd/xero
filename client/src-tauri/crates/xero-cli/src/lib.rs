@@ -42,7 +42,6 @@ use xero_agent_core::{
 
 mod agent_definition_cli;
 mod file_cli;
-mod notification_cli;
 mod process_cli;
 mod project_cli;
 mod project_state_cli;
@@ -472,9 +471,6 @@ fn dispatch(globals: GlobalOptions, args: Vec<String>) -> Result<CliResponse, Cl
         Some("skill") | Some("skills") => skills_cli::dispatch_skill(globals, args[1..].to_vec()),
         Some("plugin") | Some("plugins") => {
             skills_cli::dispatch_plugin(globals, args[1..].to_vec())
-        }
-        Some("notification") | Some("notifications") => {
-            notification_cli::dispatch_notification(globals, args[1..].to_vec())
         }
         Some("remote") => remote_cli::dispatch_remote(globals, args[1..].to_vec()),
         Some("mock-web") => remote_cli::dispatch_mock_web(globals, args[1..].to_vec()),
@@ -6326,7 +6322,6 @@ fn root_help() -> String {
         "  agent-definition list|show|versions|diff|archive",
         "  skills list|enable|disable|remove|plugins",
         "  plugins list|enable|disable|remove",
-        "  notification routes|upsert-route|remove-route|dispatches|replies",
         "  environment status|profile|user-tools|save-tool|remove-tool",
         "  settings agent-tooling|browser-control|soul",
         "  update check|install",
@@ -6441,11 +6436,6 @@ fn root_help_json() -> JsonValue {
             "plugins enable",
             "plugins disable",
             "plugins remove",
-            "notification routes",
-            "notification upsert-route",
-            "notification remove-route",
-            "notification dispatches",
-            "notification replies",
             "environment status",
             "environment profile",
             "environment user-tools",

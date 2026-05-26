@@ -10,9 +10,6 @@ import type {
   MoveProjectEntryResponseDto,
   McpImportDiagnosticDto,
   McpRegistryDto,
-  NotificationRouteCredentialReadinessDto,
-  NotificationRouteDto,
-  NotificationRouteKindDto,
   OperatorApprovalView,
   Phase,
   AgentSessionKindDto,
@@ -57,7 +54,6 @@ import type {
   RuntimeStreamView,
   RuntimeStreamViewItem,
   StagedAgentAttachmentDto,
-  SyncNotificationAdaptersResponseDto,
   ListSkillRegistryRequestDto,
   RemovePluginRequestDto,
   RemovePluginRootRequestDto,
@@ -71,7 +67,6 @@ import type {
   UpsertPluginRootRequestDto,
   UpsertSkillLocalRootRequestDto,
   UpsertMcpServerRequestDto,
-  UpsertNotificationRouteRequestDto,
   UpsertProviderCredentialRequestDto,
   VerificationRecordView,
   WriteProjectFileResponseDto,
@@ -113,8 +108,6 @@ export interface OperatorActionErrorView {
 }
 
 export type RepositoryDiffLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
-export type NotificationRoutesLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
-export type NotificationRouteMutationStatus = 'idle' | 'running'
 export type ProviderCredentialsLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type ProviderCredentialsSaveStatus = 'idle' | 'running'
 export type ProviderModelCatalogLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -123,7 +116,6 @@ export type McpRegistryLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type McpRegistryMutationStatus = 'idle' | 'running'
 export type SkillRegistryLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type SkillRegistryMutationStatus = 'idle' | 'running'
-export type NotificationRouteHealthState = 'disabled' | 'idle' | 'pending' | 'healthy' | 'degraded'
 export type AgentTrustSignalState = 'healthy' | 'degraded' | 'unavailable'
 export type AgentRunControlTruthSource = 'runtime_run' | 'fallback'
 
@@ -157,24 +149,7 @@ export interface AgentTrustSnapshotView {
   streamReason: string
   approvalsState: AgentTrustSignalState
   approvalsReason: string
-  routesState: AgentTrustSignalState
-  routesReason: string
-  credentialsState: AgentTrustSignalState
-  credentialsReason: string
-  syncState: AgentTrustSignalState
-  syncReason: string
-  routeCount: number
-  enabledRouteCount: number
-  degradedRouteCount: number
-  readyCredentialRouteCount: number
-  missingCredentialRouteCount: number
-  malformedCredentialRouteCount: number
-  unavailableCredentialRouteCount: number
   pendingApprovalCount: number
-  syncDispatchFailedCount: number
-  syncReplyRejectedCount: number
-  routeError: OperatorActionErrorView | null
-  syncError: OperatorActionErrorView | null
   projectionError: OperatorActionErrorView | null
 }
 
@@ -219,46 +194,6 @@ export interface AgentProviderModelCatalogView {
   capabilities?: ProviderCapabilityCatalogDto | null
   lastRefreshError: OperatorActionErrorView | null
   models: AgentProviderModelView[]
-}
-
-export interface NotificationRouteHealthView {
-  projectId: string
-  routeId: string
-  routeKind: NotificationRouteKindDto
-  routeKindLabel: string
-  routeTarget: string
-  enabled: boolean
-  metadataJson: string | null
-  credentialReadiness?: NotificationRouteCredentialReadinessDto | null
-  credentialDiagnosticCode?: string | null
-  createdAt: string
-  updatedAt: string
-  dispatchCount: number
-  pendingCount: number
-  sentCount: number
-  failedCount: number
-  claimedCount: number
-  latestDispatchAt: string | null
-  latestFailureCode: string | null
-  latestFailureMessage: string | null
-  health: NotificationRouteHealthState
-  healthLabel: string
-}
-
-export interface NotificationChannelHealthView {
-  routeKind: NotificationRouteKindDto
-  routeKindLabel: string
-  routeCount: number
-  enabledCount: number
-  disabledCount: number
-  dispatchCount: number
-  pendingCount: number
-  sentCount: number
-  failedCount: number
-  claimedCount: number
-  latestDispatchAt: string | null
-  health: NotificationRouteHealthState
-  healthLabel: string
 }
 
 export interface UseXeroDesktopStateOptions {
@@ -359,20 +294,6 @@ export interface AgentPaneView {
   skillItems?: RuntimeStreamSkillItemView[]
   activityItems?: RuntimeStreamActivityItemView[]
   actionRequiredItems?: RuntimeStreamActionRequiredItemView[]
-  notificationBroker: ProjectDetailView['notificationBroker']
-  notificationRoutes: NotificationRouteHealthView[]
-  notificationChannelHealth: NotificationChannelHealthView[]
-  notificationRouteLoadStatus: NotificationRoutesLoadStatus
-  notificationRouteIsRefreshing: boolean
-  notificationRouteError: OperatorActionErrorView | null
-  notificationSyncSummary: SyncNotificationAdaptersResponseDto | null
-  notificationSyncError: OperatorActionErrorView | null
-  notificationSyncPollingActive: boolean
-  notificationSyncPollingActionId: string | null
-  notificationSyncPollingBoundaryId: string | null
-  notificationRouteMutationStatus: NotificationRouteMutationStatus
-  pendingNotificationRouteId: string | null
-  notificationRouteMutationError: OperatorActionErrorView | null
   trustSnapshot?: AgentTrustSnapshotView
   approvalRequests: OperatorApprovalView[]
   pendingApprovalCount: number
@@ -425,14 +346,8 @@ export interface ExecutionPaneView {
   verificationRecords: VerificationRecordView[]
   resumeHistory: ResumeHistoryEntryView[]
   latestDecisionOutcome: ProjectDetailView['latestDecisionOutcome']
-  notificationBroker: ProjectDetailView['notificationBroker']
   operatorActionError: OperatorActionErrorView | null
   verificationUnavailableReason: string
-}
-
-export interface NotificationRoutesLoadResult {
-  routes: NotificationRouteDto[]
-  loadError: OperatorActionErrorView | null
 }
 
 export interface UseXeroDesktopStateResult {
@@ -586,10 +501,6 @@ export interface UseXeroDesktopStateResult {
   removePluginRoot: (request: RemovePluginRootRequestDto) => Promise<SkillRegistryDto>
   setPluginEnabled: (request: SetPluginEnabledRequestDto) => Promise<SkillRegistryDto>
   removePlugin: (request: RemovePluginRequestDto) => Promise<SkillRegistryDto>
-  refreshNotificationRoutes: (options?: { force?: boolean }) => Promise<NotificationRouteDto[]>
-  upsertNotificationRoute: (
-    request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,
-  ) => Promise<NotificationRouteDto | null>
   createAgentSession: (options?: {
     title?: string | null
     summary?: string | null

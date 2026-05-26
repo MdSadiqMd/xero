@@ -3,7 +3,6 @@ export type OnboardingStepId =
   | "local-environment"
   | "providers"
   | "project"
-  | "notifications"
   | "environment-access"
   | "confirm"
   | "beta"
@@ -15,5 +14,3 @@ export type ProviderId =
   | "openai_api"
   | "azure_openai"
   | "gemini_ai_studio"
-
-export type NotificationChannelId = "telegram" | "discord"

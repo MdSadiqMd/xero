@@ -50,7 +50,6 @@ import type {
   UpsertPluginRootRequestDto,
   UpsertSkillLocalRootRequestDto,
   UpsertMcpServerRequestDto,
-  UpsertNotificationRouteRequestDto,
   UpsertProviderCredentialRequestDto,
   XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
@@ -63,7 +62,7 @@ import type {
   GitHubAuthStatus,
   GitHubSessionView,
 } from "@/src/lib/github-auth"
-import { Activity, ArrowLeft, Bell, Bot, Brain, Cloud, Code2, Database, Globe, HardDrive, Heart, Keyboard, KeyRound, Mic, Palette, PlaySquare, Plug, PlugZap, Power, UserRound, WandSparkles, Wrench } from "lucide-react"
+import { Activity, ArrowLeft, Bot, Brain, Cloud, Code2, Database, Globe, HardDrive, Heart, Keyboard, KeyRound, Mic, Palette, PlaySquare, Plug, PlugZap, Power, UserRound, WandSparkles, Wrench } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -79,7 +78,6 @@ export type SettingsSection =
   | "diagnostics"
   | "soul"
   | "dictation"
-  | "notifications"
   | "mcp"
   | "skills"
   | "agents"
@@ -102,7 +100,6 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   "diagnostics",
   "soul",
   "dictation",
-  "notifications",
   "mcp",
   "agents",
   "agentTooling",
@@ -163,10 +160,6 @@ const loadMemoryReviewSection = () =>
   import("@/components/xero/settings-dialog/memory-review-section").then((module) => ({
     default: module.MemoryReviewSection,
   }))
-const loadNotificationsSection = () =>
-  import("@/components/xero/settings-dialog/notifications-section").then((module) => ({
-    default: module.NotificationsSection,
-  }))
 const loadProvidersSection = () =>
   import("@/components/xero/settings-dialog/providers-section").then((module) => ({
     default: module.ProvidersSection,
@@ -215,7 +208,6 @@ const LazyDictationSection = lazy(loadDictationSection)
 const LazyDiagnosticsSection = lazy(loadDiagnosticsSection)
 const LazyMcpSection = lazy(loadMcpSection)
 const LazyMemoryReviewSection = lazy(loadMemoryReviewSection)
-const LazyNotificationsSection = lazy(loadNotificationsSection)
 const LazyProvidersSection = lazy(loadProvidersSection)
 const LazyPluginsSection = lazy(loadPluginsSection)
 const LazyShortcutsSection = lazy(loadShortcutsSection)
@@ -233,7 +225,6 @@ const SETTINGS_SECTION_LOADERS: Record<SettingsSection, () => Promise<unknown>> 
   diagnostics: loadDiagnosticsSection,
   soul: loadSoulSection,
   dictation: loadDictationSection,
-  notifications: loadNotificationsSection,
   mcp: loadMcpSection,
   agents: loadAgentsSection,
   agentTooling: loadAgentToolingSection,
@@ -297,7 +288,6 @@ const WORKSPACE_GROUP: NavGroup = {
     { id: "diagnostics", label: "Diagnostics", icon: Activity },
     { id: "soul", label: "Soul", icon: Heart },
     { id: "dictation", label: "Dictation", icon: Mic },
-    { id: "notifications", label: "Notifications", icon: Bell },
     { id: "mcp", label: "MCP", icon: PlugZap },
     { id: "agents", label: "Agents", icon: Bot },
     { id: "agentTooling", label: "Agent Tooling", icon: Wrench },
@@ -412,7 +402,6 @@ export interface SettingsDialogProps {
       | null
   }) => Promise<{ targets: { name: string; command: string }[] }>
   projectRunnerModelOptions?: StartTargetsModelOption[]
-  onUpsertNotificationRoute?: (req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">) => Promise<unknown>
   mcpRegistry?: McpRegistryDto | null
   mcpImportDiagnostics?: McpImportDiagnosticDto[]
   mcpRegistryLoadStatus?: McpRegistryLoadStatus
@@ -514,7 +503,6 @@ export function SettingsDialog({
   resolveProjectRunnerSuggestRequest,
   onSuggestProjectStartTargets,
   projectRunnerModelOptions = [],
-  onUpsertNotificationRoute,
   mcpRegistry = null,
   mcpImportDiagnostics = [],
   mcpRegistryLoadStatus = "idle",
@@ -726,20 +714,6 @@ export function SettingsDialog({
       return <LazyDictationSection adapter={dictationAdapter} />
     }
 
-    if (renderedSection === "notifications") {
-      return agent ? (
-        <LazyNotificationsSection
-          agent={agent}
-          onUpsertNotificationRoute={onUpsertNotificationRoute}
-        />
-      ) : (
-        <ProjectBoundEmptyState
-          title="Notifications require a selected project"
-          body="Provider settings are app-global, but notification routes stay project-bound so Xero never writes cross-project delivery state into the wrong repository view."
-        />
-      )
-    }
-
     if (renderedSection === "mcp") {
       return (
         <LazyMcpSection
@@ -907,7 +881,7 @@ export function SettingsDialog({
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
-          Configure providers, skills, notification routes, and development options.
+          Configure providers, skills, agent tooling, and development options.
         </DialogDescription>
 
         <div className="flex min-h-0 flex-1">
@@ -1012,18 +986,6 @@ function SettingsSectionFallback() {
           <div className="h-3 w-full rounded bg-secondary/35" />
           <div className="h-3 w-2/3 rounded bg-secondary/30" />
         </div>
-      </div>
-    </div>
-  )
-}
-
-function ProjectBoundEmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex flex-1 items-center justify-center py-14 text-center">
-      <div className="max-w-md">
-        <Bell className="mx-auto h-4 w-4 text-muted-foreground/70" />
-        <p className="mt-3 text-[13px] font-medium text-foreground">{title}</p>
-        <p className="mt-1.5 text-[12px] leading-[1.55] text-muted-foreground">{body}</p>
       </div>
     </div>
   )

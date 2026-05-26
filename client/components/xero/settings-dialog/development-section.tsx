@@ -115,7 +115,7 @@ export function DevelopmentSection({
               <ToolRow
                 icon={Sparkles}
                 title="Onboarding flow"
-                body="Reopen the first-run setup flow to test provider setup, project import, and notification routing."
+                body="Reopen the first-run setup flow to test provider setup and project import."
                 actionLabel="Start onboarding"
                 actionIcon={PlayCircle}
                 onAction={onStartOnboarding}

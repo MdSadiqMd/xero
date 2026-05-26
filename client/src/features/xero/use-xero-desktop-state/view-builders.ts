@@ -1,8 +1,4 @@
 import {
-  type NotificationRouteDto,
-  type SyncNotificationAdaptersResponseDto,
-} from '@/src/lib/xero-model/notifications'
-import {
   getProviderModelCatalogFreshnessLabel,
   getProviderModelCatalogFetchedAt,
   type ProviderModelCatalogDto,
@@ -29,15 +25,9 @@ import {
   type ProjectDetailView,
   type ProviderCredentialsSnapshotDto,
   type RuntimeProviderIdDto,
+  type OperatorApprovalView,
 } from '@/src/lib/xero-model'
 import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
-import {
-  composeAgentTrustSnapshot,
-  createUnavailableTrustSnapshot,
-  mapNotificationChannelHealth,
-  mapNotificationRouteViews,
-  type BlockedNotificationSyncPollTarget,
-} from './notification-health'
 import {
   buildComposerModelOptions,
   displayNameForProviderModel,
@@ -55,13 +45,12 @@ import type {
   AgentPaneView,
   AgentProviderModelCatalogView,
   AgentProviderModelView,
+  AgentTrustSignalState,
   AgentTrustSnapshotView,
   AutonomousRunActionKind,
   AutonomousRunActionStatus,
   DiffScopeSummary,
   ExecutionPaneView,
-  NotificationRouteMutationStatus,
-  NotificationRoutesLoadStatus,
   OperatorActionErrorView,
   OperatorActionStatus,
   ProviderModelCatalogLoadStatus,
@@ -134,15 +123,6 @@ export interface BuildAgentViewDependencies {
   runtimeRunErrorMessage: string | null
   autonomousRunErrorMessage: string | null
   runtimeStream: RuntimeStreamView | null
-  notificationRoutes: NotificationRouteDto[]
-  notificationRouteLoadStatus: NotificationRoutesLoadStatus
-  notificationRouteError: OperatorActionErrorView | null
-  notificationSyncSummary: SyncNotificationAdaptersResponseDto | null
-  notificationSyncError: OperatorActionErrorView | null
-  blockedNotificationSyncPollTarget: BlockedNotificationSyncPollTarget | null
-  notificationRouteMutationStatus: NotificationRouteMutationStatus
-  pendingNotificationRouteId: string | null
-  notificationRouteMutationError: OperatorActionErrorView | null
   previousTrustSnapshot: AgentTrustSnapshotView | null
   operatorActionStatus: OperatorActionStatus
   pendingOperatorActionId: string | null
@@ -222,38 +202,6 @@ function getAgentRunControlProjection(
   }
 }
 
-function getFallbackTrustSnapshot(options: {
-  previousTrustSnapshot: AgentTrustSnapshotView | null
-  notificationRouteViews: ReturnType<typeof mapNotificationRouteViews>
-  project: ProjectDetailView
-  notificationRouteError: OperatorActionErrorView | null
-  notificationSyncError: OperatorActionErrorView | null
-  error: unknown
-}): AgentTrustSnapshotView {
-  const projectionError = getProjectionError(
-    options.error,
-    'Xero could not compose trust snapshot details from notification/runtime projection data.',
-  )
-
-  if (options.previousTrustSnapshot) {
-    return {
-      ...options.previousTrustSnapshot,
-      routeError: options.notificationRouteError,
-      syncError: options.notificationSyncError,
-      projectionError,
-    }
-  }
-
-  return createUnavailableTrustSnapshot({
-    routeCount: options.notificationRouteViews.length,
-    enabledRouteCount: options.notificationRouteViews.filter((route) => route.enabled).length,
-    pendingApprovalCount: options.project.pendingApprovalCount,
-    notificationRouteError: options.notificationRouteError,
-    notificationSyncError: options.notificationSyncError,
-    projectionError,
-  })
-}
-
 function getProjectionError(error: unknown, fallback: string): OperatorActionErrorView {
   if (error instanceof Error && error.message.trim().length > 0) {
     return {
@@ -267,6 +215,122 @@ function getProjectionError(error: unknown, fallback: string): OperatorActionErr
     code: 'operator_action_failed',
     message: fallback,
     retryable: false,
+  }
+}
+
+function getTrustSignalLabel(state: AgentTrustSignalState): string {
+  switch (state) {
+    case 'healthy':
+      return 'Healthy'
+    case 'degraded':
+      return 'Needs attention'
+    case 'unavailable':
+      return 'Unavailable'
+  }
+}
+
+function composeAgentTrustSnapshot(options: {
+  runtimeSession: RuntimeSessionView | null
+  runtimeRun: RuntimeRunView | null
+  runtimeStream: RuntimeStreamView | null
+  approvalRequests: OperatorApprovalView[]
+}): AgentTrustSnapshotView {
+  const pendingApprovalCount = options.approvalRequests.filter((approval) => approval.isPending).length
+
+  const runtimeState: AgentTrustSignalState = !options.runtimeRun
+    ? 'unavailable'
+    : options.runtimeRun.isFailed || options.runtimeRun.isStale
+      ? 'degraded'
+      : options.runtimeRun.isActive
+        ? options.runtimeSession?.isAuthenticated
+          ? 'healthy'
+          : 'degraded'
+        : 'unavailable'
+  const runtimeReason = !options.runtimeRun
+    ? 'No durable runtime-run record is available for the selected project.'
+    : options.runtimeRun.isFailed
+      ? 'The durable runtime-run record indicates the owned agent run failed.'
+      : options.runtimeRun.isStale
+        ? 'The durable runtime-run record is stale and needs operator review.'
+        : options.runtimeRun.isActive && options.runtimeSession?.isAuthenticated
+          ? 'Durable runtime run + authenticated session are both healthy.'
+          : options.runtimeRun.isActive
+            ? 'Durable runtime run exists, but desktop runtime authentication is not currently healthy.'
+            : 'The durable runtime-run record is terminal and no active run is available.'
+
+  const streamState: AgentTrustSignalState = !options.runtimeStream
+    ? 'unavailable'
+    : options.runtimeStream.status === 'error' || options.runtimeStream.status === 'stale'
+      ? 'degraded'
+      : options.runtimeStream.status === 'live' || options.runtimeStream.status === 'complete'
+        ? 'healthy'
+        : 'unavailable'
+  const streamReason = !options.runtimeStream
+    ? 'No runtime event stream is attached to the selected project.'
+    : options.runtimeStream.status === 'error' || options.runtimeStream.status === 'stale'
+      ? options.runtimeStream.lastIssue?.message ?? 'Runtime event stream reported a degraded state.'
+      : options.runtimeStream.status === 'live' || options.runtimeStream.status === 'complete'
+        ? 'Runtime event stream is connected and delivering operator-visible activity.'
+        : 'Runtime event stream is not yet live.'
+
+  const approvalsState: AgentTrustSignalState = pendingApprovalCount > 0 ? 'degraded' : 'healthy'
+  const approvalsReason = pendingApprovalCount > 0
+    ? `There are ${pendingApprovalCount} pending operator approval gate(s) waiting for action.`
+    : 'No pending operator approvals are blocking autonomous continuation.'
+
+  const signalStates = [runtimeState, streamState, approvalsState]
+  const state: AgentTrustSignalState = signalStates.includes('degraded')
+    ? 'degraded'
+    : signalStates.every((value) => value === 'healthy')
+      ? 'healthy'
+      : 'unavailable'
+
+  return {
+    state,
+    stateLabel: getTrustSignalLabel(state),
+    runtimeState,
+    runtimeReason,
+    streamState,
+    streamReason,
+    approvalsState,
+    approvalsReason,
+    pendingApprovalCount,
+    projectionError: null,
+  }
+}
+
+function getFallbackTrustSnapshot(options: {
+  previousTrustSnapshot: AgentTrustSnapshotView | null
+  project: ProjectDetailView
+  error: unknown
+}): AgentTrustSnapshotView {
+  const projectionError = getProjectionError(
+    options.error,
+    'Xero could not compose trust snapshot details from runtime projection data.',
+  )
+
+  if (options.previousTrustSnapshot) {
+    return {
+      ...options.previousTrustSnapshot,
+      projectionError,
+    }
+  }
+
+  const approvalsState: AgentTrustSignalState = options.project.pendingApprovalCount > 0 ? 'degraded' : 'healthy'
+  return {
+    state: 'unavailable',
+    stateLabel: getTrustSignalLabel('unavailable'),
+    runtimeState: 'unavailable',
+    runtimeReason: 'Trust projection is unavailable because prerequisite runtime metadata is missing.',
+    streamState: 'unavailable',
+    streamReason: 'Trust projection is unavailable because runtime-stream metadata is missing.',
+    approvalsState,
+    approvalsReason:
+      options.project.pendingApprovalCount > 0
+        ? `There are ${options.project.pendingApprovalCount} pending operator approval gate(s) waiting for action.`
+        : 'No pending operator approvals are blocking autonomous continuation.',
+    pendingApprovalCount: options.project.pendingApprovalCount,
+    projectionError,
   }
 }
 
@@ -619,15 +683,6 @@ export function buildAgentView({
   runtimeRunErrorMessage,
   autonomousRunErrorMessage,
   runtimeStream,
-  notificationRoutes,
-  notificationRouteLoadStatus,
-  notificationRouteError,
-  notificationSyncSummary,
-  notificationSyncError,
-  blockedNotificationSyncPollTarget,
-  notificationRouteMutationStatus,
-  pendingNotificationRouteId,
-  notificationRouteMutationError,
   previousTrustSnapshot,
   operatorActionStatus,
   pendingOperatorActionId,
@@ -646,13 +701,6 @@ export function buildAgentView({
     }
   }
 
-  const notificationRouteViews = mapNotificationRouteViews(
-    project.id,
-    notificationRoutes,
-    project.notificationBroker.dispatches,
-  )
-  const notificationChannelHealth = mapNotificationChannelHealth(notificationRouteViews)
-
   let trustSnapshot: AgentTrustSnapshotView
   try {
     trustSnapshot = composeAgentTrustSnapshot({
@@ -660,18 +708,11 @@ export function buildAgentView({
       runtimeRun,
       runtimeStream,
       approvalRequests: project.approvalRequests,
-      routeViews: notificationRouteViews,
-      notificationRouteError,
-      notificationSyncSummary,
-      notificationSyncError,
     })
   } catch (error) {
     trustSnapshot = getFallbackTrustSnapshot({
       previousTrustSnapshot,
-      notificationRouteViews,
       project,
-      notificationRouteError,
-      notificationSyncError,
       error,
     })
   }
@@ -769,21 +810,6 @@ export function buildAgentView({
       skillItems: runtimeStream?.skillItems ?? [],
       activityItems: runtimeStream?.activityItems ?? [],
       actionRequiredItems: runtimeStream?.actionRequired ?? [],
-      notificationBroker: project.notificationBroker,
-      notificationRoutes: notificationRouteViews,
-      notificationChannelHealth,
-      notificationRouteLoadStatus,
-      notificationRouteIsRefreshing:
-        notificationRouteLoadStatus === 'loading' && notificationRouteViews.length > 0,
-      notificationRouteError,
-      notificationSyncSummary,
-      notificationSyncError,
-      notificationSyncPollingActive: Boolean(blockedNotificationSyncPollTarget),
-      notificationSyncPollingActionId: blockedNotificationSyncPollTarget?.actionId ?? null,
-      notificationSyncPollingBoundaryId: blockedNotificationSyncPollTarget?.boundaryId ?? null,
-      notificationRouteMutationStatus,
-      pendingNotificationRouteId,
-      notificationRouteMutationError,
       trustSnapshot,
       approvalRequests: project.approvalRequests,
       pendingApprovalCount: project.pendingApprovalCount,
@@ -861,7 +887,6 @@ export function buildExecutionView({
     verificationRecords: project.verificationRecords,
     resumeHistory: project.resumeHistory,
     latestDecisionOutcome: project.latestDecisionOutcome,
-    notificationBroker: project.notificationBroker,
     operatorActionError,
     verificationUnavailableReason:
       project.verificationRecords.length > 0 || project.resumeHistory.length > 0

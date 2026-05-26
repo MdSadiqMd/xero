@@ -5,8 +5,6 @@ import {
   createXeroDoctorReport,
   type ImportMcpServersResponseDto,
   type ImportRepositoryResponseDto,
-  type ListNotificationDispatchesResponseDto,
-  type ListNotificationRoutesResponseDto,
   type ListProjectsResponseDto,
   type McpRegistryDto,
   type ProjectSnapshotResponseDto,
@@ -854,9 +852,6 @@ function createMockAdapter(options?: {
   providerModelCatalogs?: Record<string, ProviderModelCatalogDto>
   providerModelCatalogErrors?: Record<string, Error>
   autonomousStates?: Record<string, AutonomousRunStateDto | null>
-  notificationDispatches?: Record<string, ListNotificationDispatchesResponseDto['dispatches']>
-  notificationRoutes?: Record<string, ListNotificationRoutesResponseDto['routes']>
-  notificationDispatchErrors?: Record<string, Error>
   diffs?: Partial<Record<'staged' | 'unstaged' | 'worktree', RepositoryDiffResponseDto>>
   importResponse?: ImportRepositoryResponseDto
   subscribeErrors?: Record<string, XeroDesktopError>
@@ -905,14 +900,6 @@ function createMockAdapter(options?: {
     'project-1': makeAutonomousRunState('project-1'),
     'project-2': null,
   }
-  const notificationDispatches = options?.notificationDispatches ?? {
-    'project-1': [],
-    'project-2': [],
-  }
-  const notificationRoutes = options?.notificationRoutes ?? {
-    'project-1': [],
-    'project-2': [],
-  }
   const currentRuntimeSettings = {
     value: options?.runtimeSettings ?? makeRuntimeSettings(),
   }
@@ -950,8 +937,6 @@ function createMockAdapter(options?: {
       ),
   }
   const providerModelCatalogErrors = options?.providerModelCatalogErrors ?? {}
-  const notificationDispatchErrors = options?.notificationDispatchErrors ?? {}
-
   let listedProjects = (options?.listProjects?.projects ?? [makeProjectSummary('project-1', 'Xero')]).map((project) => ({
     ...project,
   }))
@@ -1624,50 +1609,6 @@ function createMockAdapter(options?: {
 
     return currentProviderProfiles.value
   })
-  const listNotificationDispatches = vi.fn(async (projectId: string) => {
-    const error = notificationDispatchErrors[projectId]
-    if (error) {
-      throw error
-    }
-
-    return {
-      dispatches: notificationDispatches[projectId] ?? [],
-    }
-  })
-  const listNotificationRoutes = vi.fn(async (projectId: string) => ({
-    routes: notificationRoutes[projectId] ?? [],
-  }))
-  const upsertNotificationRoute = vi.fn(async (request: {
-    projectId: string
-    routeId: string
-    routeKind: 'telegram' | 'discord'
-    routeTarget: string
-    enabled: boolean
-    metadataJson?: string | null
-  }) => {
-    const now = '2026-04-16T14:00:00Z'
-    const currentRoutes = notificationRoutes[request.projectId] ?? []
-    const nextRoute = {
-      projectId: request.projectId,
-      routeId: request.routeId,
-      routeKind: request.routeKind,
-      routeTarget: request.routeTarget,
-      enabled: request.enabled,
-      metadataJson: request.metadataJson ?? null,
-      createdAt:
-        currentRoutes.find((route) => route.routeId === request.routeId)?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    notificationRoutes[request.projectId] = [
-      nextRoute,
-      ...currentRoutes.filter((route) => route.routeId !== request.routeId),
-    ]
-
-    return {
-      route: nextRoute,
-    }
-  })
   const startOpenAiLogin = vi.fn(
     async (
       _options?: { originator?: string | null },
@@ -2254,45 +2195,6 @@ function createMockAdapter(options?: {
     ),
     resolveOperatorAction,
     resumeOperatorRun,
-    listNotificationRoutes,
-    listNotificationDispatches,
-    upsertNotificationRoute,
-    upsertNotificationRouteCredentials: vi.fn(async () => {
-      throw new Error('not used in use-xero-desktop-state tests')
-    }) as never,
-    recordNotificationDispatchOutcome: vi.fn(async () => {
-      throw new Error('not used in use-xero-desktop-state tests')
-    }) as never,
-    submitNotificationReply: vi.fn(async () => {
-      throw new Error('not used in use-xero-desktop-state tests')
-    }) as never,
-    syncNotificationAdapters: vi.fn(async (projectId: string) => ({
-      projectId,
-      dispatch: {
-        projectId,
-        pendingCount: 0,
-        attemptedCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-        attemptLimit: 64,
-        attemptsTruncated: false,
-        attempts: [],
-        errorCodeCounts: [],
-      },
-      replies: {
-        projectId,
-        routeCount: 0,
-        polledRouteCount: 0,
-        messageCount: 0,
-        acceptedCount: 0,
-        rejectedCount: 0,
-        attemptLimit: 256,
-        attemptsTruncated: false,
-        attempts: [],
-        errorCodeCounts: [],
-      },
-      syncedAt: '2026-04-17T03:00:00Z',
-    })),
     browserEval: vi.fn(async () => undefined),
     browserCurrentUrl: vi.fn(async () => null),
     browserScreenshot: vi.fn(async () => ''),
@@ -2386,10 +2288,6 @@ function createMockAdapter(options?: {
     upsertProviderProfile,
     setActiveProviderProfile,
     logoutProviderProfile,
-    listNotificationRoutes,
-    listNotificationDispatches,
-    syncNotificationAdapters: adapter.syncNotificationAdapters,
-    upsertNotificationRoute,
     startOpenAiLogin,
     submitOpenAiCallback,
     startRuntimeRun,
@@ -3011,7 +2909,6 @@ function AgentProjectionStabilityHarness({ adapter }: { adapter: XeroDesktopAdap
     if (
       baselineRef.current ||
       state.isLoading ||
-      state.agentView?.notificationRouteLoadStatus !== 'ready' ||
       state.agentWorkspacePanes.length === 0
     ) {
       return
@@ -3071,8 +2968,6 @@ describe('useXeroDesktopState', () => {
     expect(setup.getProjectSnapshot).toHaveBeenCalledWith('project-1')
     expect(setup.getRepositoryStatus).toHaveBeenCalledWith('project-1')
     expect(setup.getRuntimeSession).toHaveBeenCalledWith('project-1')
-    expect(setup.listNotificationRoutes).toHaveBeenCalledWith('project-1')
-    expect(setup.syncNotificationAdapters).not.toHaveBeenCalled()
   })
 
   it('loads the last selected project from app UI state on startup', async () => {
@@ -3283,9 +3178,6 @@ describe('useXeroDesktopState', () => {
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
     expect(screen.getByTestId('approval-count')).toHaveTextContent('0')
     await waitFor(() => expect(setup.onProjectUpdated).toHaveBeenCalledTimes(1))
-    const routeRefreshesBeforeEvent = setup.listNotificationRoutes.mock.calls.length
-    const syncNotificationAdaptersMock = setup.syncNotificationAdapters as ReturnType<typeof vi.fn>
-    const syncRefreshesBeforeEvent = syncNotificationAdaptersMock.mock.calls.length
 
     act(() => {
       refreshed = true
@@ -3306,8 +3198,6 @@ describe('useXeroDesktopState', () => {
     expect(screen.getByTestId('verification-count')).toHaveTextContent('1')
     expect(screen.getByTestId('resume-history-count')).toHaveTextContent('1')
     expect(screen.getByTestId('branch')).toHaveTextContent('release/verified')
-    expect(setup.listNotificationRoutes.mock.calls.length).toBeGreaterThan(routeRefreshesBeforeEvent)
-    expect(syncNotificationAdaptersMock.mock.calls.length).toBe(syncRefreshesBeforeEvent)
   })
 
   it('ignores wrong-project update callbacks so one project cannot overwrite another project\'s operator history', async () => {
@@ -3675,8 +3565,6 @@ describe('useXeroDesktopState', () => {
 
     const statusDeferred = createDeferred<RepositoryStatusResponseDto>()
     const runtimeDeferred = createDeferred<RuntimeSessionDto>()
-    const routeDeferred = createDeferred<ListNotificationRoutesResponseDto>()
-    const dispatchDeferred = createDeferred<ListNotificationDispatchesResponseDto>()
 
     setup.getRepositoryStatus.mockImplementation(async (projectId: string) => {
       if (projectId === 'project-2') {
@@ -3692,20 +3580,6 @@ describe('useXeroDesktopState', () => {
 
       return makeRuntimeSession(projectId)
     })
-    setup.listNotificationRoutes.mockImplementation(async (projectId: string) => {
-      if (projectId === 'project-2') {
-        return routeDeferred.promise
-      }
-
-      return { routes: [] }
-    })
-    setup.listNotificationDispatches.mockImplementation(async (projectId: string) => {
-      if (projectId === 'project-2') {
-        return dispatchDeferred.promise
-      }
-
-      return { dispatches: [] }
-    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
 
@@ -3717,13 +3591,9 @@ describe('useXeroDesktopState', () => {
     await act(async () => {
       statusDeferred.resolve(makeStatus('project-2', 'feature/import'))
       runtimeDeferred.resolve(makeRuntimeSession('project-2'))
-      routeDeferred.resolve({ routes: [] })
-      dispatchDeferred.resolve({ dispatches: [] })
       await Promise.all([
         statusDeferred.promise,
         runtimeDeferred.promise,
-        routeDeferred.promise,
-        dispatchDeferred.promise,
       ])
     })
 
@@ -3778,8 +3648,6 @@ describe('useXeroDesktopState', () => {
       runtimeSession: makeRuntimeSession('project-1'),
       runtimeRun: null,
       autonomousRun: null,
-      notificationDispatches: [],
-      notificationRoutes: [],
       diagnostics: [],
     }))
     setup.adapter.getProjectLoadBundle = getProjectLoadBundle
@@ -3804,7 +3672,6 @@ describe('useXeroDesktopState', () => {
       await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
       expect(getProjectLoadBundle).toHaveBeenCalledWith({
         projectId: 'project-1',
-        includeNotificationRoutes: true,
       })
       expect(setup.getRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main')
       await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1'))
@@ -4547,8 +4414,6 @@ describe('useXeroDesktopState', () => {
     expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
     await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('runtime failed'))
     expect(screen.getByTestId('runtime-label')).toHaveTextContent('Runtime unavailable')
-    expect(setup.listNotificationRoutes).toHaveBeenLastCalledWith('project-2')
-    expect(setup.syncNotificationAdapters).not.toHaveBeenCalled()
   })
 
   it('resolves operator actions by invoking the adapter and reloading the active project snapshot', async () => {

@@ -6,7 +6,6 @@ pub mod developer_tool_harness_tui;
 pub mod environment;
 pub mod global_db;
 pub mod mcp;
-pub mod notifications;
 pub mod provider_credentials;
 pub mod provider_models;
 pub mod provider_preflight;
@@ -427,13 +426,6 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::subscribe_runtime_stream::subscribe_runtime_stream,
             commands::resolve_operator_action::resolve_operator_action,
             commands::resume_operator_run::resume_operator_run,
-            commands::list_notification_routes::list_notification_routes,
-            commands::list_notification_dispatches::list_notification_dispatches,
-            commands::upsert_notification_route::upsert_notification_route,
-            commands::upsert_notification_route_credentials::upsert_notification_route_credentials,
-            commands::record_notification_dispatch_outcome::record_notification_dispatch_outcome,
-            commands::submit_notification_reply::submit_notification_reply,
-            commands::sync_notification_adapters::sync_notification_adapters,
             commands::dictation::speech_dictation_status,
             commands::dictation::speech_dictation_settings,
             commands::dictation::speech_dictation_update_settings,

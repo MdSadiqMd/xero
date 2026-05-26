@@ -7,7 +7,6 @@ use super::{
         SPEECH_DICTATION_START_COMMAND, SPEECH_DICTATION_STOP_COMMAND,
         SPEECH_DICTATION_UPDATE_SETTINGS_COMMAND,
     },
-    notifications::{NotificationDispatchDto, NotificationRouteDto},
     runtime::{AgentSessionDto, RuntimeRunDto, RuntimeSessionDto},
     workflow::{
         OperatorApprovalDto, PhaseSummaryDto, ResumeHistoryEntryDto, VerificationRecordDto,
@@ -87,15 +86,6 @@ pub const STOP_RUNTIME_RUN_COMMAND: &str = "stop_runtime_run";
 pub const SUBSCRIBE_RUNTIME_STREAM_COMMAND: &str = "subscribe_runtime_stream";
 pub const RESOLVE_OPERATOR_ACTION_COMMAND: &str = "resolve_operator_action";
 pub const RESUME_OPERATOR_RUN_COMMAND: &str = "resume_operator_run";
-pub const LIST_NOTIFICATION_ROUTES_COMMAND: &str = "list_notification_routes";
-pub const LIST_NOTIFICATION_DISPATCHES_COMMAND: &str = "list_notification_dispatches";
-pub const UPSERT_NOTIFICATION_ROUTE_COMMAND: &str = "upsert_notification_route";
-pub const UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND: &str =
-    "upsert_notification_route_credentials";
-pub const RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND: &str =
-    "record_notification_dispatch_outcome";
-pub const SUBMIT_NOTIFICATION_REPLY_COMMAND: &str = "submit_notification_reply";
-pub const SYNC_NOTIFICATION_ADAPTERS_COMMAND: &str = "sync_notification_adapters";
 pub const SPEECH_DICTATION_STATUS_COMMAND: &str = "speech_dictation_status";
 pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     IMPORT_REPOSITORY_COMMAND,
@@ -169,13 +159,6 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     SUBSCRIBE_RUNTIME_STREAM_COMMAND,
     RESOLVE_OPERATOR_ACTION_COMMAND,
     RESUME_OPERATOR_RUN_COMMAND,
-    LIST_NOTIFICATION_ROUTES_COMMAND,
-    LIST_NOTIFICATION_DISPATCHES_COMMAND,
-    UPSERT_NOTIFICATION_ROUTE_COMMAND,
-    UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND,
-    RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND,
-    SUBMIT_NOTIFICATION_REPLY_COMMAND,
-    SYNC_NOTIFICATION_ADAPTERS_COMMAND,
     SPEECH_DICTATION_STATUS_COMMAND,
     SPEECH_DICTATION_SETTINGS_COMMAND,
     SPEECH_DICTATION_UPDATE_SETTINGS_COMMAND,
@@ -246,8 +229,6 @@ pub struct ProjectIdRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectLoadBundleRequestDto {
     pub project_id: String,
-    #[serde(default)]
-    pub include_notification_routes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -272,10 +253,6 @@ pub struct ProjectLoadBundleDto {
     pub runtime_run: Option<RuntimeRunDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autonomous_run: Option<AutonomousRunStateDto>,
-    #[serde(default)]
-    pub notification_dispatches: Vec<NotificationDispatchDto>,
-    #[serde(default)]
-    pub notification_routes: Vec<NotificationRouteDto>,
     #[serde(default)]
     pub diagnostics: Vec<ProjectLoadBundleDiagnosticDto>,
 }

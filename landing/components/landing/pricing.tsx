@@ -50,7 +50,7 @@ const addOns: AddOn[] = [
     features: [
       "Approve, redirect, and review remotely",
       "Live activity stream and diffs",
-      "Push notifications for approvals",
+      "Companion approval inbox",
       "End-to-end encrypted phone ↔ desktop",
     ],
   },

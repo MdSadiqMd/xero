@@ -54,14 +54,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     agentSessions: [],
     selectedAgentSession: null,
     selectedAgentSessionId: 'agent-session-main',
-    notificationBroker: {
-      projectId: 'project-1',
-      dispatches: [],
-      actions: [],
-      latestActionAt: null,
-      pendingActionCount: 0,
-      failedActionCount: 0,
-    },
     autonomousRun: null,
     ...overrides,
   } as ProjectDetailView

@@ -7,7 +7,7 @@ import { useOperatorAuthMutations } from './operator-auth-mutations'
 import { useProjectEntryMutations } from './project-entry-mutations'
 import { useProviderCredentialsMutations } from './provider-credentials-mutations'
 import { useRunControlMutations } from './run-control-mutations'
-import { useRuntimeSettingsNotificationMutations } from './runtime-settings-notification-mutations'
+import { useRuntimeSettingsMutations } from './runtime-settings-mutations'
 
 export type { XeroDesktopMutationActions } from './mutation-support'
 
@@ -64,9 +64,7 @@ export function useXeroDesktopMutations(
     removePluginRoot,
     setPluginEnabled,
     removePlugin,
-    refreshNotificationRoutes,
-    upsertNotificationRoute,
-  } = useRuntimeSettingsNotificationMutations(args)
+  } = useRuntimeSettingsMutations(args)
   const {
     refreshProviderCredentials,
     upsertProviderCredential,
@@ -129,8 +127,6 @@ export function useXeroDesktopMutations(
     removePluginRoot,
     setPluginEnabled,
     removePlugin,
-    refreshNotificationRoutes,
-    upsertNotificationRoute,
     refreshProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,

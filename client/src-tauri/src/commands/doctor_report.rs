@@ -18,7 +18,6 @@ use crate::{
         EnvironmentProfileStatus, EnvironmentProfileSummary,
     },
     mcp::{McpConnectionStatus, McpRegistry},
-    notifications::{FileNotificationCredentialStore, NotificationRouteKind},
     provider_models::load_provider_model_catalog,
     registry::{self, RegistryProjectRecord},
     runtime::{
@@ -824,27 +823,6 @@ fn collect_project_runtime_checks<R: Runtime>(
         return;
     }
 
-    let credential_store_path = match state.global_db_path(app) {
-        Ok(path) => Some(path),
-        Err(error) => {
-            push_check(
-                &mut checks.settings_dependency_checks,
-                command_error_check(
-                    XeroDiagnosticSubject::SettingsDependency,
-                    "notification_credentials_path_unavailable",
-                    "Xero could not resolve the notification credential store path.",
-                    error,
-                    "Repair app-data directory permissions, then run diagnostics again.",
-                ),
-            );
-            None
-        }
-    };
-    let readiness_projector = credential_store_path
-        .map(FileNotificationCredentialStore::new)
-        .map(|store| store.load_readiness_projector());
-    let mut notification_route_count = 0usize;
-
     for project in projects {
         let repo_root = PathBuf::from(project.root_path.clone());
         if !repo_root.is_dir() {
@@ -874,30 +852,6 @@ fn collect_project_runtime_checks<R: Runtime>(
 
         collect_runtime_session_check(app, state, &repo_root, &project.project_id, checks);
         collect_runtime_supervisor_check(state, &repo_root, &project.project_id, checks);
-
-        if let Some(projector) = readiness_projector.as_ref() {
-            notification_route_count += collect_notification_checks(
-                &repo_root,
-                &project.project_id,
-                projector,
-                &mut checks.settings_dependency_checks,
-            );
-        }
-    }
-
-    if notification_route_count == 0 && readiness_projector.is_some() {
-        push_check(
-            &mut checks.settings_dependency_checks,
-            XeroDiagnosticCheck::skipped(
-                XeroDiagnosticSubject::SettingsDependency,
-                "notification_routes_not_configured",
-                "No notification routes are configured for imported projects.",
-                Some(
-                    "Add a notification route before checking notification credential readiness."
-                        .into(),
-                ),
-            ),
-        );
     }
 }
 
@@ -1212,98 +1166,6 @@ fn push_runtime_run_check(run: &project_store::RuntimeRunRecord, checks: &mut Do
     );
 }
 
-fn collect_notification_checks(
-    repo_root: &Path,
-    project_id: &str,
-    readiness_projector: &crate::notifications::NotificationCredentialReadinessProjector,
-    checks: &mut Vec<XeroDiagnosticCheck>,
-) -> usize {
-    let routes = match project_store::load_notification_routes(repo_root, project_id) {
-        Ok(routes) => routes,
-        Err(error) => {
-            push_check(
-                checks,
-                command_error_check(
-                    XeroDiagnosticSubject::SettingsDependency,
-                    "notification_routes_load_failed",
-                    format!("Xero could not load notification routes for project `{project_id}`."),
-                    error,
-                    "Refresh the project or repair app-data notification route state.",
-                ),
-            );
-            return 0;
-        }
-    };
-
-    for route in &routes {
-        let route_kind = match NotificationRouteKind::parse(&route.route_kind) {
-            Ok(route_kind) => route_kind,
-            Err(error) => {
-                push_check(
-                    checks,
-                    XeroDiagnosticCheck::new(XeroDiagnosticCheckInput {
-                        subject: XeroDiagnosticSubject::SettingsDependency,
-                        status: XeroDiagnosticStatus::Failed,
-                        severity: XeroDiagnosticSeverity::Error,
-                        retryable: error.retryable,
-                        code: error.code,
-                        message: error.message,
-                        affected_profile_id: None,
-                        affected_provider_id: None,
-                        endpoint: None,
-                        remediation: Some(
-                            "Remove or recreate the unsupported notification route.".into(),
-                        ),
-                    }),
-                );
-                continue;
-            }
-        };
-        let readiness = readiness_projector.project_route(project_id, &route.route_id, route_kind);
-
-        if readiness.ready {
-            push_check(
-                checks,
-                XeroDiagnosticCheck::new(XeroDiagnosticCheckInput {
-                    subject: XeroDiagnosticSubject::SettingsDependency,
-                    status: XeroDiagnosticStatus::Passed,
-                    severity: XeroDiagnosticSeverity::Info,
-                    retryable: false,
-                    code: "notification_route_credentials_ready".into(),
-                    message: format!(
-                        "Notification route `{}` for project `{project_id}` has ready credentials.",
-                        route.route_id
-                    ),
-                    affected_profile_id: None,
-                    affected_provider_id: None,
-                    endpoint: None,
-                    remediation: None,
-                }),
-            );
-        } else if let Some(diagnostic) = readiness.diagnostic {
-            push_check(
-                checks,
-                XeroDiagnosticCheck::new(XeroDiagnosticCheckInput {
-                    subject: XeroDiagnosticSubject::SettingsDependency,
-                    status: XeroDiagnosticStatus::Failed,
-                    severity: XeroDiagnosticSeverity::Error,
-                    retryable: diagnostic.retryable,
-                    code: diagnostic.code,
-                    message: diagnostic.message,
-                    affected_profile_id: None,
-                    affected_provider_id: None,
-                    endpoint: None,
-                    remediation: Some(
-                        "Open Notifications settings and repair the route credentials.".into(),
-                    ),
-                }),
-            );
-        }
-    }
-
-    routes.len()
-}
-
 fn collect_app_path_checks<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
@@ -1334,13 +1196,6 @@ fn collect_app_path_checks<R: Runtime>(
         checks,
         "mcp_registry",
         "MCP registry",
-        state.global_db_path(app),
-        PathExpectation::OptionalFile,
-    );
-    push_path_check(
-        checks,
-        "notification_credentials",
-        "notification credential store",
         state.global_db_path(app),
         PathExpectation::OptionalFile,
     );

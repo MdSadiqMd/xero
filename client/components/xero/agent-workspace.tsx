@@ -96,14 +96,6 @@ type PaneAwareRuntimeHandlers = {
     actionId: string,
     options?: Parameters<NonNullable<AgentRuntimeProps['onResumeOperatorRun']>>[1],
   ) => ReturnType<NonNullable<AgentRuntimeProps['onResumeOperatorRun']>>
-  onRefreshNotificationRoutes?: (
-    paneId: string,
-    options?: Parameters<NonNullable<AgentRuntimeProps['onRefreshNotificationRoutes']>>[0],
-  ) => ReturnType<NonNullable<AgentRuntimeProps['onRefreshNotificationRoutes']>>
-  onUpsertNotificationRoute?: (
-    paneId: string,
-    request: Parameters<NonNullable<AgentRuntimeProps['onUpsertNotificationRoute']>>[0],
-  ) => ReturnType<NonNullable<AgentRuntimeProps['onUpsertNotificationRoute']>>
 }
 
 export interface AgentWorkspaceProps
@@ -134,8 +126,6 @@ export interface AgentWorkspaceProps
       | 'onLogout'
       | 'onResolveOperatorAction'
       | 'onResumeOperatorRun'
-      | 'onRefreshNotificationRoutes'
-      | 'onUpsertNotificationRoute'
       | 'pendingInitialRuntimeAgentId'
       | 'pendingInitialAgentDefinitionId'
       | 'onPendingInitialRuntimeAgentIdConsumed'
@@ -190,8 +180,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
   onLogout,
   onResolveOperatorAction,
   onResumeOperatorRun,
-  onRefreshNotificationRoutes,
-  onUpsertNotificationRoute,
   pendingInitialRuntimeAgent = null,
   onClearPendingInitialRuntimeAgent,
   pendingComposerInsert = null,
@@ -271,8 +259,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
           onLogout={onLogout}
           onResolveOperatorAction={onResolveOperatorAction}
           onResumeOperatorRun={onResumeOperatorRun}
-          onRefreshNotificationRoutes={onRefreshNotificationRoutes}
-          onUpsertNotificationRoute={onUpsertNotificationRoute}
           pendingInitialRuntimeAgent={pendingInitialRuntimeAgent}
           onClearPendingInitialRuntimeAgent={onClearPendingInitialRuntimeAgent}
           pendingComposerInsert={slot.isFocused ? pendingComposerInsert : null}
@@ -295,7 +281,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
       onInspectAutonomousRun,
       onLogout,
       onPaneCloseStateChange,
-      onRefreshNotificationRoutes,
       onResolveOperatorAction,
       onResumeOperatorRun,
       onSpawnPane,
@@ -306,7 +291,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
       onStopRuntimeRun,
       onSubmitManualCallback,
       onUpdateRuntimeRunControls,
-      onUpsertNotificationRoute,
       paneCount,
       panes,
       pendingInitialRuntimeAgent,
@@ -373,8 +357,6 @@ interface PaneRuntimeWrapperProps extends PaneAwareRuntimeHandlers {
     | 'onLogout'
     | 'onResolveOperatorAction'
     | 'onResumeOperatorRun'
-    | 'onRefreshNotificationRoutes'
-    | 'onUpsertNotificationRoute'
     | 'pendingInitialRuntimeAgentId'
     | 'pendingInitialAgentDefinitionId'
     | 'onPendingInitialRuntimeAgentIdConsumed'
@@ -421,8 +403,6 @@ const PaneRuntime = memo(function PaneRuntime({
   onLogout,
   onResolveOperatorAction,
   onResumeOperatorRun,
-  onRefreshNotificationRoutes,
-  onUpsertNotificationRoute,
   pendingInitialRuntimeAgent,
   onClearPendingInitialRuntimeAgent,
   pendingComposerInsert = null,
@@ -468,8 +448,6 @@ const PaneRuntime = memo(function PaneRuntime({
         | 'onLogout'
         | 'onResolveOperatorAction'
         | 'onResumeOperatorRun'
-        | 'onRefreshNotificationRoutes'
-        | 'onUpsertNotificationRoute'
       >
     >
   >(() => {
@@ -512,19 +490,12 @@ const PaneRuntime = memo(function PaneRuntime({
       onResumeOperatorRun: onResumeOperatorRun
         ? (actionId, options) => onResumeOperatorRun(paneId, actionId, options)
         : undefined,
-      onRefreshNotificationRoutes: onRefreshNotificationRoutes
-        ? (options) => onRefreshNotificationRoutes(paneId, options)
-        : undefined,
-      onUpsertNotificationRoute: onUpsertNotificationRoute
-        ? (request) => onUpsertNotificationRoute(paneId, request)
-        : undefined,
     }
   }, [
     onCancelAutonomousRun,
     onComposerControlsChange,
     onInspectAutonomousRun,
     onLogout,
-    onRefreshNotificationRoutes,
     onResolveOperatorAction,
     onResumeOperatorRun,
     onStartAutonomousRun,
@@ -534,7 +505,6 @@ const PaneRuntime = memo(function PaneRuntime({
     onStopRuntimeRun,
     onSubmitManualCallback,
     onUpdateRuntimeRunControls,
-    onUpsertNotificationRoute,
     paneId,
   ])
 

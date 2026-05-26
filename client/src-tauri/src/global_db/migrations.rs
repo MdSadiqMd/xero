@@ -192,30 +192,6 @@ const INITIAL_SCHEMA_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_openai_codex_sessions_session_id
         ON openai_codex_sessions(session_id);
 
-    CREATE TABLE IF NOT EXISTS notification_credentials (
-        project_id TEXT NOT NULL,
-        route_id TEXT NOT NULL,
-        route_kind TEXT NOT NULL,
-        bot_token TEXT,
-        chat_id TEXT,
-        webhook_url TEXT,
-        updated_at TEXT NOT NULL
-            DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        PRIMARY KEY (project_id, route_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_notification_credentials_project_id
-        ON notification_credentials(project_id);
-
-    CREATE TABLE IF NOT EXISTS notification_inbound_cursors (
-        project_id TEXT NOT NULL,
-        route_id TEXT NOT NULL,
-        route_kind TEXT NOT NULL,
-        cursor TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (project_id, route_id)
-    );
-
     CREATE TABLE IF NOT EXISTS runtime_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         payload TEXT NOT NULL,

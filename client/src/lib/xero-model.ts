@@ -26,15 +26,6 @@ import {
   type VerificationRecordView,
 } from './xero-model/operator-actions'
 import {
-  mapNotificationBroker,
-  notificationDispatchSchema,
-  notificationRouteSchema,
-  notificationReplyClaimSchema,
-  type NotificationBrokerView,
-  type NotificationDispatchDto,
-  type NotificationRouteDto,
-} from './xero-model/notifications'
-import {
   autonomousRunSchema,
   autonomousRunStateSchema,
   mapAutonomousRun,
@@ -76,7 +67,6 @@ export type {
 } from '@xero/ui/model/shared'
 export * from './xero-model/project'
 export * from './xero-model/operator-actions'
-export * from './xero-model/notifications'
 export * from '@xero/ui/model/runtime'
 export * from './xero-model/provider-credentials'
 export * from './xero-model/provider-models'
@@ -108,8 +98,6 @@ export const projectSnapshotResponseSchema = z
     resumeHistory: z.array(resumeHistoryEntrySchema),
     agentSessions: z.array(agentSessionSchema),
     autonomousRun: z.lazy(() => autonomousRunSchema).nullable().optional(),
-    notificationDispatches: z.array(notificationDispatchSchema).optional(),
-    notificationReplyClaims: z.array(notificationReplyClaimSchema).optional(),
   })
   .superRefine((snapshot, ctx) => {
     if (snapshot.autonomousRun && snapshot.autonomousRun.projectId !== snapshot.project.id) {
@@ -126,7 +114,6 @@ export type ProjectSnapshotResponseDto = z.infer<typeof projectSnapshotResponseS
 export const projectLoadBundleRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
-    includeNotificationRoutes: z.boolean().default(false),
   })
   .strict()
 export type ProjectLoadBundleRequestDto = z.infer<typeof projectLoadBundleRequestSchema>
@@ -151,8 +138,6 @@ export const projectLoadBundleSchema = z
     runtimeSession: runtimeSessionSchema.nullable().optional(),
     runtimeRun: runtimeRunSchema.nullable().optional(),
     autonomousRun: autonomousRunStateSchema.nullable().optional(),
-    notificationDispatches: z.array(notificationDispatchSchema).default([]),
-    notificationRoutes: z.array(notificationRouteSchema).default([]),
     diagnostics: z.array(projectLoadBundleDiagnosticSchema).default([]),
   })
   .strict()
@@ -172,7 +157,6 @@ export interface ProjectDetailView extends Project {
   agentSessions: AgentSessionView[]
   selectedAgentSession: AgentSessionView | null
   selectedAgentSessionId: string
-  notificationBroker: NotificationBrokerView
   runtimeSession?: RuntimeSessionView | null
   runtimeRun?: RuntimeRunView | null
   autonomousRun?: AutonomousRunView | null
@@ -185,15 +169,10 @@ export interface ProjectLoadBundleView {
   runtimeSession: RuntimeSessionDto | null
   runtimeRun: RuntimeRunDto | null
   autonomousRun: AutonomousRunStateDto | null
-  notificationDispatches: NotificationDispatchDto[]
-  notificationRoutes: NotificationRouteDto[]
   diagnostics: ProjectLoadBundleDiagnosticDto[]
 }
 
-export function mapProjectSnapshot(
-  snapshot: ProjectSnapshotResponseDto,
-  options: { notificationDispatches?: NotificationDispatchDto[] } = {},
-): ProjectDetailView {
+export function mapProjectSnapshot(snapshot: ProjectSnapshotResponseDto): ProjectDetailView {
   const summary = mapProjectSummary(snapshot.project)
   const approvalRequests = snapshot.approvalRequests.map(mapOperatorApproval)
   const verificationRecords = snapshot.verificationRecords.map(mapVerificationRecord)
@@ -204,9 +183,6 @@ export function mapProjectSnapshot(
   const selectedAgentSessionId = selectAgentSessionId(agentSessions)
   const selectedAgentSession =
     agentSessions.find((session) => session.agentSessionId === selectedAgentSessionId) ?? null
-  const notificationDispatches = options.notificationDispatches ?? snapshot.notificationDispatches ?? []
-  const notificationBroker = mapNotificationBroker(snapshot.project.id, notificationDispatches)
-
   const autonomousRun = snapshot.autonomousRun ? mapAutonomousRun(snapshot.autonomousRun) : null
 
   return {
@@ -222,7 +198,6 @@ export function mapProjectSnapshot(
     agentSessions,
     selectedAgentSession,
     selectedAgentSessionId,
-    notificationBroker,
     runtimeSession: null,
     runtimeRun: null,
     autonomousRun,

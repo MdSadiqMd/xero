@@ -5,7 +5,6 @@ pub mod developer_tool_harness;
 pub mod dictation;
 pub mod error;
 pub mod mcp;
-pub mod notifications;
 pub mod runtime;
 pub mod session_context;
 pub mod skills;

@@ -81,8 +81,6 @@ export interface AgentDockSidebarProps {
   onLogout?: AgentRuntimeProps["onLogout"]
   onResolveOperatorAction?: AgentRuntimeProps["onResolveOperatorAction"]
   onResumeOperatorRun?: AgentRuntimeProps["onResumeOperatorRun"]
-  onRefreshNotificationRoutes?: AgentRuntimeProps["onRefreshNotificationRoutes"]
-  onUpsertNotificationRoute?: AgentRuntimeProps["onUpsertNotificationRoute"]
   onRetryStream?: AgentRuntimeProps["onRetryStream"]
   onCodeUndoApplied?: AgentRuntimeProps["onCodeUndoApplied"]
   agentCreateCanvasIncluded?: AgentRuntimeProps["agentCreateCanvasIncluded"]

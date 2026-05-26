@@ -29,11 +29,6 @@ import {
 } from '@/src/lib/xero-model/runtime-stream'
 
 import {
-  BLOCKED_NOTIFICATION_SYNC_POLL_MS,
-  getBlockedNotificationSyncPollKey,
-  type BlockedNotificationSyncPollTarget,
-} from './notification-health'
-import {
   applyRuntimeToProjectList,
   removeProjectRecord,
   type ProjectLoadSource,
@@ -83,13 +78,6 @@ interface RuntimeMetadataRefreshRefs {
     source: RuntimeMetadataRefreshSource
   } | null>
   runtimeRefreshTimeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>
-}
-
-interface BlockedNotificationSyncPollRefs {
-  activeProjectIdRef: MutableRefObject<string | null>
-  blockedNotificationSyncPollTimeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>
-  blockedNotificationSyncPollTargetRef: MutableRefObject<BlockedNotificationSyncPollTarget | null>
-  blockedNotificationSyncPollInFlightRef: MutableRefObject<boolean>
 }
 
 interface AttachDesktopRuntimeListenersRefs {
@@ -650,59 +638,6 @@ export function scheduleRuntimeMetadataRefresh(args: {
 
     void loadProject(pendingRefresh.projectId, pendingRefresh.source)
   }, 120)
-}
-
-export function clearBlockedNotificationSyncPoll(
-  timeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
-) {
-  if (timeoutRef.current) {
-    clearTimeout(timeoutRef.current)
-    timeoutRef.current = null
-  }
-}
-
-export function scheduleBlockedNotificationSyncPoll(args: {
-  expectedPollKey: string
-  refs: BlockedNotificationSyncPollRefs
-  loadProject: (projectId: string, source: ProjectLoadSource) => Promise<ProjectDetailView | null>
-}) {
-  const { expectedPollKey, refs, loadProject } = args
-  if (refs.blockedNotificationSyncPollTimeoutRef.current) {
-    return
-  }
-
-  refs.blockedNotificationSyncPollTimeoutRef.current = setTimeout(() => {
-    refs.blockedNotificationSyncPollTimeoutRef.current = null
-
-    const pollTarget = refs.blockedNotificationSyncPollTargetRef.current
-    if (!pollTarget || getBlockedNotificationSyncPollKey(pollTarget) !== expectedPollKey) {
-      return
-    }
-
-    if (refs.activeProjectIdRef.current !== pollTarget.projectId) {
-      return
-    }
-
-    if (refs.blockedNotificationSyncPollInFlightRef.current) {
-      scheduleBlockedNotificationSyncPoll(args)
-      return
-    }
-
-    refs.blockedNotificationSyncPollInFlightRef.current = true
-    void loadProject(pollTarget.projectId, 'runtime_stream:action_required').finally(() => {
-      refs.blockedNotificationSyncPollInFlightRef.current = false
-      const nextTarget = refs.blockedNotificationSyncPollTargetRef.current
-      if (!nextTarget || getBlockedNotificationSyncPollKey(nextTarget) !== expectedPollKey) {
-        return
-      }
-
-      if (refs.activeProjectIdRef.current !== nextTarget.projectId) {
-        return
-      }
-
-      scheduleBlockedNotificationSyncPoll(args)
-    })
-  }, BLOCKED_NOTIFICATION_SYNC_POLL_MS)
 }
 
 export async function attachDesktopRuntimeListeners({

@@ -1,19 +1,13 @@
-use std::path::Path;
-
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{
         get_project_snapshot::project_snapshot_record_for_project,
-        get_runtime_session::reconcile_runtime_session, map_notification_dispatch_record,
-        map_notification_route_credential_readiness, map_notification_route_record,
-        validate_non_empty, AgentSessionDto, AgentSessionStatusDto, CommandError, CommandResult,
-        ProjectLoadBundleDiagnosticDto, ProjectLoadBundleDto, ProjectLoadBundleRequestDto,
-        RuntimeRunDto,
+        get_runtime_session::reconcile_runtime_session, validate_non_empty, AgentSessionDto,
+        AgentSessionStatusDto, CommandError, CommandResult, ProjectLoadBundleDiagnosticDto,
+        ProjectLoadBundleDto, ProjectLoadBundleRequestDto, RuntimeRunDto,
     },
-    db::project_store,
     git::status,
-    notifications::{FileNotificationCredentialStore, NotificationRouteKind},
     state::DesktopState,
 };
 
@@ -134,37 +128,6 @@ fn get_project_load_bundle_blocking<R: Runtime>(
         (None, None)
     };
 
-    let notification_dispatches = if is_global_computer_use {
-        Vec::new()
-    } else {
-        section_result(
-            "notificationDispatches",
-            project_store::load_notification_dispatches(&repo_root, &project_id, None).map(
-                |dispatches| {
-                    dispatches
-                        .into_iter()
-                        .map(map_notification_dispatch_record)
-                        .collect::<Vec<_>>()
-                },
-            ),
-            &mut diagnostics,
-        )
-        .unwrap_or_default()
-    };
-
-    let notification_routes = if is_global_computer_use {
-        Vec::new()
-    } else if request.include_notification_routes {
-        section_result(
-            "notificationRoutes",
-            load_notification_routes(&app, &state, &repo_root, &project_id),
-            &mut diagnostics,
-        )
-        .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
     Ok(ProjectLoadBundleDto {
         project_id,
         project_snapshot,
@@ -172,8 +135,6 @@ fn get_project_load_bundle_blocking<R: Runtime>(
         runtime_session,
         runtime_run,
         autonomous_run,
-        notification_dispatches,
-        notification_routes,
         diagnostics,
     })
 }
@@ -214,41 +175,6 @@ fn resolve_selected_agent_session_id(agent_sessions: &[AgentSessionDto]) -> Opti
                 .find(|session| session.status == AgentSessionStatusDto::Active)
         })
         .map(|session| session.agent_session_id.clone())
-}
-
-fn load_notification_routes<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &DesktopState,
-    repo_root: &Path,
-    project_id: &str,
-) -> CommandResult<Vec<crate::commands::NotificationRouteDto>> {
-    let routes = project_store::load_notification_routes(repo_root, project_id)?;
-    let credential_store_path = state.global_db_path(app)?;
-    let credential_store = FileNotificationCredentialStore::new(credential_store_path);
-    let readiness_projector = credential_store.load_readiness_projector();
-
-    routes
-        .into_iter()
-        .map(|route| {
-            let mut mapped_route = map_notification_route_record(route, None)?;
-            let route_kind = match mapped_route.route_kind {
-                crate::commands::NotificationRouteKindDto::Telegram => {
-                    NotificationRouteKind::Telegram
-                }
-                crate::commands::NotificationRouteKindDto::Discord => {
-                    NotificationRouteKind::Discord
-                }
-            };
-            let readiness = readiness_projector.project_route(
-                &mapped_route.project_id,
-                &mapped_route.route_id,
-                route_kind,
-            );
-            mapped_route.credential_readiness =
-                Some(map_notification_route_credential_readiness(readiness));
-            Ok(mapped_route)
-        })
-        .collect()
 }
 
 #[cfg(test)]

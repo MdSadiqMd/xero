@@ -10,7 +10,6 @@ import {
   type McpRegistryDto,
 } from '@/src/lib/xero-model/mcp'
 import { type SkillRegistryDto } from '@/src/lib/xero-model/skills'
-import { type NotificationRouteDto } from '@/src/lib/xero-model/notifications'
 import { type ProjectListItem } from '@/src/lib/xero-model/project'
 import {
   type ProviderCredentialsSnapshotDto,
@@ -26,9 +25,6 @@ import type { ProjectLoadSource } from './project-loaders'
 import type {
   AutonomousRunActionKind,
   AutonomousRunActionStatus,
-  NotificationRouteMutationStatus,
-  NotificationRoutesLoadResult,
-  NotificationRoutesLoadStatus,
   OperatorActionErrorView,
   OperatorActionStatus,
   ProjectRemovalStatus,
@@ -45,9 +41,6 @@ import type {
 } from './types'
 
 type SetState<T> = Dispatch<SetStateAction<T>>
-export type NotificationRouteRecords = Record<string, NotificationRouteDto[]>
-export type NotificationRouteStatusRecords = Record<string, NotificationRoutesLoadStatus>
-export type NotificationRouteErrorRecords = Record<string, OperatorActionErrorView | null>
 export type AutonomousInspection = ReturnType<typeof mapAutonomousRunInspection>
 
 export type XeroDesktopMutationActions = Pick<
@@ -102,8 +95,6 @@ export type XeroDesktopMutationActions = Pick<
   | 'removePluginRoot'
   | 'setPluginEnabled'
   | 'removePlugin'
-  | 'refreshNotificationRoutes'
-  | 'upsertNotificationRoute'
   | 'createAgentSession'
   | 'selectAgentSession'
   | 'archiveAgentSession'
@@ -140,12 +131,6 @@ export interface UseXeroDesktopMutationsSetters {
   setRuntimeRunActionStatus: SetState<RuntimeRunActionStatus>
   setPendingRuntimeRunAction: SetState<RuntimeRunActionKind | null>
   setRuntimeRunActionError: SetState<OperatorActionErrorView | null>
-  setNotificationRoutes: SetState<NotificationRouteRecords>
-  setNotificationRouteLoadStatuses: SetState<NotificationRouteStatusRecords>
-  setNotificationRouteLoadErrors: SetState<NotificationRouteErrorRecords>
-  setNotificationRouteMutationStatus: SetState<NotificationRouteMutationStatus>
-  setPendingNotificationRouteId: SetState<string | null>
-  setNotificationRouteMutationError: SetState<OperatorActionErrorView | null>
   setProviderCredentials: SetState<ProviderCredentialsSnapshotDto | null>
   setProviderCredentialsLoadStatus: SetState<ProviderCredentialsLoadStatus>
   setProviderCredentialsLoadError: SetState<OperatorActionErrorView | null>
@@ -169,10 +154,6 @@ export interface UseXeroDesktopMutationsSetters {
 export interface UseXeroDesktopMutationsOperations {
   bootstrap: (source?: 'startup' | 'remove') => Promise<void>
   loadProject: (projectId: string, source: ProjectLoadSource) => Promise<ProjectDetailView | null>
-  loadNotificationRoutes: (
-    projectId: string,
-    options?: { force?: boolean },
-  ) => Promise<NotificationRoutesLoadResult>
   syncRuntimeSession: (projectId: string) => Promise<RuntimeSessionView>
   syncRuntimeRun: (projectId: string) => Promise<RuntimeRunView | null>
   syncAutonomousRun: (projectId: string) => Promise<ProjectDetailView['autonomousRun'] | null>

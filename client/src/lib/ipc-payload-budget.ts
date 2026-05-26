@@ -2,7 +2,7 @@ export type IpcPayloadBudgetKey =
   | 'browserConsoleEvent'
   | 'browserTabEvent'
   | 'emulatorFrameEvent'
-  | 'notificationDiagnosticsPage'
+  | 'diagnosticsPage'
   | 'projectSearchResults'
   | 'projectTree'
   | 'providerRegistry'
@@ -107,9 +107,9 @@ export const IPC_PAYLOAD_BUDGETS = {
     warnBytes: 256 * 1024,
     maxBytes: 512 * 1024,
   },
-  notificationDiagnosticsPage: {
-    key: 'notificationDiagnosticsPage',
-    label: 'notification/diagnostics page',
+  diagnosticsPage: {
+    key: 'diagnosticsPage',
+    label: 'diagnostics page',
     warnBytes: 384 * 1024,
     maxBytes: 768 * 1024,
   },
@@ -118,19 +118,17 @@ export const IPC_PAYLOAD_BUDGETS = {
 const COMMAND_BUDGET_KEYS: Record<string, IpcPayloadBudgetKey | undefined> = {
   browser_control_settings: 'settingsRegistry',
   browser_tab_list: 'browserTabEvent',
-  get_environment_discovery_status: 'notificationDiagnosticsPage',
-  get_environment_profile_summary: 'notificationDiagnosticsPage',
+  get_environment_discovery_status: 'diagnosticsPage',
+  get_environment_profile_summary: 'diagnosticsPage',
   get_provider_model_catalog: 'providerRegistry',
   preflight_provider_profile: 'providerRegistry',
   get_repository_diff: 'repositoryDiff',
   get_repository_status: 'repositoryStatus',
   list_mcp_servers: 'settingsRegistry',
-  list_notification_dispatches: 'notificationDiagnosticsPage',
-  list_notification_routes: 'settingsRegistry',
   list_project_files: 'projectTree',
   list_skill_registry: 'settingsRegistry',
   reload_skill_registry: 'settingsRegistry',
-  run_doctor_report: 'notificationDiagnosticsPage',
+  run_doctor_report: 'diagnosticsPage',
   search_project: 'projectSearchResults',
   soul_settings: 'settingsRegistry',
   speech_dictation_settings: 'settingsRegistry',

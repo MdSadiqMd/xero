@@ -19,7 +19,6 @@ mod cross_store_outbox;
 mod delivery_state;
 mod freshness;
 mod lance_health;
-mod notifications;
 mod operator;
 mod plugins;
 mod project_record;
@@ -52,16 +51,14 @@ pub(crate) use connection::{open_project_database, open_runtime_database};
 pub use cross_store_outbox::*;
 pub use delivery_state::*;
 pub use freshness::*;
-pub use notifications::*;
 pub use operator::*;
 pub(crate) use operator::{
     decode_optional_non_empty_text, derive_operator_scope_prefix, is_retryable_sql_error,
-    is_unique_constraint_violation, map_operator_loop_commit_error,
-    map_operator_loop_transaction_error, map_operator_loop_write_error, map_project_query_error,
-    map_snapshot_decode_error, operator_approval_status_label, read_operator_approval_by_action_id,
-    read_operator_approvals, read_resume_history, read_resume_history_entry_by_id,
-    read_verification_records, require_non_empty_owned, sqlite_path_suffix,
-    validate_non_empty_text, ProjectSummaryRow,
+    map_operator_loop_commit_error, map_operator_loop_transaction_error,
+    map_operator_loop_write_error, map_project_query_error, operator_approval_status_label,
+    read_operator_approval_by_action_id, read_operator_approvals, read_resume_history,
+    read_resume_history_entry_by_id, read_verification_records, require_non_empty_owned,
+    sqlite_path_suffix, validate_non_empty_text, ProjectSummaryRow,
 };
 pub use plugins::*;
 pub use project_record::*;

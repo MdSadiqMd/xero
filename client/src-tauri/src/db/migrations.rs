@@ -1892,25 +1892,6 @@ const BASELINE_SCHEMA_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_operator_resume_history_project_created
         ON operator_resume_history(project_id, created_at DESC, id DESC);
 
-    CREATE TABLE IF NOT EXISTS notification_routes (
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        route_id TEXT NOT NULL,
-        route_kind TEXT NOT NULL,
-        route_target TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-        metadata_json TEXT,
-        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        PRIMARY KEY (project_id, route_id),
-        CHECK (route_id <> ''),
-        CHECK (route_kind <> ''),
-        CHECK (route_target <> ''),
-        CHECK (metadata_json IS NULL OR (metadata_json <> '' AND json_valid(metadata_json)))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_notification_routes_project_enabled
-        ON notification_routes(project_id, enabled, updated_at DESC, route_id ASC);
-
     CREATE TABLE IF NOT EXISTS agent_sessions (
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         agent_session_id TEXT NOT NULL,
@@ -2181,74 +2162,6 @@ const BASELINE_SCHEMA_SQL: &str = r#"
 
     CREATE INDEX IF NOT EXISTS idx_runtime_run_attached_skill_snapshots_updated
         ON runtime_run_attached_skill_snapshots(project_id, updated_at DESC);
-
-    CREATE TABLE IF NOT EXISTS notification_dispatches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id TEXT NOT NULL,
-        action_id TEXT NOT NULL,
-        route_id TEXT NOT NULL,
-        correlation_key TEXT NOT NULL,
-        status TEXT NOT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-        last_attempt_at TEXT,
-        delivered_at TEXT,
-        claimed_at TEXT,
-        last_error_code TEXT,
-        last_error_message TEXT,
-        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        CHECK (action_id <> ''),
-        CHECK (route_id <> ''),
-        CHECK (correlation_key <> ''),
-        CHECK (status IN ('pending', 'sent', 'failed', 'claimed')),
-        CHECK (last_error_code IS NULL OR last_error_code <> ''),
-        CHECK (last_error_message IS NULL OR last_error_message <> ''),
-        UNIQUE (project_id, action_id, route_id),
-        UNIQUE (project_id, correlation_key),
-        FOREIGN KEY (project_id, action_id)
-            REFERENCES operator_approvals(project_id, action_id) ON DELETE CASCADE,
-        FOREIGN KEY (project_id, route_id)
-            REFERENCES notification_routes(project_id, route_id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_notification_dispatches_project_status_updated
-        ON notification_dispatches(project_id, status, updated_at DESC, id DESC);
-    CREATE INDEX IF NOT EXISTS idx_notification_dispatches_project_action
-        ON notification_dispatches(project_id, action_id, route_id, id DESC);
-
-    CREATE TABLE IF NOT EXISTS notification_reply_claims (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        action_id TEXT NOT NULL,
-        route_id TEXT NOT NULL,
-        correlation_key TEXT NOT NULL,
-        responder_id TEXT,
-        reply_text TEXT NOT NULL,
-        status TEXT NOT NULL,
-        rejection_code TEXT,
-        rejection_message TEXT,
-        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        CHECK (action_id <> ''),
-        CHECK (route_id <> ''),
-        CHECK (correlation_key <> ''),
-        CHECK (reply_text <> ''),
-        CHECK (responder_id IS NULL OR responder_id <> ''),
-        CHECK (status IN ('accepted', 'rejected')),
-        CHECK (rejection_code IS NULL OR rejection_code <> ''),
-        CHECK (rejection_message IS NULL OR rejection_message <> ''),
-        CHECK (
-            (status = 'accepted' AND rejection_code IS NULL AND rejection_message IS NULL)
-            OR (status = 'rejected' AND rejection_code IS NOT NULL AND rejection_message IS NOT NULL)
-        )
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_reply_claims_project_action_winner
-        ON notification_reply_claims(project_id, action_id)
-        WHERE status = 'accepted';
-    CREATE INDEX IF NOT EXISTS idx_notification_reply_claims_project_action_created
-        ON notification_reply_claims(project_id, action_id, created_at DESC, id DESC);
-    CREATE INDEX IF NOT EXISTS idx_notification_reply_claims_project_route_created
-        ON notification_reply_claims(project_id, route_id, created_at DESC, id DESC);
 
     CREATE TABLE IF NOT EXISTS autonomous_runs (
         project_id TEXT NOT NULL,

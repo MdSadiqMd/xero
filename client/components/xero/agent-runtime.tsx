@@ -57,7 +57,6 @@ import type {
   RuntimeStreamViewItem,
   ReturnSessionToHereResponseDto,
   SelectiveUndoResponseDto,
-  UpsertNotificationRouteRequestDto,
 } from '@/src/lib/xero-model'
 import type { SessionContextSnapshotDto } from '@/src/lib/xero-model/session-context'
 import type { AgentHandoffContextSummaryDto } from '@/src/lib/xero-model/agent-reports'
@@ -175,10 +174,6 @@ export interface AgentRuntimeProps {
     options?: { userAnswer?: string | null },
   ) => Promise<unknown>
   onResumeOperatorRun?: (actionId: string, options?: { userAnswer?: string | null }) => Promise<unknown>
-  onRefreshNotificationRoutes?: (options?: { force?: boolean }) => Promise<unknown>
-  onUpsertNotificationRoute?: (
-    request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,
-  ) => Promise<unknown>
   desktopAdapter?: AgentRuntimeDesktopAdapter
   /** GitHub avatar URL for the signed-in account, when available. */
   accountAvatarUrl?: string | null

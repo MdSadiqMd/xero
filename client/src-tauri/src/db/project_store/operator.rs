@@ -1488,15 +1488,6 @@ pub(crate) fn sqlite_path_suffix(database_path: &Path) -> String {
     format!("against {}.", database_path.display())
 }
 
-pub(crate) fn is_unique_constraint_violation(error: &SqlError) -> bool {
-    match error {
-        SqlError::SqliteFailure(inner, _) => {
-            matches!(inner.code, ErrorCode::ConstraintViolation)
-        }
-        _ => false,
-    }
-}
-
 pub(crate) fn is_retryable_sql_error(error: &SqlError) -> bool {
     match error {
         SqlError::SqliteFailure(inner, _) => {

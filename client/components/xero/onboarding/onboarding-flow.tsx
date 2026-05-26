@@ -8,13 +8,10 @@ import { WelcomeStep } from "./steps/welcome-step"
 import { LocalEnvironmentStep } from "./steps/local-environment-step"
 import { ProvidersStep } from "./steps/providers-step"
 import { ProjectStep } from "./steps/project-step"
-import { NotificationsStep } from "./steps/notifications-step"
 import { EnvironmentAccessStep } from "./steps/environment-access-step"
 import { ConfirmationStep } from "./steps/confirmation-step"
 import { BetaStep } from "./steps/beta-step"
 import type {
-  NotificationRouteHealthView,
-  NotificationRouteMutationStatus,
   OperatorActionErrorView,
   ProviderCredentialsLoadStatus,
   ProviderCredentialsSaveStatus,
@@ -24,7 +21,6 @@ import {
   type ProviderAuthSessionView,
   type RuntimeProviderIdDto,
   type RuntimeSessionView,
-  type UpsertNotificationRouteRequestDto,
   type UpsertProviderCredentialRequestDto,
   type XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
@@ -40,7 +36,6 @@ const BASE_STEP_ORDER: Array<{ id: OnboardingStepId; showIndicator: boolean }> =
   { id: "welcome", showIndicator: false },
   { id: "providers", showIndicator: true },
   { id: "project", showIndicator: true },
-  { id: "notifications", showIndicator: true },
   { id: "confirm", showIndicator: true },
   { id: "beta", showIndicator: true },
 ]
@@ -136,10 +131,6 @@ export interface OnboardingFlowProps {
   isImporting: boolean
   isProjectLoading: boolean
   projectErrorMessage: string | null
-  notificationRoutes: NotificationRouteHealthView[]
-  notificationRouteMutationStatus: NotificationRouteMutationStatus
-  pendingNotificationRouteId: string | null
-  notificationRouteMutationError: OperatorActionErrorView | null
   environmentPermissionRequests?: EnvironmentPermissionRequestDto[]
   onResolveEnvironmentPermissions?: (decisions: Array<{
     id: string
@@ -169,9 +160,6 @@ export interface OnboardingFlowProps {
     providerId: "xai"
     flowId: string
   }) => Promise<XaiDeviceCodeLoginDto>
-  onUpsertNotificationRoute: (
-    request: Omit<UpsertNotificationRouteRequestDto, "projectId">,
-  ) => Promise<unknown>
   onComplete: () => void
   onDismiss: () => void
 }
@@ -187,10 +175,6 @@ export function OnboardingFlow({
   isImporting,
   isProjectLoading,
   projectErrorMessage,
-  notificationRoutes,
-  notificationRouteMutationStatus,
-  pendingNotificationRouteId,
-  notificationRouteMutationError,
   environmentPermissionRequests = [],
   onResolveEnvironmentPermissions,
   launchMode = null,
@@ -201,7 +185,6 @@ export function OnboardingFlow({
   onStartOAuthLogin,
   onStartXaiDeviceCodeLogin,
   onPollXaiDeviceCodeLogin,
-  onUpsertNotificationRoute,
   onComplete,
   onDismiss,
 }: OnboardingFlowProps) {
@@ -405,16 +388,6 @@ export function OnboardingFlow({
                 onImportProject={() => void onImportProject()}
               />
             ) : null}
-            {currentStep.id === "notifications" ? (
-              <NotificationsStep
-                projectName={project?.name ?? null}
-                routes={notificationRoutes}
-                mutationStatus={notificationRouteMutationStatus}
-                pendingRouteId={pendingNotificationRouteId}
-                mutationError={notificationRouteMutationError}
-                onUpsertNotificationRoute={onUpsertNotificationRoute}
-              />
-            ) : null}
             {currentStep.id === "environment-access" ? (
               <EnvironmentAccessStep
                 permissionRequests={environmentPermissionRequests}
@@ -433,7 +406,6 @@ export function OnboardingFlow({
                 providerValue={providerReview.value}
                 providerReady={providerReview.ready}
                 projectName={project?.name ?? null}
-                notifications={notificationRoutes}
               />
             ) : null}
             {currentStep.id === "beta" ? <BetaStep /> : null}
