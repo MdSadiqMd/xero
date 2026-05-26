@@ -2,7 +2,7 @@ app = "xero-cloud"
 primary_region = "ord"
 
 [build]
-  dockerfile = "cloud/Dockerfile"
+  dockerfile = "Dockerfile"
   # Build context must be the repo root so the workspace packages
   # (`packages/ui`, `pnpm-workspace.yaml`, root lockfile) are visible to the
   # Docker daemon.
