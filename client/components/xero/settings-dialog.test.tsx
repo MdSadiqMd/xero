@@ -942,7 +942,95 @@ describe('SettingsDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Extended' }))
 
-    await waitFor(() => expect(onRunDoctorReport).toHaveBeenCalledWith({ mode: 'extended_network' }))
+    await waitFor(() =>
+      expect(onRunDoctorReport).toHaveBeenCalledWith({
+        mode: 'extended_network',
+        projectId: 'project-1',
+      }),
+    )
+  })
+
+  it('hides mobile emulator environment checks from diagnostics', async () => {
+    const environmentProfileSummary = makeEnvironmentSummary({
+      tools: [
+        {
+          id: 'node',
+          category: 'language_runtime',
+          custom: false,
+          present: true,
+          version: 'v22.0.0',
+          displayPath: 'node',
+          probeStatus: 'ok',
+        },
+        {
+          id: 'adb',
+          category: 'mobile_tooling',
+          custom: false,
+          present: true,
+          version: null,
+          displayPath: 'adb',
+          probeStatus: 'timeout',
+        },
+      ],
+      capabilities: [
+        {
+          id: 'android_emulator_available',
+          state: 'missing',
+          evidence: [],
+          message: 'Android emulator tooling requires adb and emulator.',
+        },
+        {
+          id: 'ios_simulator_available',
+          state: 'missing',
+          evidence: [],
+          message: 'iOS simulator tooling requires xcodebuild and xcrun.',
+        },
+        {
+          id: 'protobuf_build_ready',
+          state: 'missing',
+          evidence: [],
+          message: 'Protocol Buffer builds require protoc.',
+        },
+      ],
+    })
+    const environmentDiscoveryStatus = makeEnvironmentStatus({
+      diagnostics: [
+        {
+          code: 'environment_probe_timeout',
+          severity: 'warning',
+          message: 'adb version probe timed out.',
+          retryable: true,
+          toolId: 'adb',
+        },
+        {
+          code: 'environment_probe_timeout',
+          severity: 'warning',
+          message: 'nano version probe timed out.',
+          retryable: true,
+          toolId: 'nano',
+        },
+      ],
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'diagnostics',
+          environmentDiscoveryStatus,
+          environmentProfileSummary,
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Diagnostics' })).toBeVisible()
+    expect(screen.getByText(/macos aarch64 · 1 tool/)).toBeVisible()
+    expect(screen.getByText('protobuf_build_ready')).toBeVisible()
+    expect(screen.getByText(/nano version probe timed out/)).toBeVisible()
+    expect(screen.queryByText('android_emulator_available')).not.toBeInTheDocument()
+    expect(screen.queryByText('ios_simulator_available')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Android emulator tooling/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/iOS simulator tooling/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/adb version probe timed out/)).not.toBeInTheDocument()
   })
 
   it('verifies user-added environment tools before saving and resets the form after save', async () => {

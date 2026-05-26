@@ -20,7 +20,7 @@ use crate::{
     mcp::{McpConnectionStatus, McpRegistry},
     notifications::{FileNotificationCredentialStore, NotificationRouteKind},
     provider_models::load_provider_model_catalog,
-    registry,
+    registry::{self, RegistryProjectRecord},
     runtime::{
         provider_capability_diagnostics, provider_model_catalog_diagnostic,
         provider_validation_diagnostics, XeroDiagnosticCheck, XeroDiagnosticCheckInput,
@@ -30,7 +30,10 @@ use crate::{
     state::DesktopState,
 };
 
-use super::runtime_support::{load_runtime_run_status, load_runtime_session_status};
+use super::{
+    developer_tool_harness::HARNESS_FIXTURE_PROJECT_ID,
+    runtime_support::{load_runtime_run_status, load_runtime_session_status},
+};
 
 #[tauri::command]
 pub fn run_doctor_report<R: Runtime>(
@@ -47,7 +50,12 @@ pub fn run_doctor_report<R: Runtime>(
     collect_dictation_checks(&app, state.inner(), &mut checks.dictation_checks);
     collect_provider_checks(&app, state.inner(), mode, &mut checks);
     collect_mcp_checks(&app, state.inner(), &mut checks.mcp_dependency_checks);
-    collect_project_runtime_checks(&app, state.inner(), &mut checks);
+    collect_project_runtime_checks(
+        &app,
+        state.inner(),
+        request.project_id.as_deref(),
+        &mut checks,
+    );
 
     XeroDoctorReport::new(XeroDoctorReportInput {
         report_id: doctor_report_id(&generated_at),
@@ -750,6 +758,7 @@ fn push_mcp_registry_checks(registry: &McpRegistry, checks: &mut Vec<XeroDiagnos
 fn collect_project_runtime_checks<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
+    project_id_filter: Option<&str>,
     checks: &mut DoctorCheckBuckets,
 ) {
     let registry_path = match state.global_db_path(app) {
@@ -770,8 +779,8 @@ fn collect_project_runtime_checks<R: Runtime>(
     };
 
     crate::db::configure_project_database_paths(&registry_path);
-    let registry = match registry::read_registry(&registry_path) {
-        Ok(registry) => registry,
+    let projects = match diagnostic_registry_projects(&registry_path, project_id_filter) {
+        Ok(projects) => projects,
         Err(error) => {
             push_check(
                 &mut checks.settings_dependency_checks,
@@ -787,17 +796,29 @@ fn collect_project_runtime_checks<R: Runtime>(
         }
     };
 
-    if registry.projects.is_empty() {
+    if projects.is_empty() {
         push_check(
             &mut checks.runtime_supervisor_checks,
             XeroDiagnosticCheck::skipped(
                 XeroDiagnosticSubject::RuntimeSupervisor,
-                "runtime_projects_not_configured",
-                "No imported projects are available for runtime diagnostics.",
-                Some(
-                    "Import a project before checking runtime session and supervisor health."
-                        .into(),
-                ),
+                if project_id_filter.is_some() {
+                    "runtime_project_not_configured"
+                } else {
+                    "runtime_projects_not_configured"
+                },
+                project_id_filter
+                    .map(|project_id| {
+                        format!("Project `{project_id}` is not available for runtime diagnostics.")
+                    })
+                    .unwrap_or_else(|| {
+                        "No imported projects are available for runtime diagnostics.".into()
+                    }),
+                Some(if project_id_filter.is_some() {
+                    "Refresh or re-import the selected project before checking runtime session and supervisor health."
+                        .into()
+                } else {
+                    "Import a project before checking runtime session and supervisor health.".into()
+                }),
             ),
         );
         return;
@@ -824,7 +845,7 @@ fn collect_project_runtime_checks<R: Runtime>(
         .map(|store| store.load_readiness_projector());
     let mut notification_route_count = 0usize;
 
-    for project in registry.projects {
+    for project in projects {
         let repo_root = PathBuf::from(project.root_path.clone());
         if !repo_root.is_dir() {
             push_check(
@@ -878,6 +899,29 @@ fn collect_project_runtime_checks<R: Runtime>(
             ),
         );
     }
+}
+
+fn diagnostic_registry_projects(
+    registry_path: &Path,
+    project_id_filter: Option<&str>,
+) -> CommandResult<Vec<RegistryProjectRecord>> {
+    let projects =
+        if let Some(project_id) = project_id_filter.filter(|value| !value.trim().is_empty()) {
+            registry::read_project_records(registry_path, project_id)?
+        } else {
+            registry::read_registry(registry_path)?.projects
+        };
+
+    Ok(filter_diagnostic_registry_projects(projects))
+}
+
+fn filter_diagnostic_registry_projects(
+    projects: Vec<RegistryProjectRecord>,
+) -> Vec<RegistryProjectRecord> {
+    projects
+        .into_iter()
+        .filter(|project| project.project_id != HARNESS_FIXTURE_PROJECT_ID)
+        .collect()
 }
 
 fn collect_runtime_session_check<R: Runtime>(
@@ -1735,4 +1779,29 @@ fn doctor_report_id(generated_at: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .collect::<String>();
     format!("doctor-{suffix}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry_record(project_id: &str) -> RegistryProjectRecord {
+        RegistryProjectRecord {
+            project_id: project_id.into(),
+            repository_id: format!("repo-{project_id}"),
+            root_path: format!("/tmp/{project_id}"),
+        }
+    }
+
+    #[test]
+    fn filters_harness_fixture_from_diagnostic_project_records() {
+        let projects = vec![
+            registry_record("project-real"),
+            registry_record(HARNESS_FIXTURE_PROJECT_ID),
+        ];
+
+        let filtered = filter_diagnostic_registry_projects(projects);
+
+        assert_eq!(filtered, vec![registry_record("project-real")]);
+    }
 }

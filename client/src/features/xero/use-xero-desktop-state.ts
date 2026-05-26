@@ -2462,6 +2462,7 @@ export function useXeroDesktopState(
       try {
         const report = await adapter.runDoctorReport({
           mode: request.mode ?? 'quick_local',
+          projectId: request.projectId,
         })
         setDoctorReport(report)
         setDoctorReportStatus('ready')

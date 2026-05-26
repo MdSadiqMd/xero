@@ -194,9 +194,12 @@ describe('diagnostics contract', () => {
   })
 
   it('accepts run-doctor-report mode defaults and overrides', () => {
-    expect(runDoctorReportRequestSchema.parse({})).toEqual({ mode: 'quick_local' })
-    expect(runDoctorReportRequestSchema.parse({ mode: 'extended_network' })).toEqual({
+    expect(runDoctorReportRequestSchema.parse({})).toEqual({
+      mode: 'quick_local',
+    })
+    expect(runDoctorReportRequestSchema.parse({ mode: 'extended_network', projectId: 'project-1' })).toEqual({
       mode: 'extended_network',
+      projectId: 'project-1',
     })
   })
 

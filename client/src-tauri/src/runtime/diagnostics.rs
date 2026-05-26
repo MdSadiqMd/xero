@@ -15,7 +15,7 @@ use super::provider::{
     BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID, DEEPSEEK_RUNTIME_KIND, GEMINI_AI_STUDIO_PROVIDER_ID,
     GEMINI_RUNTIME_KIND, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
     OPENAI_CODEX_PROVIDER_ID, OPENAI_COMPATIBLE_RUNTIME_KIND, OPENROUTER_PROVIDER_ID,
-    VERTEX_PROVIDER_ID,
+    VERTEX_PROVIDER_ID, XAI_PROVIDER_ID, XAI_RUNTIME_KIND,
 };
 
 pub const XERO_DIAGNOSTIC_CONTRACT_VERSION: u32 = 1;
@@ -836,6 +836,7 @@ fn provider_metadata_diagnostics(
         OPENROUTER_PROVIDER_ID
         | ANTHROPIC_PROVIDER_ID
         | DEEPSEEK_PROVIDER_ID
+        | XAI_PROVIDER_ID
         | GITHUB_MODELS_PROVIDER_ID
         | GEMINI_AI_STUDIO_PROVIDER_ID => {
             require_preset_id(profile, profile.provider_id.as_str(), &mut checks)?;
@@ -871,6 +872,14 @@ fn provider_metadata_diagnostics(
                     "provider_runtime_kind_invalid",
                     "DeepSeek providers must use runtime kind `deepseek`.",
                     "Resave the provider so Xero can rebuild DeepSeek runtime metadata.",
+                )?);
+            }
+            if profile.provider_id == XAI_PROVIDER_ID && profile.runtime_kind != XAI_RUNTIME_KIND {
+                checks.push(metadata_failed(
+                    profile,
+                    "provider_runtime_kind_invalid",
+                    "xAI providers must use runtime kind `xai`.",
+                    "Resave the provider so Xero can rebuild xAI runtime metadata.",
                 )?);
             }
         }

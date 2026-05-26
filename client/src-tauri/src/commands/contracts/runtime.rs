@@ -1146,6 +1146,8 @@ fn default_provider_preflight_required_features() -> ProviderPreflightRequiredFe
 pub struct RunDoctorReportRequestDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::runtime::XeroDoctorReportMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

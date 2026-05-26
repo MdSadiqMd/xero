@@ -3428,6 +3428,7 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   runDoctorReport(request = {}) {
     const parsedRequest = runDoctorReportRequestSchema.parse({
       mode: request.mode ?? 'quick_local',
+      projectId: request.projectId,
     })
     return invokeTyped(COMMANDS.runDoctorReport, xeroDoctorReportSchema, {
       request: parsedRequest,

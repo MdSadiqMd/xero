@@ -28,6 +28,7 @@ use crate::{
 
 const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_PROBE_CONCURRENCY: usize = 6;
+const MOBILE_EMULATOR_ENVIRONMENT_PROBES_ENABLED: bool = false;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -504,8 +505,6 @@ pub fn built_in_environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry>
             &["--version"],
         ),
         // Mobile tooling
-        entry("adb", MobileTooling, "adb", &["version"]),
-        entry("emulator", MobileTooling, "emulator", &["-version"]),
         entry("flutter", MobileTooling, "flutter", &["--version"]),
         entry("fastlane", MobileTooling, "fastlane", &["--version"]),
         entry("expo", MobileTooling, "expo", &["--version"]),
@@ -575,7 +574,14 @@ pub fn built_in_environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry>
         entry("continue", AgentAiCli, "continue", &["--version"]),
     ];
 
-    if cfg!(target_os = "macos") {
+    if MOBILE_EMULATOR_ENVIRONMENT_PROBES_ENABLED {
+        entries.extend([
+            entry("adb", MobileTooling, "adb", &["version"]),
+            entry("emulator", MobileTooling, "emulator", &["-version"]),
+        ]);
+    }
+
+    if MOBILE_EMULATOR_ENVIRONMENT_PROBES_ENABLED && cfg!(target_os = "macos") {
         entries.extend([
             entry("xcodebuild", MobileTooling, "xcodebuild", &["-version"]),
             entry("xcrun", MobileTooling, "xcrun", &["--version"]),
@@ -814,7 +820,7 @@ fn derive_capabilities(tools: &[EnvironmentToolRecord]) -> Vec<EnvironmentCapabi
         ),
     ];
 
-    if cfg!(target_os = "macos") {
+    if MOBILE_EMULATOR_ENVIRONMENT_PROBES_ENABLED && cfg!(target_os = "macos") {
         capabilities.push(capability_all(
             "ios_simulator_available",
             &present,
@@ -823,13 +829,16 @@ fn derive_capabilities(tools: &[EnvironmentToolRecord]) -> Vec<EnvironmentCapabi
         ));
     }
 
-    capabilities.extend([
-        capability_all(
+    if MOBILE_EMULATOR_ENVIRONMENT_PROBES_ENABLED {
+        capabilities.push(capability_all(
             "android_emulator_available",
             &present,
             &["adb", "emulator"],
             "Android emulator tooling requires adb and emulator.",
-        ),
+        ));
+    }
+
+    capabilities.extend([
         capability_all(
             "solana_localnet_ready",
             &present,
@@ -1224,6 +1233,85 @@ mod tests {
         ) -> EnvironmentCommandExecution {
             self.execution.clone()
         }
+    }
+
+    #[test]
+    fn built_in_catalog_omits_disabled_mobile_emulator_tools() {
+        let ids = built_in_environment_probe_catalog()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect::<std::collections::HashSet<_>>();
+
+        for id in ["adb", "emulator", "xcodebuild", "xcrun"] {
+            assert!(
+                !ids.contains(id),
+                "{id} should stay out of environment discovery while mobile emulator surfaces are disabled"
+            );
+        }
+    }
+
+    #[test]
+    fn capabilities_omit_disabled_mobile_emulator_checks() {
+        let mut binaries = HashMap::new();
+        for command in ["adb", "emulator", "xcodebuild", "xcrun"] {
+            binaries.insert(
+                command.into(),
+                ResolvedEnvironmentBinary {
+                    path: std::env::temp_dir().join(command),
+                    source: EnvironmentToolSource::Path,
+                },
+            );
+        }
+
+        let catalog = vec![
+            entry(
+                "adb",
+                EnvironmentToolCategory::MobileTooling,
+                "adb",
+                &["version"],
+            ),
+            entry(
+                "emulator",
+                EnvironmentToolCategory::MobileTooling,
+                "emulator",
+                &["-version"],
+            ),
+            entry(
+                "xcodebuild",
+                EnvironmentToolCategory::MobileTooling,
+                "xcodebuild",
+                &["-version"],
+            ),
+            entry(
+                "xcrun",
+                EnvironmentToolCategory::MobileTooling,
+                "xcrun",
+                &["--version"],
+            ),
+        ];
+        let report = probe_environment_profile_with(
+            catalog,
+            Arc::new(FakeResolver { binaries }),
+            Arc::new(FakeExecutor {
+                execution: EnvironmentCommandExecution::Completed {
+                    success: true,
+                    stdout: b"ok\n".to_vec(),
+                    stderr: vec![],
+                },
+            }),
+            EnvironmentProbeOptions::default(),
+        )
+        .expect("probe report");
+
+        let capability_ids = report
+            .summary
+            .capabilities
+            .iter()
+            .map(|capability| capability.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(!capability_ids.contains("android_emulator_available"));
+        assert!(!capability_ids.contains("ios_simulator_available"));
     }
 
     fn single_entry() -> Vec<EnvironmentProbeCatalogEntry> {

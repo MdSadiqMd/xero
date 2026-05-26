@@ -703,6 +703,7 @@ export function SettingsDialog({
     if (renderedSection === "diagnostics") {
       return (
         <LazyDiagnosticsSection
+          activeProjectId={agent?.project.id ?? null}
           doctorReport={doctorReport}
           doctorReportStatus={doctorReportStatus}
           doctorReportError={doctorReportError}

@@ -344,6 +344,18 @@ fn provider_validation_accepts_supported_provider_metadata_shapes() {
             credential: CredentialKind::ApiKey,
         },
         Case {
+            profile_id: "xai-default",
+            provider_id: "xai",
+            runtime_kind: "xai",
+            model_id: "grok-4.3",
+            preset_id: Some("xai"),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
             profile_id: "mistral-recipe-work",
             provider_id: "openai_api",
             runtime_kind: "openai_compatible",

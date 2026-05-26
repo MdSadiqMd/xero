@@ -28,7 +28,9 @@ import {
   type XeroDiagnosticStatusDto,
   type XeroDoctorReportDto,
   type RunDoctorReportRequestDto,
+  type EnvironmentCapabilityDto,
   type EnvironmentCapabilityStateDto,
+  type EnvironmentDiagnosticDto,
   type EnvironmentDiscoveryStatusDto,
   type EnvironmentProbeReportDto,
   type EnvironmentProfileSummaryDto,
@@ -66,6 +68,7 @@ import { cn } from "@/lib/utils"
 import { SectionHeader } from "./section-header"
 
 interface DiagnosticsSectionProps {
+  activeProjectId?: string | null
   doctorReport: XeroDoctorReportDto | null
   doctorReportStatus: DoctorReportRunStatus
   doctorReportError: OperatorActionErrorView | null
@@ -218,8 +221,14 @@ const HEADLINER_TOOL_PRIORITY = [
 ]
 
 const HEADLINER_LIMIT = 8
+const HIDDEN_MOBILE_EMULATOR_TOOL_IDS = new Set(["adb", "emulator", "xcodebuild", "xcrun"])
+const HIDDEN_MOBILE_EMULATOR_CAPABILITY_IDS = new Set([
+  "android_emulator_available",
+  "ios_simulator_available",
+])
 
 export function DiagnosticsSection({
+  activeProjectId = null,
   doctorReport,
   doctorReportStatus,
   doctorReportError,
@@ -241,7 +250,10 @@ export function DiagnosticsSection({
   const canRun = Boolean(onRunDoctorReport) && !isRunning
 
   const runReport = (mode: RunDoctorReportRequestDto["mode"]) => {
-    void onRunDoctorReport?.({ mode }).catch(() => undefined)
+    void onRunDoctorReport?.({
+      mode,
+      ...(activeProjectId ? { projectId: activeProjectId } : {}),
+    }).catch(() => undefined)
   }
 
   const refreshEnvironment = () => {
@@ -396,15 +408,20 @@ function EnvironmentProfilePanel({
   const [removingToolId, setRemovingToolId] = useState<string | null>(null)
   const deferredSummary = useDeferredValue(summary)
   const presentTools = useMemo(
-    () => deferredSummary?.tools.filter((tool) => tool.present) ?? [],
+    () => deferredSummary?.tools.filter((tool) => tool.present && isVisibleEnvironmentTool(tool)) ?? [],
     [deferredSummary],
   )
   const attentionCapabilities = useMemo(
     () =>
       deferredSummary?.capabilities
+        .filter(isVisibleEnvironmentCapability)
         .filter((capability) => capability.state !== "ready")
         .slice(0, 4) ?? [],
     [deferredSummary],
+  )
+  const visibleDiagnostics = useMemo(
+    () => status?.diagnostics.filter(isVisibleEnvironmentDiagnostic) ?? [],
+    [status?.diagnostics],
   )
   const headlinerTools = useMemo(() => pickHeadlinerTools(presentTools), [presentTools])
   const headlinerIds = useMemo(() => new Set(headlinerTools.map((tool) => tool.id)), [headlinerTools])
@@ -417,7 +434,7 @@ function EnvironmentProfilePanel({
   const isStale = Boolean(status?.stale)
   const canMutateUserTools = Boolean(onVerifyUserEnvironmentTool && onSaveUserEnvironmentTool)
 
-  if (!summary && !isProbing && !status?.diagnostics.length) {
+  if (!summary && !isProbing && visibleDiagnostics.length === 0) {
     return null
   }
 
@@ -590,9 +607,9 @@ function EnvironmentProfilePanel({
         </ul>
       ) : null}
 
-      {status?.diagnostics.length ? (
+      {visibleDiagnostics.length > 0 ? (
         <ul className="divide-y divide-border/40 border-t border-border/40">
-          {status.diagnostics.slice(0, 4).map((diagnostic) => (
+          {visibleDiagnostics.slice(0, 4).map((diagnostic) => (
             <li
               key={`${diagnostic.code}-${diagnostic.message}`}
               className="flex items-start gap-2.5 px-4 py-2.5"
@@ -609,6 +626,18 @@ function EnvironmentProfilePanel({
       ) : null}
     </section>
   )
+}
+
+function isVisibleEnvironmentTool(tool: EnvironmentToolSummaryDto): boolean {
+  return !HIDDEN_MOBILE_EMULATOR_TOOL_IDS.has(tool.id)
+}
+
+function isVisibleEnvironmentCapability(capability: EnvironmentCapabilityDto): boolean {
+  return !HIDDEN_MOBILE_EMULATOR_CAPABILITY_IDS.has(capability.id)
+}
+
+function isVisibleEnvironmentDiagnostic(diagnostic: EnvironmentDiagnosticDto): boolean {
+  return !diagnostic.toolId || !HIDDEN_MOBILE_EMULATOR_TOOL_IDS.has(diagnostic.toolId)
 }
 
 function ToolChip({

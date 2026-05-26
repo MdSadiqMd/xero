@@ -180,6 +180,7 @@ export const xeroDoctorReportSchema = z
 export const runDoctorReportRequestSchema = z
   .object({
     mode: xeroDoctorReportModeSchema.default('quick_local'),
+    projectId: nonEmptyOptionalTextSchema,
   })
   .strict()
 
