@@ -454,6 +454,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::browser::settings::browser_control_settings,
             commands::browser::settings::browser_control_update_settings,
             commands::browser::browser_eval,
+            commands::browser::browser_eval_fire_and_forget,
             commands::browser::browser_current_url,
             commands::browser::browser_screenshot,
             commands::browser::browser_navigate,

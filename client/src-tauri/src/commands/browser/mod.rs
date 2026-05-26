@@ -27,9 +27,10 @@ pub use diagnostics::{
 };
 pub use events::{
     BrowserConsolePayload, BrowserDialogPayload, BrowserDownloadPayload, BrowserLoadStatePayload,
-    BrowserTabUpdatedPayload, BrowserUrlChangedPayload, BROWSER_CONSOLE_EVENT,
-    BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT,
-    BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
+    BrowserTabUpdatedPayload, BrowserToolClosedPayload, BrowserToolContextPayload,
+    BrowserUrlChangedPayload, BROWSER_CONSOLE_EVENT, BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT,
+    BROWSER_LOAD_STATE_EVENT, BROWSER_TAB_UPDATED_EVENT, BROWSER_TOOL_CLOSED_EVENT,
+    BROWSER_TOOL_CONTEXT_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use screenshot::capture_webview as screenshot_webview;
 pub(crate) use settings::load_browser_control_settings;
@@ -437,6 +438,25 @@ pub fn browser_eval<R: Runtime>(
         &body,
         actions::resolve_timeout(timeout_ms),
     )
+}
+
+#[tauri::command]
+pub fn browser_eval_fire_and_forget<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, BrowserState>,
+    js: String,
+) -> CommandResult<()> {
+    if js.trim().is_empty() {
+        return Err(CommandError::invalid_request("js"));
+    }
+    let webview = state.tabs().active_webview(&app)?;
+    webview.eval(&js).map_err(|error| {
+        CommandError::system_fault(
+            "browser_eval_fire_and_forget_failed",
+            format!("Xero could not evaluate the browser script: {error}"),
+        )
+    })?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -906,6 +926,27 @@ pub fn browser_internal_event<R: Runtime>(
         }
         "network" => {
             state.diagnostics().push_network(&tab_id, &parsed)?;
+        }
+        "tool_context" => {
+            events::emit(
+                &app,
+                BROWSER_TOOL_CONTEXT_EVENT,
+                &BrowserToolContextPayload {
+                    tab_id,
+                    context: parsed,
+                },
+            );
+        }
+        "tool_closed" => {
+            let mode = parsed
+                .get("mode")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            events::emit(
+                &app,
+                BROWSER_TOOL_CLOSED_EVENT,
+                &BrowserToolClosedPayload { tab_id, mode },
+            );
         }
         _ => {}
     }

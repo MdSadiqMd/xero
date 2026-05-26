@@ -8,10 +8,12 @@ type InvokeHandler = (args: Record<string, unknown> | undefined) => unknown
 
 const invokeResponses = new Map<string, InvokeHandler>()
 const eventListeners = new Map<string, ((event: { payload: unknown }) => void)[]>()
+const invokeCalls: Array<{ command: string; args: Record<string, unknown> | undefined }> = []
 
 function resetBridge() {
   invokeResponses.clear()
   eventListeners.clear()
+  invokeCalls.length = 0
 }
 
 function registerInvoke(command: string, handler: InvokeHandler) {
@@ -26,6 +28,7 @@ function emitEvent(name: string, payload: unknown) {
 vi.mock("@tauri-apps/api/core", () => ({
   isTauri: () => true,
   invoke: async (command: string, args?: Record<string, unknown>) => {
+    invokeCalls.push({ command, args })
     const handler = invokeResponses.get(command)
     if (!handler) return undefined
     return handler(args)
@@ -50,6 +53,10 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }))
 
+import {
+  buildBrowserToolAgentPrompt,
+  type BrowserAgentContextRequest,
+} from "./browser-tool-injection"
 import { BrowserSidebar, createBrowserEventCoalescer } from "./browser-sidebar"
 
 // jsdom in this project ships a localStorage object whose methods aren't
@@ -93,6 +100,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBridge()
   vi.restoreAllMocks()
+  document.documentElement.removeAttribute("style")
   cookieStorage?.clear()
 })
 
@@ -508,7 +516,7 @@ describe("BrowserSidebar", () => {
     expect(await screen.findByLabelText("Inspect element")).toBeInTheDocument()
   })
 
-  it("toggles pen mode and shows the drawing overlay; clicking again exits", async () => {
+  it("toggles pen mode by injecting the tool into the live webview; clicking again exits", async () => {
     registerInvoke("browser_tab_list", async () => [
       {
         id: "tab-1",
@@ -524,18 +532,46 @@ describe("BrowserSidebar", () => {
 
     render(<BrowserSidebar open />)
 
+    document.documentElement.style.setProperty("--popover", "#123456")
+    document.documentElement.style.setProperty("--popover-foreground", "#abcdef")
+
     const penButton = await screen.findByLabelText("Sketch on page")
     fireEvent.click(penButton)
 
-    expect(screen.getByTestId("browser-pen-overlay")).toBeInTheDocument()
+    await waitFor(() => {
+      expect(
+        invokeCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes('"mode":"pen"'),
+        ),
+      ).toBe(true)
+    })
+    const activationCall = invokeCalls.find(
+      (call) =>
+        call.command === "browser_eval_fire_and_forget" &&
+        String(call.args?.js ?? "").includes('"mode":"pen"'),
+    )
+    expect(activationCall?.args).not.toHaveProperty("timeout_ms")
+    expect(String(activationCall?.args?.js ?? "")).toContain('"popover":"#123456"')
+    expect(String(activationCall?.args?.js ?? "")).toContain('"popoverForeground":"#abcdef"')
     expect(penButton).toHaveAttribute("aria-pressed", "true")
+    expect(invokeCalls.some((call) => call.command === "browser_hide")).toBe(false)
 
     fireEvent.click(penButton)
-    expect(screen.queryByTestId("browser-pen-overlay")).toBeNull()
+    await waitFor(() => {
+      expect(
+        invokeCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes("deactivate"),
+        ),
+      ).toBe(true)
+    })
     expect(penButton).toHaveAttribute("aria-pressed", "false")
   })
 
-  it("opens the inspect overlay and renders the mini composer when a mock element is selected", async () => {
+  it("injects inspect mode into the active dev-server webview", async () => {
     registerInvoke("browser_tab_list", async () => [
       {
         id: "tab-1",
@@ -553,18 +589,19 @@ describe("BrowserSidebar", () => {
     const inspectButton = await screen.findByLabelText("Inspect element")
     fireEvent.click(inspectButton)
 
-    const overlay = screen.getByTestId("browser-inspect-overlay")
-    expect(overlay).toBeInTheDocument()
-
-    const target = screen.getByTestId("browser-inspect-element-cta")
-    fireEvent.click(target)
-
-    expect(await screen.findByTestId("browser-mini-composer")).toBeInTheDocument()
-    expect(screen.getByLabelText("Mini composer input")).toBeInTheDocument()
-    expect(screen.getByLabelText("Send")).toBeInTheDocument()
+    await waitFor(() => {
+      expect(
+        invokeCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes('"mode":"inspect"'),
+        ),
+      ).toBe(true)
+    })
+    expect(inspectButton).toHaveAttribute("aria-pressed", "true")
   })
 
-  it("switching from pen to inspect closes the pen overlay", async () => {
+  it("switching from pen to inspect replaces the injected browser tool", async () => {
     registerInvoke("browser_tab_list", async () => [
       {
         id: "tab-1",
@@ -580,11 +617,28 @@ describe("BrowserSidebar", () => {
 
     render(<BrowserSidebar open />)
     fireEvent.click(await screen.findByLabelText("Sketch on page"))
-    expect(screen.getByTestId("browser-pen-overlay")).toBeInTheDocument()
+    await waitFor(() => {
+      expect(
+        invokeCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes('"mode":"pen"'),
+        ),
+      ).toBe(true)
+    })
 
     fireEvent.click(screen.getByLabelText("Inspect element"))
-    expect(screen.queryByTestId("browser-pen-overlay")).toBeNull()
-    expect(screen.getByTestId("browser-inspect-overlay")).toBeInTheDocument()
+    await waitFor(() => {
+      expect(
+        invokeCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes('"mode":"inspect"'),
+        ),
+      ).toBe(true)
+    })
+    expect(screen.getByLabelText("Sketch on page")).toHaveAttribute("aria-pressed", "false")
+    expect(screen.getByLabelText("Inspect element")).toHaveAttribute("aria-pressed", "true")
   })
 
   it("clears tool mode when the URL changes off the dev server", async () => {
@@ -603,7 +657,7 @@ describe("BrowserSidebar", () => {
 
     render(<BrowserSidebar open />)
     fireEvent.click(await screen.findByLabelText("Sketch on page"))
-    expect(screen.getByTestId("browser-pen-overlay")).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText("Sketch on page")).toHaveAttribute("aria-pressed", "true"))
 
     await act(async () => {
       emitEvent("browser:url_changed", {
@@ -615,7 +669,88 @@ describe("BrowserSidebar", () => {
       })
     })
 
-    await waitFor(() => expect(screen.queryByTestId("browser-pen-overlay")).toBeNull())
-    expect(screen.queryByLabelText("Sketch on page")).toBeNull()
+    await waitFor(() => {
+      expect(
+        invokeCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes("deactivate"),
+        ),
+      ).toBe(true)
+    })
+    await waitFor(() => expect(screen.queryByLabelText("Sketch on page")).toBeNull())
+  })
+
+  it("captures submitted browser tool context and forwards it to the agent", async () => {
+    const submittedRequests: BrowserAgentContextRequest[] = []
+    const onSubmitAgentContext = vi.fn(async (request: BrowserAgentContextRequest) => {
+      submittedRequests.push(request)
+    })
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Local",
+        url: "http://localhost:5173/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    registerInvoke("browser_eval", async (args) => {
+      if (String(args?.js ?? "").includes("captureImage")) return "aGVsbG8="
+      return null
+    })
+
+    render(<BrowserSidebar open onSubmitAgentContext={onSubmitAgentContext} />)
+    fireEvent.click(await screen.findByLabelText("Inspect element"))
+
+    await act(async () => {
+      emitEvent("browser:tool_context", {
+        tabId: "tab-1",
+        context: {
+          kind: "inspect",
+          note: "Tighten the spacing here",
+          page: { url: "http://localhost:5173/", title: "Local" },
+          viewport: { width: 800, height: 600 },
+          element: {
+            selector: "button.cta",
+            tagName: "button",
+            id: null,
+            classes: ["cta"],
+            role: "button",
+            label: "Start",
+            text: "Start",
+            rect: { x: 20, y: 40, width: 120, height: 36 },
+          },
+        },
+      })
+    })
+
+    await waitFor(() => expect(onSubmitAgentContext).toHaveBeenCalledTimes(1))
+    const request = submittedRequests[0]!
+    expect(request.prompt).toContain("Browser element inspection context")
+    expect(request.prompt).toContain("local dev server /")
+    expect(request.prompt).not.toContain("localhost:")
+    expect(request.prompt).toContain("Selector: button.cta")
+    expect(request.prompt).toContain("Tighten the spacing here")
+    expect(Array.from(request.image.bytes)).toEqual([104, 101, 108, 108, 111])
+    expect(request.image.originalName).toMatch(/^browser-inspect-/)
+    expect(invokeCalls.some((call) => call.command === "browser_screenshot")).toBe(false)
+  })
+
+  it("redacts local dev-server URLs from browser tool prompts", () => {
+    const prompt = buildBrowserToolAgentPrompt({
+      kind: "pen",
+      note: "Make the heading tighter",
+      page: { url: "http://localhost:5173/oauth/callback?code=abc", title: "Local App" },
+      strokeCount: 1,
+      viewport: { width: 800, height: 600 },
+    })
+
+    expect(prompt).toContain("Local App (local dev server /oauth/callback)")
+    expect(prompt).not.toContain("localhost:")
+    expect(prompt).not.toContain("code=abc")
   })
 })

@@ -25,10 +25,21 @@ import {
   type DetectedBrowser,
 } from "./browser-cookie-import"
 import {
-  InspectOverlay,
-  PenOverlay,
+  BROWSER_TOOL_CLOSED_EVENT,
+  BROWSER_TOOL_CAPTURE_IMAGE_SCRIPT,
+  BROWSER_TOOL_CONTEXT_EVENT,
+  BROWSER_TOOL_DEACTIVATE_SCRIPT,
+  BROWSER_TOOL_RESTORE_CAPTURE_SCRIPT,
+  browserScreenshotBytesFromBase64,
+  buildBrowserToolActivationScript,
+  buildBrowserToolAgentPrompt,
   isDevServerUrl,
-} from "./browser-tool-overlay"
+  readBrowserToolTheme,
+  type BrowserAgentContextRequest,
+  type BrowserToolClosedEventPayload,
+  type BrowserToolContext,
+  type BrowserToolContextEventPayload,
+} from "./browser-tool-injection"
 import {
   createBrowserResizeScheduler,
   readBrowserViewportRect,
@@ -49,6 +60,7 @@ const RESIZE_HANDLE_INSET = 6
 
 interface BrowserSidebarProps {
   open: boolean
+  onSubmitAgentContext?: (request: BrowserAgentContextRequest) => Promise<void>
 }
 
 interface BrowserTabMeta {
@@ -207,7 +219,31 @@ function writeCookiePromptFlag(): void {
   }
 }
 
-export function BrowserSidebar({ open }: BrowserSidebarProps) {
+function getToolErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message
+  if (typeof error === "string" && error.trim()) return error
+  if (typeof error === "object" && error && "message" in error) {
+    const message = String((error as { message?: unknown }).message ?? "").trim()
+    if (message) return message
+  }
+  return fallback
+}
+
+function isBrowserToolContext(value: unknown): value is BrowserToolContext {
+  if (!value || typeof value !== "object") return false
+  const context = value as { kind?: unknown; page?: unknown }
+  if (context.kind !== "pen" && context.kind !== "inspect") return false
+  if (!context.page || typeof context.page !== "object") return false
+  const page = context.page as { url?: unknown }
+  return typeof page.url === "string"
+}
+
+function imageNameForContext(context: BrowserToolContext): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+  return `browser-${context.kind}-${timestamp}.png`
+}
+
+export function BrowserSidebar({ open, onSubmitAgentContext }: BrowserSidebarProps) {
   const [width, setWidth] = useState(viewportDefaultWidth)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
@@ -218,6 +254,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const [navError, setNavError] = useState<string | null>(null)
   const [showCookieBanner, setShowCookieBanner] = useState(false)
   const [toolMode, setToolMode] = useState<ToolMode>(null)
+  const [toolSubmitError, setToolSubmitError] = useState<string | null>(null)
   const motionOpen = useSidebarOpenMotion(open)
   const targetWidth = motionOpen ? width : 0
   const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
@@ -236,10 +273,14 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const openRef = useRef(open)
   const activeTabIdRef = useRef(activeTabId)
   const toolModeRef = useRef(toolMode)
+  const injectedToolModeRef = useRef<ToolMode>(null)
+  const toolActivationRequestRef = useRef(0)
+  const onSubmitAgentContextRef = useRef(onSubmitAgentContext)
 
   openRef.current = open
   activeTabIdRef.current = activeTabId
   toolModeRef.current = toolMode
+  onSubmitAgentContextRef.current = onSubmitAgentContext
 
   const resizeScheduler = useMemo(
     () =>
@@ -247,7 +288,6 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
         getEnabled: () =>
           openRef.current &&
           hasWebviewRef.current &&
-          toolModeRef.current === null &&
           isTauri(),
         getNode: () => viewportRef.current,
         getTabId: () => activeTabIdRef.current,
@@ -269,6 +309,63 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const isDevTab = isDevServerUrl(activeTab?.url ?? null)
   const pageLabel = activeTab?.title ?? activeTab?.url ?? null
 
+  const deactivateInjectedTool = useCallback(async () => {
+    if (!isTauri()) return
+    await invoke("browser_eval_fire_and_forget", {
+      js: BROWSER_TOOL_DEACTIVATE_SCRIPT,
+    }).catch(() => {
+      /* the active page may already have navigated away */
+    })
+    injectedToolModeRef.current = null
+  }, [])
+
+  const restoreInjectedToolCapture = useCallback(async () => {
+    if (!isTauri()) return
+    await invoke("browser_eval_fire_and_forget", {
+      js: BROWSER_TOOL_RESTORE_CAPTURE_SCRIPT,
+    }).catch(() => {
+      /* best-effort restore */
+    })
+  }, [])
+
+  const submitBrowserToolContext = useCallback(
+    async (payload: BrowserToolContextEventPayload) => {
+      if (payload.tabId !== activeTabIdRef.current) return
+      if (!isBrowserToolContext(payload.context)) return
+
+      const context = payload.context
+      setToolSubmitError(null)
+      try {
+        const screenshotBase64 = await invoke<string | null>("browser_eval", {
+          js: BROWSER_TOOL_CAPTURE_IMAGE_SCRIPT,
+          timeout_ms: 8_000,
+        })
+        if (!screenshotBase64) {
+          throw new Error("Xero could not render this browser context image.")
+        }
+        const submit = onSubmitAgentContextRef.current
+        if (submit) {
+          await submit({
+            prompt: buildBrowserToolAgentPrompt(context),
+            image: {
+              bytes: browserScreenshotBytesFromBase64(screenshotBase64),
+              mediaType: "image/png",
+              originalName: imageNameForContext(context),
+            },
+          })
+        }
+        await deactivateInjectedTool()
+        setToolMode(null)
+      } catch (error) {
+        setToolSubmitError(
+          getToolErrorMessage(error, "Xero could not send this browser context to the agent."),
+        )
+        await restoreInjectedToolCapture()
+      }
+    },
+    [deactivateInjectedTool, restoreInjectedToolCapture],
+  )
+
   // Tools are gated to dev-server tabs. Drop the active tool whenever the
   // tab/URL changes to one that isn't a dev server, or when the sidebar closes.
   useEffect(() => {
@@ -279,12 +376,45 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   }, [open, isDevTab, toolMode])
 
   useEffect(() => {
+    if (!isTauri()) return
+
+    if (!open || !activeTabId || !isDevTab || toolMode === null) {
+      if (injectedToolModeRef.current !== null) {
+        void deactivateInjectedTool()
+      }
+      return
+    }
+
+    const requestId = ++toolActivationRequestRef.current
+    const script = buildBrowserToolActivationScript({
+      mode: toolMode,
+      pageLabel,
+      theme: readBrowserToolTheme(),
+    })
+    setToolSubmitError(null)
+    void invoke("browser_eval_fire_and_forget", {
+      js: script,
+    })
+      .then(() => {
+        if (requestId !== toolActivationRequestRef.current || toolModeRef.current !== toolMode) {
+          void deactivateInjectedTool()
+          return
+        }
+        injectedToolModeRef.current = toolMode
+      })
+      .catch((error: unknown) => {
+        if (requestId !== toolActivationRequestRef.current) return
+        injectedToolModeRef.current = null
+        setToolMode(null)
+        setToolSubmitError(
+          getToolErrorMessage(error, "Xero could not activate this browser tool."),
+        )
+      })
+  }, [activeTabId, deactivateInjectedTool, isDevTab, open, pageLabel, toolMode])
+
+  useEffect(() => {
     if (!open || !isTauri()) return
     if (!hasWebviewRef.current) return
-    // Tool overlays (pen / inspect) sit on top of the viewport in HTML, but the
-    // native child webview always paints on top of HTML — so we hide the
-    // webview while a tool is active and avoid scheduling it back on top here.
-    if (toolMode !== null) return
 
     // Reset the cache on every effect re-run (sidebar open, active tab change)
     // so the first scheduled sync fires a browser_resize. Without this,
@@ -292,12 +422,11 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
     // the viewport rect may be unchanged.
     resizeScheduler.reset()
     resizeScheduler.schedule({ force: true })
-  }, [activeTabId, open, resizeScheduler, toolMode])
+  }, [activeTabId, open, resizeScheduler])
 
   useEffect(() => {
     if (!open || !isTauri()) return
     if (!hasWebviewRef.current) return
-    if (toolMode !== null) return
 
     const node = viewportRef.current
     if (!node) return
@@ -314,7 +443,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
     observer.observe(node)
 
     return () => observer.disconnect()
-  }, [activeTabId, open, resizeScheduler, toolMode])
+  }, [activeTabId, open, resizeScheduler])
 
   useEffect(() => {
     if (open || !isTauri() || !hasWebviewRef.current) return
@@ -324,16 +453,6 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       /* swallow */
     })
   }, [open, resizeScheduler])
-
-  useEffect(() => {
-    if (!isTauri() || !hasWebviewRef.current) return
-    if (toolMode === null) return
-    resizeScheduler.cancel()
-    resizeScheduler.reset()
-    void invoke("browser_hide").catch(() => {
-      /* swallow */
-    })
-  }, [resizeScheduler, toolMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -435,12 +554,29 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       }),
     )
 
+    trackUnlisten(
+      listen<BrowserToolContextEventPayload>(BROWSER_TOOL_CONTEXT_EVENT, (event) => {
+        recordIpcPayloadSample({ boundary: "event", name: BROWSER_TOOL_CONTEXT_EVENT, payload: event.payload })
+        void submitBrowserToolContext(event.payload)
+      }),
+    )
+
+    trackUnlisten(
+      listen<BrowserToolClosedEventPayload>(BROWSER_TOOL_CLOSED_EVENT, (event) => {
+        recordIpcPayloadSample({ boundary: "event", name: BROWSER_TOOL_CLOSED_EVENT, payload: event.payload })
+        if (event.payload.tabId === activeTabIdRef.current) {
+          injectedToolModeRef.current = null
+          setToolMode(null)
+        }
+      }),
+    )
+
     return () => {
       cancelled = true
       coalescer.dispose()
       unsubs.forEach((unsub) => unsub())
     }
-  }, [])
+  }, [submitBrowserToolContext])
 
   // Hydrate tabs when sidebar opens
   useEffect(() => {
@@ -814,9 +950,10 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
                   ? "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary"
                   : null,
               )}
-              onClick={() =>
+              onClick={() => {
+                setToolSubmitError(null)
                 setToolMode((current) => (current === "pen" ? null : "pen"))
-              }
+              }}
               title="Sketch on page"
               type="button"
             >
@@ -831,9 +968,10 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
                   ? "bg-success/15 text-success hover:bg-success/20 hover:text-success"
                   : null,
               )}
-              onClick={() =>
+              onClick={() => {
+                setToolSubmitError(null)
                 setToolMode((current) => (current === "inspect" ? null : "inspect"))
-              }
+              }}
               title="Inspect element"
               type="button"
             >
@@ -851,6 +989,12 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
           onRefresh={() => void refreshCookieSources()}
           status={importStatus}
         />
+      ) : null}
+
+      {toolSubmitError ? (
+        <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-[11.5px] leading-relaxed text-destructive">
+          {toolSubmitError}
+        </div>
       ) : null}
 
       <div
@@ -872,20 +1016,6 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
               Browser engine is only available in the desktop app.
             </div>
           </div>
-        ) : null}
-        {toolMode === "pen" ? (
-          <PenOverlay
-            pageLabel={pageLabel}
-            onSubmit={() => setToolMode(null)}
-            onExit={() => setToolMode(null)}
-          />
-        ) : null}
-        {toolMode === "inspect" ? (
-          <InspectOverlay
-            pageLabel={pageLabel}
-            onSubmit={() => setToolMode(null)}
-            onExit={() => setToolMode(null)}
-          />
         ) : null}
       </div>
       </div>

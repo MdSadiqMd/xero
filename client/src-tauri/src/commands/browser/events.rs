@@ -7,6 +7,8 @@ pub const BROWSER_CONSOLE_EVENT: &str = "browser:console";
 pub const BROWSER_TAB_UPDATED_EVENT: &str = "browser:tab_updated";
 pub const BROWSER_DIALOG_EVENT: &str = "browser:dialog";
 pub const BROWSER_DOWNLOAD_EVENT: &str = "browser:download";
+pub const BROWSER_TOOL_CONTEXT_EVENT: &str = "browser:tool_context";
+pub const BROWSER_TOOL_CLOSED_EVENT: &str = "browser:tool_closed";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +57,20 @@ pub struct BrowserDownloadPayload {
     pub tab_id: String,
     pub url: String,
     pub suggested_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserToolContextPayload {
+    pub tab_id: String,
+    pub context: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserToolClosedPayload {
+    pub tab_id: String,
+    pub mode: Option<String>,
 }
 
 pub fn emit<R: Runtime, T: Serialize + Clone>(app: &AppHandle<R>, event: &str, payload: &T) {

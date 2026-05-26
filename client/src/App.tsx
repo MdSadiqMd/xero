@@ -157,6 +157,7 @@ import { startLayoutShiftGuard } from '@/lib/layout-shift-guard'
 import { useSidebarOpenMotion, useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import { cn } from '@/lib/utils'
 import { FloatingRightSidebarFrame } from '@/components/xero/floating-right-sidebar-frame'
+import type { BrowserAgentContextRequest } from '@/components/xero/browser-tool-injection'
 
 export interface XeroAppProps {
   adapter?: XeroDesktopAdapter
@@ -3995,6 +3996,46 @@ export function XeroApp({ adapter }: XeroAppProps) {
       updateRuntimeRunControls,
     ],
   )
+  const handleSendBrowserContextToAgent = useCallback(
+    async (request: BrowserAgentContextRequest) => {
+      if (!activeProject) {
+        throw new Error('Select a project before sending browser context to an agent.')
+      }
+
+      const activeRuntimeRun = agentView?.runtimeRun ?? null
+      const targetRunId = activeRuntimeRun && !activeRuntimeRun.isTerminal
+        ? activeRuntimeRun.runId
+        : 'pending'
+      const staged = await resolvedAdapter.stageAgentAttachment({
+        projectId: activeProject.id,
+        runId: targetRunId,
+        originalName: request.image.originalName,
+        mediaType: request.image.mediaType,
+        bytes: request.image.bytes,
+      })
+
+      const attachments: StagedAgentAttachmentDto[] = [staged]
+      if (activeRuntimeRun && !activeRuntimeRun.isTerminal) {
+        await updateRuntimeRunControls({ prompt: request.prompt, attachments })
+      } else {
+        await startRuntimeRun({
+          controls: agentComposerControls,
+          prompt: request.prompt,
+          attachments,
+        })
+      }
+      setActiveView('agent')
+    },
+    [
+      activeProject,
+      agentComposerControls,
+      agentView?.runtimeRun,
+      resolvedAdapter,
+      setActiveView,
+      startRuntimeRun,
+      updateRuntimeRunControls,
+    ],
+  )
   const handleAgentComposerControlsChange = useCallback((
     _paneId: string,
     controls: RuntimeRunControlInputDto | null,
@@ -4843,7 +4884,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
             <Suspense
               fallback={<InlineSidebarLoadingShell label="Browser" open={browserOpen} width={640} />}
             >
-              <LazyBrowserSidebar open={browserOpen} />
+              <LazyBrowserSidebar
+                open={browserOpen}
+                onSubmitAgentContext={handleSendBrowserContextToAgent}
+              />
             </Suspense>
           </LazyPrerenderedSurface>
           <LazyPrerenderedSurface
