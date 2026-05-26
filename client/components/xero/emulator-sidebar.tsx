@@ -338,19 +338,24 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
 
   const session = useEmulatorSession({ platform, active: sessionActive })
   const inspector = useInspector()
+  const {
+    connect: connectInspector,
+    disconnect: disconnectInspector,
+    metroConnected,
+  } = inspector
 
   // Auto-connect Metro inspector when streaming an iOS session.
   useEffect(() => {
-    if (session.status.phase === "streaming" && platform === "ios" && !inspector.metroConnected) {
-      inspector.connect().catch(() => {
+    const shouldConnectMetro = session.status.phase === "streaming" && platform === "ios"
+    if (shouldConnectMetro && !metroConnected) {
+      connectInspector().catch(() => {
         // Metro not running — silent, inspect button stays available.
       })
     }
-    if (session.status.phase !== "streaming" && inspector.metroConnected) {
-      inspector.disconnect()
+    if (!shouldConnectMetro && metroConnected) {
+      void disconnectInspector()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.status.phase, platform])
+  }, [connectInspector, disconnectInspector, metroConnected, session.status.phase, platform])
 
   useEffect(() => {
     if (typeof window === "undefined") return

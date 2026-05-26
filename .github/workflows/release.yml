@@ -145,10 +145,28 @@ jobs:
       - name: Set up flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Deploy cloud to Fly.io
+      - name: Ensure cloud app and domain
+        working-directory: .
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_CLOUD_TOKEN || secrets.FLY_API_TOKEN }}
-        run: flyctl deploy .. --remote-only --config fly.toml
+          FLY_ORG: ${{ vars.FLY_CLOUD_ORG || vars.FLY_ORG }}
+        run: |
+          set -euo pipefail
+          if ! flyctl status --app xero-cloud > /dev/null 2>&1; then
+            create_args=(xero-cloud)
+            if [ -n "${FLY_ORG:-}" ]; then
+              create_args+=(--org "$FLY_ORG")
+            fi
+            flyctl apps create "${create_args[@]}"
+          fi
+          flyctl certs show cloud.xeroshell.com --app xero-cloud > /dev/null 2>&1 \
+            || flyctl certs create cloud.xeroshell.com --app xero-cloud
+
+      - name: Deploy cloud to Fly.io
+        working-directory: .
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CLOUD_TOKEN || secrets.FLY_API_TOKEN }}
+        run: flyctl deploy . --remote-only --config cloud/fly.toml --app xero-cloud
 
   build-tui:
     name: Build TUI (${{ matrix.artifact_suffix }})
