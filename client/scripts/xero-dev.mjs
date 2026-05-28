@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createWriteStream, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -20,9 +20,11 @@ if (xeroTuiArgs[0] === '--') {
 const rootEnv = loadRootDotenv(repoRoot)
 const relayUrl = resolveRelayUrl()
 const cloudUrl = resolveCloudUrl()
+const devAppDataDir = defaultAppDataDir('dev.sn0w.xero')
 const env = {
   ...rootEnv,
   CARGO_BUILD_JOBS: rootEnv.CARGO_BUILD_JOBS ?? '4',
+  XERO_APP_DATA_DIR: rootEnv.XERO_APP_DATA_DIR ?? devAppDataDir,
   XERO_REMOTE_RELAY_URL: rootEnv.XERO_REMOTE_RELAY_URL ?? relayUrl,
   XERO_SERVER_URL: rootEnv.XERO_SERVER_URL ?? relayUrl,
   VITE_XERO_SERVER_URL: rootEnv.VITE_XERO_SERVER_URL ?? relayUrl,
@@ -214,6 +216,16 @@ function cloudDevArgs(baseUrl) {
   } catch {
     return fallback
   }
+}
+
+function defaultAppDataDir(directoryName) {
+  if (process.platform === 'darwin') {
+    return resolve(homedir(), 'Library', 'Application Support', directoryName)
+  }
+  if (process.platform === 'win32') {
+    return resolve(process.env.APPDATA || process.env.LOCALAPPDATA || homedir(), directoryName)
+  }
+  return resolve(process.env.XDG_DATA_HOME || resolve(homedir(), '.local', 'share'), directoryName)
 }
 
 function stopManagedProcess(managed) {

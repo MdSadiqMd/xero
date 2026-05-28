@@ -20,6 +20,8 @@ use super::{
 };
 
 pub const SKILL_SOURCE_SETTINGS_SCHEMA_VERSION: u32 = 1;
+const APP_DATA_DIR_ENV: &str = "XERO_APP_DATA_DIR";
+const DEFAULT_APP_DATA_DIRECTORY_NAME: &str = "com.hyperpush.xero";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -400,8 +402,8 @@ pub fn persist_skill_source_settings(
 }
 
 fn default_local_root_settings() -> Vec<SkillLocalRootSetting> {
-    dirs::data_dir()
-        .map(|data| data.join("dev.sn0w.xero").join("skills"))
+    default_app_data_dir()
+        .map(|data| data.join("skills"))
         .filter(|root| root.is_dir())
         .and_then(|root| {
             normalize_local_root_setting(None, root.to_string_lossy().into_owned(), true).ok()
@@ -411,14 +413,21 @@ fn default_local_root_settings() -> Vec<SkillLocalRootSetting> {
 }
 
 fn default_plugin_root_settings() -> Vec<SkillPluginRootSetting> {
-    dirs::data_dir()
-        .map(|data| data.join("dev.sn0w.xero").join("plugins"))
+    default_app_data_dir()
+        .map(|data| data.join("plugins"))
         .filter(|root| root.is_dir())
         .and_then(|root| {
             normalize_plugin_root_setting(None, root.to_string_lossy().into_owned(), true).ok()
         })
         .into_iter()
         .collect()
+}
+
+fn default_app_data_dir() -> Option<PathBuf> {
+    std::env::var_os(APP_DATA_DIR_ENV)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::data_dir().map(|data| data.join(DEFAULT_APP_DATA_DIRECTORY_NAME)))
 }
 
 fn normalize_local_root_setting(

@@ -38,7 +38,7 @@ It combines:
 
 ### Key top-level projects
 
-- `client/`: production desktop app (`productName: Xero`, `identifier: dev.sn0w.xero`)
+- `client/`: production desktop app (`productName: Xero`, `identifier: com.hyperpush.xero`)
 - `cloud/`: browser/PWA surface for remote sessions, deployed to `cloud.xeroshell.com`
 - `landing/`: separate website, run on port `3001` in root dev workflow
 - `server/`: Phoenix 1.8 service, local Postgres, GitHub auth callback/session support, Oban jobs
@@ -472,6 +472,8 @@ Xero stores application and project state under the OS app-data directory:
 
 - `xero.db` for global state
 - `projects/<project-id>/state.db` for per-project state
+
+Production builds use the `com.hyperpush.xero` app-data directory. Local dev launchers use `dev.sn0w.xero` and export `XERO_APP_DATA_DIR` so dev and production state remain separate on the same machine.
 
 New imports do not create `<repo>/.xero/`. That directory is legacy.
 Project skill artifacts also live in app data, under `projects/<project-id>/skills` and `projects/<project-id>/dynamic-skills`.

@@ -2,8 +2,8 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Xero",
   "mainBinaryName": "xero-desktop",
-  "version": "0.1.24",
-  "identifier": "dev.sn0w.xero",
+  "version": "0.1.25",
+  "identifier": "com.hyperpush.xero",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",

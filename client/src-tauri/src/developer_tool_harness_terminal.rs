@@ -34,7 +34,7 @@ use crate::{
     },
 };
 
-const APP_DATA_DIRECTORY_NAME: &str = "dev.sn0w.xero";
+const APP_DATA_DIRECTORY_NAME: &str = "com.hyperpush.xero";
 const FAKE_PROVIDER_ID: &str = "fake_provider";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
