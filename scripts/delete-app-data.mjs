@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createInterface } from 'node:readline/promises'
 
-const APP_DATA_DIRECTORY_NAME = 'dev.sn0w.xero'
+const APP_DATA_DIRECTORY_NAME = 'com.hyperpush.xero'
 const GLOBAL_DATABASE_FILE_NAME = 'xero.db'
 const PROJECTS_DIRECTORY = 'projects'
 const PROJECT_DATABASE_FILE_NAME = 'state.db'
@@ -131,7 +131,7 @@ Options:
   --project VALUE     Project id, repo path, or "current". Repeatable.
   --repo PATH         Repo path to derive the project id from. Repeatable.
   --all-projects     Apply project targets to every app-data project directory.
-  --app-data-dir PATH Override Xero app-data dir. Defaults to XERO_APP_DATA_DIR or the OS path.
+  --app-data-dir PATH Override Xero app-data dir. Defaults to XERO_APP_DATA_DIR or the production OS path.
   -i, --interactive Select targets and projects with prompts. Default when no targets are passed.
   --dry-run          Print what would be deleted.
   -y, --yes          Required for actual deletion.

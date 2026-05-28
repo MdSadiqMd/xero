@@ -52,7 +52,7 @@ mod tui;
 pub(crate) mod update_cli;
 mod usage_cli;
 
-const APP_DATA_DIRECTORY_NAME: &str = "dev.sn0w.xero";
+const APP_DATA_DIRECTORY_NAME: &str = "com.hyperpush.xero";
 const HEADLESS_DIRECTORY_NAME: &str = "headless";
 const AGENT_CORE_STATE_FILE: &str = "agent-core-runs.json";
 const CLI_CONFIG_FILE: &str = "cli-config.json";

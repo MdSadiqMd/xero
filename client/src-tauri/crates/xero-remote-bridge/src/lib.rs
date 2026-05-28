@@ -88,6 +88,12 @@ impl From<tungstenite::Error> for BridgeError {
     }
 }
 
+impl BridgeError {
+    fn is_unauthorized(&self) -> bool {
+        matches!(self, Self::HttpStatus { status: 401, .. })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeConfig {
@@ -834,16 +840,24 @@ where
     }
 
     pub fn status(&self) -> BridgeResult<BridgeStatus> {
-        let identity = self.identity_store.load()?;
-        let (devices, devices_error) = match identity.as_ref() {
+        let mut stored_identity = self.identity_store.load()?;
+        let (devices, devices_error) = match stored_identity.as_ref() {
             Some(identity) if identity.desktop_jwt.is_some() => match self.list_account_devices() {
                 Ok(devices) => (devices, None),
+                Err(error) if error.is_unauthorized() => {
+                    self.clear_identity()?;
+                    stored_identity = self.identity_store.load()?;
+                    (
+                        Vec::new(),
+                        Some("Cloud account sign-in expired. Sign in with GitHub again.".into()),
+                    )
+                }
                 Err(error) => (Vec::new(), Some(error.to_string())),
             },
             _ => (Vec::new(), None),
         };
-        let account = identity.as_ref().and_then(identity_account);
-        let signed_in = identity
+        let account = stored_identity.as_ref().and_then(identity_account);
+        let signed_in = stored_identity
             .as_ref()
             .and_then(|identity| identity.desktop_jwt.as_ref())
             .is_some();
@@ -929,19 +943,56 @@ where
                 .send()?;
             let _ignored = decode_http_allow_empty(response)?;
         }
-        self.identity_store.save(&DesktopIdentity::generate())?;
-        self.clear_account_devices_cache()?;
+        self.clear_identity()?;
         Ok(())
+    }
+
+    pub fn clear_identity(&self) -> BridgeResult<()> {
+        self.identity_store.save(&DesktopIdentity::generate())?;
+        self.clear_account_devices_cache()
     }
 
     pub fn refresh_relay_token(&self) -> BridgeResult<Option<String>> {
         let Some(mut identity) = self.identity_store.load()? else {
             return Ok(None);
         };
-        let Some(auth) = relay_token_refresh_auth(&identity) else {
+        let auth_candidates = relay_token_refresh_auth_candidates(
+            &identity,
+            OffsetDateTime::now_utc().unix_timestamp(),
+        );
+        if auth_candidates.is_empty() {
             return Ok(None);
         };
 
+        let mut unauthorized_error = None;
+        for auth in auth_candidates {
+            let value = match self.refresh_relay_token_with_auth(&auth) {
+                Ok(value) => value,
+                Err(error) if error.is_unauthorized() => {
+                    unauthorized_error = Some(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let relay_token = required_server_string(&value, "relayToken")?;
+            identity.desktop_jwt = Some(relay_token.clone());
+            identity.relay_token_expires_at =
+                value.get("relayTokenExpiresAt").and_then(JsonValue::as_i64);
+            self.identity_store.save(&identity)?;
+            self.clear_account_devices_cache()?;
+            return Ok(Some(relay_token));
+        }
+
+        if let Some(error) = unauthorized_error {
+            return Err(error);
+        }
+        Ok(None)
+    }
+
+    fn refresh_relay_token_with_auth(
+        &self,
+        auth: &RelayTokenRefreshAuth,
+    ) -> BridgeResult<JsonValue> {
         let request = self
             .client
             .post(self.config.endpoint("/api/relay/token/refresh")?);
@@ -952,13 +1003,7 @@ where
             }
         };
         let response = request.send()?;
-        let value = decode_http(response)?;
-        let relay_token = required_server_string(&value, "relayToken")?;
-        identity.desktop_jwt = Some(relay_token.clone());
-        identity.relay_token_expires_at =
-            value.get("relayTokenExpiresAt").and_then(JsonValue::as_i64);
-        self.identity_store.save(&identity)?;
-        Ok(Some(relay_token))
+        decode_http(response)
     }
 
     pub fn connect_desktop_channel(&self) -> BridgeResult<DesktopRelayConnection> {
@@ -980,6 +1025,22 @@ where
     }
 
     pub fn list_account_devices(&self) -> BridgeResult<Vec<AccountDevice>> {
+        self.ensure_fresh_relay_token()?;
+        match self.list_account_devices_once() {
+            Ok(devices) => Ok(devices),
+            Err(error) if error.is_unauthorized() => {
+                self.clear_account_devices_cache()?;
+                if self.refresh_relay_token()?.is_some() {
+                    self.list_account_devices_once()
+                } else {
+                    Err(error)
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn list_account_devices_once(&self) -> BridgeResult<Vec<AccountDevice>> {
         let Some(identity) = self.identity_store.load()? else {
             return Ok(Vec::new());
         };
@@ -1609,8 +1670,18 @@ fn relay_token_is_expired_for_identity(identity: &DesktopIdentity, now: i64) -> 
     matches!(identity.relay_token_expires_at, Some(expires_at) if expires_at <= now)
 }
 
+#[cfg(test)]
 fn relay_token_refresh_auth(identity: &DesktopIdentity) -> Option<RelayTokenRefreshAuth> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
+    relay_token_refresh_auth_candidates(identity, now)
+        .into_iter()
+        .next()
+}
+
+fn relay_token_refresh_auth_candidates(
+    identity: &DesktopIdentity,
+    now: i64,
+) -> Vec<RelayTokenRefreshAuth> {
     let bearer = identity
         .desktop_jwt
         .as_deref()
@@ -1623,9 +1694,9 @@ fn relay_token_refresh_auth(identity: &DesktopIdentity) -> Option<RelayTokenRefr
         .map(|session_id| RelayTokenRefreshAuth::SessionId(session_id.to_owned()));
 
     if relay_token_is_expired_for_identity(identity, now) {
-        session.or(bearer)
+        [session, bearer].into_iter().flatten().collect()
     } else {
-        bearer.or(session)
+        [bearer, session].into_iter().flatten().collect()
     }
 }
 
@@ -1658,8 +1729,11 @@ fn session_id_from_topic(topic: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
-    use std::time::Duration;
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        time::Duration,
+    };
     use tungstenite::Message;
 
     #[test]
@@ -1920,6 +1994,144 @@ mod tests {
             .cached_account_devices(&identity, std::time::Instant::now())
             .expect("cleared cache")
             .is_none());
+    }
+
+    #[test]
+    fn list_account_devices_refreshes_expired_token_before_request() {
+        let (relay_url, server) = serve_http_responses(vec![
+            (
+                200,
+                json!({
+                    "relayToken": "fresh-token",
+                    "relayTokenExpiresAt": OffsetDateTime::now_utc().unix_timestamp() + 1800,
+                })
+                .to_string(),
+            ),
+            (
+                200,
+                json!({
+                    "devices": [{
+                        "id": "desktop-1",
+                        "account_id": "account-1",
+                        "kind": "desktop",
+                        "name": "Xero Desktop",
+                        "user_agent": null,
+                        "last_seen": null,
+                        "created_at": "2026-05-28T00:00:00Z",
+                        "revoked_at": null
+                    }]
+                })
+                .to_string(),
+            ),
+        ]);
+        let temp = tempfile_path("expired-token-refresh");
+        let identity_store = FileIdentityStore::new(temp.join("identity.json"));
+        let mut identity = test_identity();
+        identity.relay_token_expires_at = Some(OffsetDateTime::now_utc().unix_timestamp() - 1);
+        identity_store.save(&identity).expect("identity");
+        let bridge = RemoteBridge::new(
+            BridgeConfig {
+                relay_url,
+                device_name: Some("Xero Test".into()),
+            },
+            identity_store.clone(),
+        );
+
+        let devices = bridge.list_account_devices().expect("devices");
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id, "desktop-1");
+        assert_eq!(
+            identity_store
+                .load()
+                .expect("load identity")
+                .and_then(|identity| identity.desktop_jwt),
+            Some("fresh-token".into())
+        );
+        let requests = server.join().expect("fake relay thread");
+        assert!(requests[0].starts_with("POST /api/relay/token/refresh "));
+        assert!(requests[0].contains("x-xero-github-session-id: session-1"));
+        assert!(requests[1].starts_with("GET /api/devices "));
+        assert!(requests[1].contains("authorization: Bearer fresh-token"));
+    }
+
+    #[test]
+    fn list_account_devices_retries_refresh_with_session_after_unauthorized_bearer() {
+        let (relay_url, server) = serve_http_responses(vec![
+            (401, json!({"error": "unauthorized"}).to_string()),
+            (401, json!({"error": "unauthorized"}).to_string()),
+            (
+                200,
+                json!({
+                    "relayToken": "fresh-token",
+                    "relayTokenExpiresAt": OffsetDateTime::now_utc().unix_timestamp() + 1800,
+                })
+                .to_string(),
+            ),
+            (200, json!({"devices": []}).to_string()),
+        ]);
+        let temp = tempfile_path("unauthorized-token-refresh");
+        let identity_store = FileIdentityStore::new(temp.join("identity.json"));
+        let mut identity = test_identity();
+        identity.desktop_jwt = Some("stale-token".into());
+        identity.relay_token_expires_at = Some(OffsetDateTime::now_utc().unix_timestamp() + 1800);
+        identity_store.save(&identity).expect("identity");
+        let bridge = RemoteBridge::new(
+            BridgeConfig {
+                relay_url,
+                device_name: Some("Xero Test".into()),
+            },
+            identity_store,
+        );
+
+        let devices = bridge.list_account_devices().expect("devices");
+
+        assert!(devices.is_empty());
+        let requests = server.join().expect("fake relay thread");
+        assert!(requests[0].starts_with("GET /api/devices "));
+        assert!(requests[0].contains("authorization: Bearer stale-token"));
+        assert!(requests[1].starts_with("POST /api/relay/token/refresh "));
+        assert!(requests[1].contains("authorization: Bearer stale-token"));
+        assert!(requests[2].starts_with("POST /api/relay/token/refresh "));
+        assert!(requests[2].contains("x-xero-github-session-id: session-1"));
+        assert!(requests[3].starts_with("GET /api/devices "));
+        assert!(requests[3].contains("authorization: Bearer fresh-token"));
+    }
+
+    #[test]
+    fn status_clears_identity_when_remote_auth_cannot_be_refreshed() {
+        let (relay_url, server) = serve_http_responses(vec![
+            (401, json!({"error": "unauthorized"}).to_string()),
+            (401, json!({"error": "unauthorized"}).to_string()),
+            (401, json!({"error": "unauthorized"}).to_string()),
+        ]);
+        let temp = tempfile_path("status-clears-unauthorized");
+        let identity_store = FileIdentityStore::new(temp.join("identity.json"));
+        let mut identity = test_identity();
+        identity.relay_token_expires_at = Some(OffsetDateTime::now_utc().unix_timestamp() + 1800);
+        identity_store.save(&identity).expect("identity");
+        let bridge = RemoteBridge::new(
+            BridgeConfig {
+                relay_url,
+                device_name: Some("Xero Test".into()),
+            },
+            identity_store.clone(),
+        );
+
+        let status = bridge.status().expect("status");
+
+        assert!(!status.signed_in);
+        assert_eq!(
+            status.devices_error.as_deref(),
+            Some("Cloud account sign-in expired. Sign in with GitHub again.")
+        );
+        assert!(identity_store
+            .load()
+            .expect("load identity")
+            .and_then(|identity| identity.desktop_jwt)
+            .is_none());
+        let requests = server.join().expect("fake relay thread");
+        assert_eq!(requests.len(), 3);
     }
 
     #[test]
@@ -2231,6 +2443,57 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    fn serve_http_responses(
+        responses: Vec<(u16, String)>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake relay");
+        let relay_url = format!(
+            "http://{}",
+            listener.local_addr().expect("listener address")
+        );
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().expect("accept fake relay request");
+                requests.push(read_http_request(&mut stream));
+                write_http_response(&mut stream, status, &body);
+            }
+            requests
+        });
+        (relay_url, handle)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        loop {
+            let read = stream.read(&mut buffer).expect("read fake relay request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8(request).expect("request utf8")
+    }
+
+    fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) {
+        let reason = match status {
+            200 => "OK",
+            401 => "Unauthorized",
+            _ => "Error",
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write fake relay response");
     }
 
     fn test_identity() -> DesktopIdentity {

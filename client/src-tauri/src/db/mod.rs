@@ -23,7 +23,8 @@ pub mod project_store;
 
 const STATE_DATABASE_FILE: &str = "state.db";
 const PROJECTS_DIRECTORY: &str = "projects";
-const APP_DATA_DIRECTORY_NAME: &str = "dev.sn0w.xero";
+const APP_DATA_DIR_ENV: &str = "XERO_APP_DATA_DIR";
+const DEFAULT_APP_DATA_DIRECTORY_NAME: &str = "com.hyperpush.xero";
 
 #[derive(Debug, Clone, Default)]
 struct ProjectDatabasePathConfig {
@@ -625,11 +626,20 @@ fn default_database_path_for_project(project_id: &str) -> PathBuf {
 }
 
 fn default_project_app_data_dir(project_id: &str) -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(APP_DATA_DIRECTORY_NAME)
+    default_app_data_dir()
         .join(PROJECTS_DIRECTORY)
         .join(project_id)
+}
+
+fn default_app_data_dir() -> PathBuf {
+    std::env::var_os(APP_DATA_DIR_ENV)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(DEFAULT_APP_DATA_DIRECTORY_NAME)
+        })
 }
 
 fn database_path_for_registered_repo(repo_root: &Path) -> Option<PathBuf> {
@@ -740,7 +750,7 @@ fn stable_project_id_for_repo_root(repo_root: &Path) -> String {
 
 fn fallback_database_path_for_unconfigured_import(project_id: &str) -> PathBuf {
     std::env::temp_dir()
-        .join(APP_DATA_DIRECTORY_NAME)
+        .join(DEFAULT_APP_DATA_DIRECTORY_NAME)
         .join(PROJECTS_DIRECTORY)
         .join(project_id)
         .join(STATE_DATABASE_FILE)
