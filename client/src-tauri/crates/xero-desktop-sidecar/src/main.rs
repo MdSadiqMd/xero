@@ -2342,11 +2342,93 @@ fn sidecar_control(
                 false,
             )
         })?;
+    validate_control_request(operation, &request)?;
     platform_control(operation, request)?;
     Ok(json!({
         "status": "executed",
         "message": format!("Desktop sidecar executed `{operation:?}`."),
     }))
+}
+
+fn validate_control_request(
+    operation: DesktopSidecarOperation,
+    request: &DesktopSidecarControlRequest,
+) -> Result<(), DesktopSidecarErrorBody> {
+    match operation {
+        DesktopSidecarOperation::MouseMove
+        | DesktopSidecarOperation::MouseClick
+        | DesktopSidecarOperation::MouseDoubleClick
+        | DesktopSidecarOperation::MouseRightClick => required_point(request).map(|_| ()),
+        DesktopSidecarOperation::MouseDrag => {
+            required_point(request)?;
+            required_target_point(request)?;
+            Ok(())
+        }
+        DesktopSidecarOperation::Scroll => {
+            let delta_x = request.delta_x.unwrap_or(0);
+            let delta_y = request.delta_y.unwrap_or(0);
+            if delta_x == 0 && delta_y == 0 {
+                return Err(schema_error("deltaX/deltaY"));
+            }
+            Ok(())
+        }
+        DesktopSidecarOperation::KeyPress => request
+            .key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .map(|_| ())
+            .ok_or_else(|| schema_error("key")),
+        DesktopSidecarOperation::Hotkey => {
+            if request.keys.is_empty() {
+                return Err(schema_error("keys"));
+            }
+            Ok(())
+        }
+        DesktopSidecarOperation::TypeText | DesktopSidecarOperation::PasteText => request
+            .text
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .map(|_| ())
+            .ok_or_else(|| schema_error("text")),
+        DesktopSidecarOperation::AxPress | DesktopSidecarOperation::AxFocus => {
+            validate_accessibility_control_target(request)
+        }
+        DesktopSidecarOperation::AxSetValue => {
+            validate_accessibility_control_target(request)?;
+            request
+                .value
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|_| ())
+                .ok_or_else(|| schema_error("value"))
+        }
+        DesktopSidecarOperation::MenuSelect => {
+            if request.menu_path.is_empty() {
+                return Err(schema_error("menuPath"));
+            }
+            Ok(())
+        }
+        DesktopSidecarOperation::CancelCurrentAction => Ok(()),
+        _ => Ok(()),
+    }
+}
+
+fn validate_accessibility_control_target(
+    request: &DesktopSidecarControlRequest,
+) -> Result<(), DesktopSidecarErrorBody> {
+    if let (Some(x), Some(y)) = (request.x, request.y) {
+        if x >= 0 && y >= 0 {
+            return Ok(());
+        }
+    }
+    if request
+        .element_id
+        .as_deref()
+        .is_some_and(|element_id| !element_id.trim().is_empty())
+    {
+        return Ok(());
+    }
+    Err(schema_error("elementId or x/y"))
 }
 
 #[cfg(target_os = "macos")]
