@@ -95,7 +95,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: client/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: client
@@ -429,7 +429,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: client/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Linux Tauri dependencies
         if: matrix.platform == 'ubuntu-24.04'
