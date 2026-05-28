@@ -108,6 +108,8 @@ pub struct BridgeStatusResponseDto {
     pub signed_in: bool,
     pub account: Option<BridgeAccount>,
     pub devices: Vec<AccountDevice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,6 +149,7 @@ pub fn bridge_status<R: Runtime + 'static>(
         signed_in: status.signed_in,
         account: status.account,
         devices: status.devices,
+        devices_error: status.devices_error,
     })
 }
 

@@ -98,6 +98,7 @@ pub struct BridgeConfig {
 
 impl BridgeConfig {
     pub const LOCAL_RELAY_URL: &'static str = "http://127.0.0.1:4000";
+    pub const PRODUCTION_RELAY_URL: &'static str = "https://api.xeroshell.com";
 
     pub fn local_default() -> Self {
         Self {
@@ -147,17 +148,52 @@ impl BridgeConfig {
 fn configured_relay_url() -> String {
     relay_url_from_env_values(
         std::env::var_os("XERO_REMOTE_RELAY_URL"),
+        std::env::var_os("XERO_SERVER_URL"),
         std::env::var_os("VITE_XERO_SERVER_URL"),
+        option_env!("XERO_REMOTE_RELAY_URL"),
+        option_env!("XERO_SERVER_URL"),
+        option_env!("VITE_XERO_SERVER_URL"),
+        default_relay_url(),
     )
 }
 
-fn relay_url_from_env_values(remote_url: Option<OsString>, server_url: Option<OsString>) -> String {
-    remote_url
-        .or(server_url)
+fn default_relay_url() -> &'static str {
+    if cfg!(debug_assertions) {
+        BridgeConfig::LOCAL_RELAY_URL
+    } else {
+        BridgeConfig::PRODUCTION_RELAY_URL
+    }
+}
+
+fn relay_url_from_env_values(
+    remote_url: Option<OsString>,
+    server_url: Option<OsString>,
+    vite_server_url: Option<OsString>,
+    build_remote_url: Option<&'static str>,
+    build_server_url: Option<&'static str>,
+    build_vite_server_url: Option<&'static str>,
+    default_url: &'static str,
+) -> String {
+    [
+        os_string_to_string(remote_url),
+        os_string_to_string(server_url),
+        os_string_to_string(vite_server_url),
+        build_remote_url.map(ToOwned::to_owned),
+        build_server_url.map(ToOwned::to_owned),
+        build_vite_server_url.map(ToOwned::to_owned),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|value| value.trim().trim_end_matches('/').to_owned())
+    .find(|value| !value.is_empty())
+    .unwrap_or_else(|| default_url.to_owned())
+}
+
+fn os_string_to_string(value: Option<OsString>) -> Option<String> {
+    value
         .and_then(|value| value.into_string().ok())
         .map(|value| value.trim().trim_end_matches('/').to_owned())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| BridgeConfig::LOCAL_RELAY_URL.to_owned())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -281,6 +317,8 @@ pub struct BridgeStatus {
     pub signed_in: bool,
     pub account: Option<BridgeAccount>,
     pub devices: Vec<AccountDevice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devices_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -797,9 +835,12 @@ where
 
     pub fn status(&self) -> BridgeResult<BridgeStatus> {
         let identity = self.identity_store.load()?;
-        let devices = match identity.as_ref() {
-            Some(identity) if identity.desktop_jwt.is_some() => self.list_account_devices()?,
-            _ => Vec::new(),
+        let (devices, devices_error) = match identity.as_ref() {
+            Some(identity) if identity.desktop_jwt.is_some() => match self.list_account_devices() {
+                Ok(devices) => (devices, None),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            },
+            _ => (Vec::new(), None),
         };
         let account = identity.as_ref().and_then(identity_account);
         let signed_in = identity
@@ -813,6 +854,7 @@ where
             signed_in,
             account,
             devices,
+            devices_error,
         })
     }
 
@@ -1641,7 +1683,12 @@ mod tests {
     fn relay_url_prefers_remote_env_and_trims_trailing_slash() {
         let url = relay_url_from_env_values(
             Some(OsString::from("https://relay.example.com/")),
+            None,
             Some(OsString::from("https://server.example.com")),
+            Some("https://build-relay.example.com"),
+            None,
+            None,
+            BridgeConfig::PRODUCTION_RELAY_URL,
         );
 
         assert_eq!(url, "https://relay.example.com");
@@ -1652,14 +1699,66 @@ mod tests {
         let url = relay_url_from_env_values(
             None,
             Some(OsString::from("https://desktop-server.example.com/")),
+            Some(OsString::from("https://vite-server.example.com/")),
+            None,
+            None,
+            None,
+            BridgeConfig::PRODUCTION_RELAY_URL,
         );
 
         assert_eq!(url, "https://desktop-server.example.com");
     }
 
     #[test]
-    fn relay_url_falls_back_to_local_default() {
-        let url = relay_url_from_env_values(None, None);
+    fn relay_url_accepts_vite_server_env_fallback() {
+        let url = relay_url_from_env_values(
+            None,
+            None,
+            Some(OsString::from("https://vite-server.example.com/")),
+            None,
+            None,
+            None,
+            BridgeConfig::PRODUCTION_RELAY_URL,
+        );
+
+        assert_eq!(url, "https://vite-server.example.com");
+    }
+
+    #[test]
+    fn relay_url_accepts_build_time_fallback() {
+        let url = relay_url_from_env_values(
+            None,
+            None,
+            None,
+            Some("https://build-relay.example.com/"),
+            Some("https://build-server.example.com"),
+            Some("https://build-vite.example.com"),
+            BridgeConfig::PRODUCTION_RELAY_URL,
+        );
+
+        assert_eq!(url, "https://build-relay.example.com");
+    }
+
+    #[test]
+    fn relay_url_falls_back_to_supplied_default() {
+        let url = relay_url_from_env_values(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BridgeConfig::PRODUCTION_RELAY_URL,
+        );
+
+        assert_eq!(url, BridgeConfig::PRODUCTION_RELAY_URL);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn relay_url_default_is_local_for_debug_builds() {
+        let url =
+            relay_url_from_env_values(None, None, None, None, None, None, default_relay_url());
 
         assert_eq!(url, BridgeConfig::LOCAL_RELAY_URL);
     }
@@ -1821,6 +1920,40 @@ mod tests {
             .cached_account_devices(&identity, std::time::Instant::now())
             .expect("cleared cache")
             .is_none());
+    }
+
+    #[test]
+    fn status_preserves_identity_when_account_devices_are_unreachable() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind unused relay");
+        let relay_url = format!(
+            "http://{}",
+            listener.local_addr().expect("listener address")
+        );
+        drop(listener);
+
+        let temp = tempfile_path("status-device-error");
+        let identity_store = FileIdentityStore::new(temp.join("identity.json"));
+        identity_store.save(&test_identity()).expect("identity");
+        let bridge = RemoteBridge::new(
+            BridgeConfig {
+                relay_url,
+                device_name: Some("Xero Test".into()),
+            },
+            identity_store,
+        );
+
+        let status = bridge.status().expect("status remains available");
+
+        assert!(status.signed_in);
+        assert_eq!(
+            status.account.and_then(|account| account.github_login),
+            Some("octo".into())
+        );
+        assert!(status.devices.is_empty());
+        assert!(status
+            .devices_error
+            .as_deref()
+            .is_some_and(|error| error.contains("/api/devices")));
     }
 
     #[test]

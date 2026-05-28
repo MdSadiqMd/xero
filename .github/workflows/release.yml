@@ -21,7 +21,7 @@ env:
 jobs:
   create-release:
     name: Create Release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -117,7 +117,7 @@ jobs:
   deploy-server:
     name: Deploy Server
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,7 +134,7 @@ jobs:
   deploy-cloud:
     name: Deploy Cloud
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: cloud
@@ -183,7 +183,7 @@ jobs:
           - platform: macos-15-intel
             target: x86_64-apple-darwin
             artifact_suffix: macos-x86_64
-          - platform: ubuntu-24.04
+          - platform: blacksmith-4vcpu-ubuntu-2404
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64
           - platform: windows-latest
@@ -195,7 +195,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Linux Tauri dependencies
-        if: matrix.platform == 'ubuntu-24.04'
+        if: matrix.artifact_suffix == 'linux-x86_64'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -230,6 +230,7 @@ jobs:
         env:
           # The TUI artifact packages only the terminal binary; desktop sidecars are not present in checkout.
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'
+          XERO_REMOTE_RELAY_URL: ${{ env.SERVER_URL }}
           XERO_SKIP_COOKIE_IMPORTER: "1"
           XERO_SKIP_DICTATION_SHIM: "1"
           XERO_SKIP_SIDECAR_FETCH: "1"
@@ -318,7 +319,7 @@ jobs:
     needs:
       - create-release
       - build-tui
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -519,6 +520,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          XERO_REMOTE_RELAY_URL: ${{ env.SERVER_URL }}
+          VITE_XERO_SERVER_URL: ${{ env.SERVER_URL }}
           XERO_SKIP_IDB_COMPANION_FETCH: ${{ contains(matrix.platform, 'macos') && '1' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -788,7 +791,7 @@ jobs:
       - deploy-cloud
       - deploy-landing
       - build-tauri
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Download latest.json fragments
         uses: actions/download-artifact@v4
