@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(not(target_os = "windows"), test))]
 use std::fmt;
 #[cfg(all(target_os = "macos", xero_dictation_native_shim))]
 use std::{
@@ -948,7 +948,10 @@ struct NativeSessionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(
-    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    any(
+        target_os = "windows",
+        not(any(test, all(target_os = "macos", xero_dictation_native_shim)))
+    ),
     allow(dead_code)
 )]
 struct NativeOperationResponse {
@@ -997,7 +1000,10 @@ impl NativeStartError {
 }
 
 #[cfg_attr(
-    not(any(test, all(target_os = "macos", xero_dictation_native_shim))),
+    any(
+        target_os = "windows",
+        not(any(test, all(target_os = "macos", xero_dictation_native_shim)))
+    ),
     allow(dead_code)
 )]
 fn native_operation_result(
@@ -1401,10 +1407,10 @@ mod native_shim {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(test)))]
 mod windows_native;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(test)))]
 mod native_shim {
     pub(super) use super::windows_native::Session;
 
@@ -1414,7 +1420,7 @@ mod native_shim {
 }
 
 #[cfg(not(any(
-    target_os = "windows",
+    all(target_os = "windows", not(test)),
     all(target_os = "macos", xero_dictation_native_shim)
 )))]
 mod native_shim {

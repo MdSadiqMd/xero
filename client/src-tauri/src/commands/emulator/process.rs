@@ -170,6 +170,7 @@ mod tests {
             Err(_) => return, // sleep not present on this platform
         };
 
+        #[cfg(unix)]
         let pid = child.id();
         let guard = ChildGuard::new("sleep", child);
         drop(guard);

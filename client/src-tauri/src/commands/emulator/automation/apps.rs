@@ -213,6 +213,7 @@ fn strip_plist_value(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::*;
 
     #[test]

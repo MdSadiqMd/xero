@@ -6458,6 +6458,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     fn output_contains(output: &AutonomousProcessManagerOutput, needle: &str) -> bool {
         output
             .chunks
@@ -6466,6 +6467,7 @@ mod tests {
             .any(|text| text.contains(needle))
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     fn kill_process(runtime: &AutonomousToolRuntime, process_id: String) {
         let mut kill_request = base_request(AutonomousProcessManagerAction::Kill);
         kill_request.process_id = Some(process_id);

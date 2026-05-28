@@ -9671,6 +9671,7 @@ mod tests {
         project_id: String,
         agent_session_id: String,
         run_id: String,
+        #[cfg_attr(target_os = "windows", allow(dead_code))]
         app_data_dir: PathBuf,
     }
 

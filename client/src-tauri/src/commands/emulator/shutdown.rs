@@ -124,6 +124,7 @@ fn is_emulator_relevant(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[test]
