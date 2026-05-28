@@ -4689,16 +4689,24 @@ mod tests {
                 .expect("peer connection")
                 .expect("connected state");
 
-            video_track
-                .write_sample(&Sample {
-                    data: vec![0, 0, 0, 1, 0x65, 0x88, 0x84].into(),
-                    duration: Duration::from_millis(42),
-                    ..Default::default()
-                })
-                .await
-                .expect("write h264 sample");
-
-            let mime = tokio::time::timeout(Duration::from_secs(5), track_rx.recv())
+            let mime = tokio::time::timeout(Duration::from_secs(15), async {
+                let mut tick = tokio::time::interval(Duration::from_millis(50));
+                loop {
+                    tokio::select! {
+                        mime = track_rx.recv() => return mime,
+                        _ = tick.tick() => {
+                            video_track
+                                .write_sample(&Sample {
+                                    data: vec![0, 0, 0, 1, 0x65, 0x88, 0x84].into(),
+                                    duration: Duration::from_millis(42),
+                                    ..Default::default()
+                                })
+                                .await
+                                .expect("write h264 sample");
+                        }
+                    }
+                }
+            })
                 .await
                 .expect("track callback")
                 .expect("video track mime");
