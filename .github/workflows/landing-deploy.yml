@@ -16,7 +16,7 @@ concurrency:
 jobs:
   landing:
     name: Deploy landing to Fly.io
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: landing
@@ -103,7 +103,7 @@ jobs:
 
   cloud:
     name: Deploy cloud to Fly.io
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: cloud
@@ -139,7 +139,7 @@ jobs:
 
   server:
     name: Deploy server to Fly.io
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: server
