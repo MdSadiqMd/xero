@@ -98,7 +98,7 @@ import {
 } from '@/components/xero/agent-runtime'
 import type { SpeechDictationAdapter } from '@/components/xero/agent-runtime/use-speech-dictation'
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
-import type { DictationEventDto, DictationStatusDto } from '@/src/lib/xero-model/dictation'
+import type { DictationEngineDto, DictationEventDto, DictationStatusDto } from '@/src/lib/xero-model/dictation'
 import type {
   AgentDefinitionSummaryDto,
   ProjectDetailView,
@@ -459,6 +459,12 @@ function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): Dicta
       runtimeSupported: true,
       reason: null,
     },
+    windowsSdk: {
+      available: false,
+      compiled: false,
+      runtimeSupported: false,
+      reason: null,
+    },
     modernAssets: {
       status: 'unavailable',
       locale: null,
@@ -472,15 +478,17 @@ function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): Dicta
 }
 
 function createDictationAdapter(options: {
+  engine?: DictationEngineDto
   status?: DictationStatusDto
   stop?: () => Promise<void>
   cancel?: () => Promise<void>
 } = {}) {
   let eventHandler: ((event: DictationEventDto) => void) | null = null
+  const engine = options.engine ?? 'legacy'
   const session = {
     response: {
       sessionId: 'dictation-session-1',
-      engine: 'legacy' as const,
+      engine,
       locale: 'en_US',
     },
     unsubscribe: vi.fn(),
@@ -495,7 +503,7 @@ function createDictationAdapter(options: {
       handler({
         kind: 'started',
         sessionId: session.response.sessionId,
-        engine: 'legacy',
+        engine,
         locale: 'en_US',
       })
       return session
@@ -3979,6 +3987,49 @@ describe('AgentRuntime current UI', () => {
       sequence: 3,
     })
     expect(input).toHaveValue('Review the logs carefully before sending')
+  })
+
+  it('starts native Windows SDK dictation from the shared composer control', async () => {
+    const dictation = createDictationAdapter({
+      engine: 'windows_sdk',
+      status: makeDictationStatus({
+        platform: 'windows',
+        modern: {
+          available: false,
+          compiled: false,
+          runtimeSupported: false,
+          reason: 'macos_modern_unavailable_on_windows',
+        },
+        legacy: {
+          available: false,
+          compiled: false,
+          runtimeSupported: false,
+          reason: 'macos_legacy_unavailable_on_windows',
+        },
+        windowsSdk: {
+          available: true,
+          compiled: true,
+          runtimeSupported: true,
+          reason: null,
+        },
+      }),
+    })
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start dictation' }))
+
+    await waitFor(() => expect(dictation.adapter.speechDictationStart).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: 'Stop dictation' })).toBeVisible()
   })
 
   it('appends new dictated partials after manual edits during dictation', async () => {
