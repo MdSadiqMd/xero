@@ -21,7 +21,7 @@ env:
 jobs:
   create-release:
     name: Create Release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -117,7 +117,7 @@ jobs:
   deploy-server:
     name: Deploy Server
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,7 +134,7 @@ jobs:
   deploy-cloud:
     name: Deploy Cloud
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: cloud
@@ -184,7 +184,7 @@ jobs:
             target: x86_64-apple-darwin
             artifact_suffix: macos-x86_64
           - platform: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: blacksmith-4vcpu-ubuntu-2404
             artifact_suffix: linux-x86_64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
@@ -318,7 +318,7 @@ jobs:
     needs:
       - create-release
       - build-tui
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -788,7 +788,7 @@ jobs:
       - deploy-cloud
       - deploy-landing
       - build-tauri
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Download latest.json fragments
         uses: actions/download-artifact@v4
