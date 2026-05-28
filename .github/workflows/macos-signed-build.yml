@@ -88,6 +88,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          XERO_REMOTE_RELAY_URL: ${{ env.SERVER_URL }}
           XERO_SKIP_IDB_COMPANION_FETCH: "1"
           VITE_XERO_SERVER_URL: ${{ env.SERVER_URL }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

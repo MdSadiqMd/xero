@@ -24,6 +24,7 @@ interface BridgeStatusResponse {
   signedIn: boolean
   account?: BridgeAccountInfo | null
   devices?: AccountDevice[]
+  devicesError?: string | null
 }
 
 export function CloudAccountSection() {
@@ -46,6 +47,7 @@ export function CloudAccountSection() {
       setSignedIn(Boolean(response.signedIn))
       setAccount(response.account ?? null)
       setDevices((response.devices ?? []).filter((device) => !device.revokedAt))
+      setError(response.devicesError?.trim() || null)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
