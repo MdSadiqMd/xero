@@ -95,6 +95,55 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		);
 	});
 
+	it("retries the desktop stream request when connecting stalls before media arrives", () => {
+		vi.useFakeTimers();
+		try {
+			const push = vi.fn();
+			const channel = {
+				on: vi.fn(() => "frame-ref"),
+				off: vi.fn(),
+				push,
+			} as unknown as Channel;
+
+			render(
+				<ComputerUseDesktopViewport
+					channel={channel}
+					computerId="desktop-1"
+					deviceId="web-1"
+					iceServers={[]}
+					isAgentWorking={false}
+					isOnline
+					onPromptSubmit={vi.fn()}
+					previewUrl={null}
+					presentation={{
+						isMobile: false,
+						override: "desktop",
+						rotateDesktop: false,
+					}}
+					sessionId="session-1"
+					streamRunId="run-1"
+					streamToken="stream-token-1"
+				/>,
+			);
+
+			const desktop = screen.getByLabelText("Desktop");
+			const toolbar = within(desktop).getByRole("toolbar", {
+				name: "Desktop stream controls",
+			});
+			fireEvent.click(within(toolbar).getByRole("button", { name: /start/i }));
+
+			expect(streamRequestCalls(push)).toHaveLength(1);
+
+			act(() => {
+				vi.advanceTimersByTime(7_000);
+			});
+
+			expect(streamRequestCalls(push)).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("shows a click ripple where manual input lands on the streamed desktop", async () => {
 		const { desktop, image, push } = await renderManualDesktopViewport();
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
@@ -474,6 +523,18 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
 		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
 		push.mockClear();
+		const promptToolbar = within(desktop).getByRole("toolbar", {
+			name: "Desktop prompt controls",
+		});
+		expect(promptToolbar.getAttribute("style")).toContain("bottom:");
+		expect(
+			within(toolbar).queryByRole("form", { name: "Computer Use prompt" }),
+		).toBeNull();
+		expect(
+			within(promptToolbar).getByRole("form", {
+				name: "Computer Use prompt",
+			}),
+		).toBeTruthy();
 
 		fireEvent.pointerDown(desktop, {
 			button: 0,
@@ -872,6 +933,13 @@ function relayFrame(payload: unknown) {
 				.replace(/=+$/, ""),
 		},
 	};
+}
+
+function streamRequestCalls(push: ReturnType<typeof vi.fn>) {
+	return push.mock.calls.filter(
+		([, frame]) =>
+			(frame as { kind?: string }).kind === "computer_use_stream_request",
+	);
 }
 
 function domRect(left: number, top: number, width: number, height: number) {

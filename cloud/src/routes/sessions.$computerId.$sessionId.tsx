@@ -967,7 +967,10 @@ const DESKTOP_STREAM_DATA_CHANNEL_LABEL = "xero-desktop-stream";
 const DESKTOP_STREAM_MAX_BUFFERED_FRAMES = 24;
 const DESKTOP_CONTROL_BAR_MARGIN = 12;
 const DESKTOP_CONTROL_BAR_DEFAULT_TOP = 24;
+const DESKTOP_PROMPT_BAR_DEFAULT_BOTTOM = 16;
 const DESKTOP_KEYFRAME_REFRESH_MS = 10_000;
+const DESKTOP_STREAM_CONNECTING_RETRY_MS = 7_000;
+const DESKTOP_STREAM_STALE_FRAME_MS = 8_000;
 const DESKTOP_STREAM_STATUS_INTERVAL_MS = 5_000;
 const DESKTOP_STREAM_FALLBACK_RECOVERY_COOLDOWN_MS = 2_500;
 const DESKTOP_ADAPTIVE_QUALITY_DOWNGRADE_COOLDOWN_MS = 6_000;
@@ -1857,7 +1860,9 @@ export function ComputerUseDesktopViewport({
 	const lastPointerMoveAtRef = useRef(0);
 	const desktopSurfaceRef = useRef<HTMLElement | null>(null);
 	const controlBarRef = useRef<HTMLDivElement | null>(null);
+	const promptBarRef = useRef<HTMLDivElement | null>(null);
 	const controlBarDragRef = useRef<DesktopControlBarDrag | null>(null);
+	const promptBarDragRef = useRef<DesktopControlBarDrag | null>(null);
 	const clickRippleTimeoutsRef = useRef<Set<number>>(new Set());
 	const mobileViewportTransformRef = useRef<DesktopMobileViewportTransform>(
 		DEFAULT_DESKTOP_MOBILE_VIEWPORT_TRANSFORM,
@@ -1885,8 +1890,13 @@ export function ComputerUseDesktopViewport({
 	const adaptiveQualityLastChangedAtRef = useRef(0);
 	const liveVideoSeenRef = useRef(false);
 	const fallbackRecoveryLastAttemptAtRef = useRef(0);
+	const lastDesktopStreamRequestAtRef = useRef(0);
+	const lastDesktopVideoFrameAtRef = useRef(0);
+	const videoFrameCallbackIdRef = useRef<number | null>(null);
 	const streamStopRequestedRef = useRef(false);
 	const [controlBarPosition, setControlBarPosition] =
+		useState<DesktopControlBarPosition | null>(null);
+	const [promptBarPosition, setPromptBarPosition] =
 		useState<DesktopControlBarPosition | null>(null);
 	const [desktopSurfaceSize, setDesktopSurfaceSize] =
 		useState<DesktopSurfaceSize | null>(null);
@@ -1934,6 +1944,9 @@ export function ComputerUseDesktopViewport({
 		setControlBarPosition((position) =>
 			presentationModeKey && position ? null : position,
 		);
+		setPromptBarPosition((position) =>
+			presentationModeKey && position ? null : position,
+		);
 	}, [presentationModeKey]);
 
 	useEffect(() => {
@@ -1958,6 +1971,19 @@ export function ComputerUseDesktopViewport({
 			}
 			closeDesktopPeerConnection(peerConnectionRef.current);
 			peerConnectionRef.current = null;
+			const pendingVideo = videoRef.current as
+				| (HTMLVideoElement & {
+						cancelVideoFrameCallback?: (handle: number) => void;
+				  })
+				| null;
+			if (
+				pendingVideo &&
+				videoFrameCallbackIdRef.current !== null &&
+				typeof pendingVideo.cancelVideoFrameCallback === "function"
+			) {
+				pendingVideo.cancelVideoFrameCallback(videoFrameCallbackIdRef.current);
+			}
+			videoFrameCallbackIdRef.current = null;
 			pendingMediaStreamRef.current = null;
 			dataChannelFramesRef.current.clear();
 			if (videoRef.current) videoRef.current.srcObject = null;
@@ -2060,6 +2086,19 @@ export function ComputerUseDesktopViewport({
 		} = {}) => {
 			closeDesktopPeerConnection(peerConnectionRef.current);
 			peerConnectionRef.current = null;
+			const pendingVideo = videoRef.current as
+				| (HTMLVideoElement & {
+						cancelVideoFrameCallback?: (handle: number) => void;
+				  })
+				| null;
+			if (
+				pendingVideo &&
+				videoFrameCallbackIdRef.current !== null &&
+				typeof pendingVideo.cancelVideoFrameCallback === "function"
+			) {
+				pendingVideo.cancelVideoFrameCallback(videoFrameCallbackIdRef.current);
+			}
+			videoFrameCallbackIdRef.current = null;
 			pendingMediaStreamRef.current = null;
 			dataChannelFramesRef.current.clear();
 			if (videoRef.current) videoRef.current.srcObject = null;
@@ -2133,81 +2172,97 @@ export function ComputerUseDesktopViewport({
 		[showDesktopDataChannelFrame],
 	);
 
-	const ensurePeerConnection = useCallback(() => {
-		if (!channel || !deviceId) return null;
-		if (peerConnectionRef.current) return peerConnectionRef.current;
-		if (typeof RTCPeerConnection === "undefined") {
-			setState(fallbackPreviewUrl ? "degraded" : "waiting");
-			return null;
-		}
-		const peerConnection = new RTCPeerConnection({ iceServers });
-		peerConnection.ondatachannel = (event) => {
-			if (event.channel.label !== DESKTOP_STREAM_DATA_CHANNEL_LABEL) {
-				event.channel.close();
-				return;
+	const ensurePeerConnection = useCallback(
+		(options: { fresh?: boolean } = {}) => {
+			if (!channel || !deviceId) return null;
+			if (options.fresh && peerConnectionRef.current) {
+				closeDesktopPeerConnection(peerConnectionRef.current);
+				peerConnectionRef.current = null;
+				pendingMediaStreamRef.current = null;
+				dataChannelFramesRef.current.clear();
+				if (videoRef.current) videoRef.current.srcObject = null;
+				setHasLiveVideo(false);
 			}
-			event.channel.onmessage = handleDesktopDataChannelMessage;
-			event.channel.onopen = () => {
-				setState((current) => (current === "manual" ? current : "degraded"));
+			if (peerConnectionRef.current) return peerConnectionRef.current;
+			if (typeof RTCPeerConnection === "undefined") {
+				setState(fallbackPreviewUrl ? "degraded" : "waiting");
+				return null;
+			}
+			const peerConnection = new RTCPeerConnection({ iceServers });
+			peerConnection.ondatachannel = (event) => {
+				if (event.channel.label !== DESKTOP_STREAM_DATA_CHANNEL_LABEL) {
+					event.channel.close();
+					return;
+				}
+				event.channel.onmessage = handleDesktopDataChannelMessage;
+				event.channel.onopen = () => {
+					setState((current) => (current === "manual" ? current : "degraded"));
+				};
+				event.channel.onclose = () => {
+					setState((current) =>
+						current === "manual"
+							? current
+							: fallbackPreviewUrl
+								? "degraded"
+								: "paused",
+					);
+				};
 			};
-			event.channel.onclose = () => {
+			peerConnection.ontrack = (event) => {
+				const [mediaStream] = event.streams;
+				if (!mediaStream) return;
+				pendingMediaStreamRef.current = mediaStream;
+				if (videoRef.current) videoRef.current.srcObject = mediaStream;
+				liveVideoSeenRef.current = true;
+				lastDesktopVideoFrameAtRef.current = Date.now();
+				fallbackRecoveryLastAttemptAtRef.current = 0;
+				clearFallbackPreview();
+				setHasLiveVideo(true);
 				setState((current) =>
-					current === "manual"
-						? current
-						: fallbackPreviewUrl
-							? "degraded"
-							: "paused",
+					current === "manual" || manualControlIdRef.current
+						? "manual"
+						: "live",
 				);
 			};
-		};
-		peerConnection.ontrack = (event) => {
-			const [mediaStream] = event.streams;
-			if (!mediaStream) return;
-			pendingMediaStreamRef.current = mediaStream;
-			if (videoRef.current) videoRef.current.srcObject = mediaStream;
-			liveVideoSeenRef.current = true;
-			fallbackRecoveryLastAttemptAtRef.current = 0;
-			clearFallbackPreview();
-			setHasLiveVideo(true);
-			setState("live");
-		};
-		peerConnection.onicecandidate = (event) => {
-			if (!event.candidate || !channel || !deviceId) return;
-			sendComputerUseStreamIceCandidate(channel, {
-				computerId,
-				sessionId,
-				deviceId,
-				runId: streamRunId,
-				streamId: streamIdRef.current,
-				streamToken,
-				candidate: event.candidate.toJSON(),
-			});
-		};
-		peerConnection.onconnectionstatechange = () => {
-			if (
-				peerConnection.connectionState === "failed" ||
-				peerConnection.connectionState === "disconnected"
-			) {
-				setState(fallbackPreviewUrl ? "degraded" : "connecting");
-			}
-			if (peerConnection.connectionState === "closed") {
-				setState(fallbackPreviewUrl ? "degraded" : "paused");
-			}
-		};
-		peerConnectionRef.current = peerConnection;
-		return peerConnection;
-	}, [
-		channel,
-		clearFallbackPreview,
-		computerId,
-		deviceId,
-		fallbackPreviewUrl,
-		handleDesktopDataChannelMessage,
-		iceServers,
-		sessionId,
-		streamRunId,
-		streamToken,
-	]);
+			peerConnection.onicecandidate = (event) => {
+				if (!event.candidate || !channel || !deviceId) return;
+				sendComputerUseStreamIceCandidate(channel, {
+					computerId,
+					sessionId,
+					deviceId,
+					runId: streamRunId,
+					streamId: streamIdRef.current,
+					streamToken,
+					candidate: event.candidate.toJSON(),
+				});
+			};
+			peerConnection.onconnectionstatechange = () => {
+				if (
+					peerConnection.connectionState === "failed" ||
+					peerConnection.connectionState === "disconnected"
+				) {
+					setState(fallbackPreviewUrl ? "degraded" : "connecting");
+				}
+				if (peerConnection.connectionState === "closed") {
+					setState(fallbackPreviewUrl ? "degraded" : "paused");
+				}
+			};
+			peerConnectionRef.current = peerConnection;
+			return peerConnection;
+		},
+		[
+			channel,
+			clearFallbackPreview,
+			computerId,
+			deviceId,
+			fallbackPreviewUrl,
+			handleDesktopDataChannelMessage,
+			iceServers,
+			sessionId,
+			streamRunId,
+			streamToken,
+		],
+	);
 
 	const handleWebRtcSignal = useCallback(
 		async (payload: ComputerUseDesktopPayload) => {
@@ -2216,7 +2271,11 @@ export function ComputerUseDesktopViewport({
 				if (payload.schema === "xero.computer_use_stream_offer.v1") {
 					const offer = desktopStreamSessionDescription(payload, "offer");
 					if (!offer) return;
-					const peerConnection = ensurePeerConnection();
+					if (payload.streamId) {
+						streamIdRef.current = payload.streamId;
+						setStreamId(payload.streamId);
+					}
+					const peerConnection = ensurePeerConnection({ fresh: true });
 					if (!peerConnection) return;
 					setState("connecting");
 					await peerConnection.setRemoteDescription(offer);
@@ -2320,6 +2379,7 @@ export function ComputerUseDesktopViewport({
 			fallbackRecoveryLastAttemptAtRef.current = now;
 			clearDesktopStreamMedia({ clearPreview: true });
 			setState("connecting");
+			lastDesktopStreamRequestAtRef.current = now;
 			requestComputerUseStream(channel, {
 				computerId,
 				sessionId,
@@ -2540,6 +2600,44 @@ export function ComputerUseDesktopViewport({
 	}, [hasLiveVideo]);
 
 	useEffect(() => {
+		const video = videoRef.current as
+			| (HTMLVideoElement & {
+					requestVideoFrameCallback?: (callback: () => void) => number;
+					cancelVideoFrameCallback?: (handle: number) => void;
+			  })
+			| null;
+		if (!hasLiveVideo || !video) return;
+
+		let disposed = false;
+		const markFrame = () => {
+			lastDesktopVideoFrameAtRef.current = Date.now();
+		};
+		const scheduleFrameProbe = () => {
+			if (disposed || typeof video.requestVideoFrameCallback !== "function") {
+				return;
+			}
+			videoFrameCallbackIdRef.current = video.requestVideoFrameCallback(() => {
+				videoFrameCallbackIdRef.current = null;
+				markFrame();
+				scheduleFrameProbe();
+			});
+		};
+
+		markFrame();
+		scheduleFrameProbe();
+		return () => {
+			disposed = true;
+			if (
+				videoFrameCallbackIdRef.current !== null &&
+				typeof video.cancelVideoFrameCallback === "function"
+			) {
+				video.cancelVideoFrameCallback(videoFrameCallbackIdRef.current);
+			}
+			videoFrameCallbackIdRef.current = null;
+		};
+	}, [hasLiveVideo]);
+
+	useEffect(() => {
 		if (!canSend || !streamId || !KEYFRAME_REFRESH_STATES.has(state)) return;
 		const firstRequest = window.setTimeout(requestStreamKeyframe, 250);
 		const recurringRequest = window.setInterval(
@@ -2552,6 +2650,81 @@ export function ComputerUseDesktopViewport({
 		};
 	}, [canSend, requestStreamKeyframe, state, streamId]);
 
+	useEffect(() => {
+		if (!canSend || state !== "connecting") return;
+		const retryConnectingStream = () => {
+			if (streamStopRequestedRef.current) return;
+			const now = Date.now();
+			if (
+				now - lastDesktopStreamRequestAtRef.current <
+				DESKTOP_STREAM_CONNECTING_RETRY_MS
+			) {
+				return;
+			}
+			lastDesktopStreamRequestAtRef.current = now;
+			closeDesktopPeerConnection(peerConnectionRef.current);
+			peerConnectionRef.current = null;
+			pendingMediaStreamRef.current = null;
+			dataChannelFramesRef.current.clear();
+			if (videoRef.current) videoRef.current.srcObject = null;
+			setHasLiveVideo(false);
+			requestComputerUseStream(channel, {
+				computerId,
+				sessionId,
+				deviceId,
+				streamId: streamIdRef.current,
+				quality: streamQualityRef.current,
+				runId: streamRunId,
+				streamToken,
+				iceServers,
+			});
+		};
+		const handle = window.setInterval(retryConnectingStream, 1_000);
+		return () => window.clearInterval(handle);
+	}, [
+		canSend,
+		channel,
+		computerId,
+		deviceId,
+		iceServers,
+		sessionId,
+		state,
+		streamRunId,
+		streamToken,
+	]);
+
+	useEffect(() => {
+		if (
+			!canSend ||
+			!streamId ||
+			!hasLiveVideo ||
+			(state !== "live" && state !== "manual")
+		) {
+			return;
+		}
+		const recoverStaleVideo = () => {
+			if (streamStopRequestedRef.current) return;
+			const lastFrameAt = lastDesktopVideoFrameAtRef.current;
+			if (
+				!lastFrameAt ||
+				Date.now() - lastFrameAt < DESKTOP_STREAM_STALE_FRAME_MS
+			) {
+				return;
+			}
+			requestStreamKeyframe();
+			recoverDesktopWebRtcStream(streamIdRef.current);
+		};
+		const handle = window.setInterval(recoverStaleVideo, 1_000);
+		return () => window.clearInterval(handle);
+	}, [
+		canSend,
+		hasLiveVideo,
+		recoverDesktopWebRtcStream,
+		requestStreamKeyframe,
+		state,
+		streamId,
+	]);
+
 	const startStream = () => {
 		if (!channel || !deviceId) return;
 		if (presentation.isMobile) requestNativeDesktopOrientationLock();
@@ -2560,6 +2733,8 @@ export function ComputerUseDesktopViewport({
 		streamStopRequestedRef.current = false;
 		liveVideoSeenRef.current = false;
 		fallbackRecoveryLastAttemptAtRef.current = 0;
+		lastDesktopStreamRequestAtRef.current = Date.now();
+		lastDesktopVideoFrameAtRef.current = 0;
 		streamIdRef.current = null;
 		streamQualityRef.current = "balanced";
 		adaptiveQualityMetricsRef.current = null;
@@ -3145,7 +3320,6 @@ export function ComputerUseDesktopViewport({
 	}, [setClampedMobileViewportTransform]);
 	const handleMobileTouchPointerDown = useCallback(
 		(event: PointerEvent<HTMLElement>) => {
-			event.preventDefault();
 			try {
 				event.currentTarget.setPointerCapture(event.pointerId);
 			} catch {
@@ -3183,7 +3357,6 @@ export function ComputerUseDesktopViewport({
 		(event: PointerEvent<HTMLElement>) => {
 			const pointer = mobileTouchPointersRef.current.get(event.pointerId);
 			if (!pointer) return;
-			event.preventDefault();
 			pointer.clientX = event.clientX;
 			pointer.clientY = event.clientY;
 			if (
@@ -3231,7 +3404,6 @@ export function ComputerUseDesktopViewport({
 		(event: PointerEvent<HTMLElement>, cancelled = false) => {
 			const pointer = mobileTouchPointersRef.current.get(event.pointerId);
 			if (!pointer) return;
-			event.preventDefault();
 			try {
 				event.currentTarget.releasePointerCapture(event.pointerId);
 			} catch {
@@ -3481,22 +3653,20 @@ export function ComputerUseDesktopViewport({
 		},
 		[sendManualInput, state],
 	);
-	const clampControlBarPosition = useCallback(
-		(position: DesktopControlBarPosition): DesktopControlBarPosition => {
+	const clampFloatingBarPosition = useCallback(
+		(
+			position: DesktopControlBarPosition,
+			bar: HTMLElement | null,
+		): DesktopControlBarPosition => {
 			const surface = desktopSurfaceRef.current;
-			const controlBar = controlBarRef.current;
-			if (!surface || !controlBar) return position;
+			if (!surface || !bar) return position;
 			const maxX = Math.max(
 				DESKTOP_CONTROL_BAR_MARGIN,
-				surface.clientWidth -
-					controlBar.offsetWidth -
-					DESKTOP_CONTROL_BAR_MARGIN,
+				surface.clientWidth - bar.offsetWidth - DESKTOP_CONTROL_BAR_MARGIN,
 			);
 			const maxY = Math.max(
 				DESKTOP_CONTROL_BAR_MARGIN,
-				surface.clientHeight -
-					controlBar.offsetHeight -
-					DESKTOP_CONTROL_BAR_MARGIN,
+				surface.clientHeight - bar.offsetHeight - DESKTOP_CONTROL_BAR_MARGIN,
 			);
 			return {
 				x: Math.min(maxX, Math.max(DESKTOP_CONTROL_BAR_MARGIN, position.x)),
@@ -3504,6 +3674,16 @@ export function ComputerUseDesktopViewport({
 			};
 		},
 		[],
+	);
+	const clampControlBarPosition = useCallback(
+		(position: DesktopControlBarPosition): DesktopControlBarPosition =>
+			clampFloatingBarPosition(position, controlBarRef.current),
+		[clampFloatingBarPosition],
+	);
+	const clampPromptBarPosition = useCallback(
+		(position: DesktopControlBarPosition): DesktopControlBarPosition =>
+			clampFloatingBarPosition(position, promptBarRef.current),
+		[clampFloatingBarPosition],
 	);
 	const startControlBarDrag = useCallback(
 		(event: PointerEvent<HTMLButtonElement>) => {
@@ -3557,6 +3737,58 @@ export function ComputerUseDesktopViewport({
 		},
 		[],
 	);
+	const startPromptBarDrag = useCallback(
+		(event: PointerEvent<HTMLButtonElement>) => {
+			if (event.button !== 0) return;
+			const surface = desktopSurfaceRef.current;
+			const promptBar = promptBarRef.current;
+			if (!surface || !promptBar) return;
+			const surfaceRect = surface.getBoundingClientRect();
+			const promptBarRect = promptBar.getBoundingClientRect();
+			const origin = clampPromptBarPosition({
+				x: promptBarRect.left - surfaceRect.left,
+				y: promptBarRect.top - surfaceRect.top,
+			});
+			promptBarDragRef.current = {
+				pointerId: event.pointerId,
+				startClientX: event.clientX,
+				startClientY: event.clientY,
+				originX: origin.x,
+				originY: origin.y,
+			};
+			setPromptBarPosition(origin);
+			event.currentTarget.setPointerCapture(event.pointerId);
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		[clampPromptBarPosition],
+	);
+	const movePromptBarDrag = useCallback(
+		(event: PointerEvent<HTMLButtonElement>) => {
+			const drag = promptBarDragRef.current;
+			if (!drag || drag.pointerId !== event.pointerId) return;
+			setPromptBarPosition(
+				clampPromptBarPosition({
+					x: drag.originX + event.clientX - drag.startClientX,
+					y: drag.originY + event.clientY - drag.startClientY,
+				}),
+			);
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		[clampPromptBarPosition],
+	);
+	const endPromptBarDrag = useCallback(
+		(event: PointerEvent<HTMLButtonElement>) => {
+			const drag = promptBarDragRef.current;
+			if (!drag || drag.pointerId !== event.pointerId) return;
+			promptBarDragRef.current = null;
+			event.currentTarget.releasePointerCapture(event.pointerId);
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		[],
+	);
 	const controlBarStyle: CSSProperties = controlBarPosition
 		? {
 				left: controlBarPosition.x,
@@ -3575,6 +3807,19 @@ export function ComputerUseDesktopViewport({
 						: DESKTOP_CONTROL_BAR_DEFAULT_TOP,
 					transform: "translateX(-50%)",
 				};
+	const promptBarStyle: CSSProperties = {
+		width: "min(28rem, calc(100% - 24px))",
+		...(promptBarPosition
+			? {
+					left: promptBarPosition.x,
+					top: promptBarPosition.y,
+				}
+			: {
+					bottom: `calc(env(safe-area-inset-bottom) + ${DESKTOP_PROMPT_BAR_DEFAULT_BOTTOM}px)`,
+					left: "50%",
+					transform: "translateX(-50%)",
+				}),
+	};
 	const desktopMediaClassName = cn(
 		"object-contain",
 		shouldRotateDesktopContent
@@ -3617,7 +3862,7 @@ export function ComputerUseDesktopViewport({
 		shouldRotateDesktopContent && "rotate-90",
 	);
 	const toolbarLabelClassName = presentation.isMobile ? "sr-only" : undefined;
-	const showMobilePrompt = presentation.isMobile && hasLiveVideo;
+	const showMobilePrompt = presentation.isMobile && hasVisibleDesktopMedia;
 	const toolbarWorking = isAgentWorking || toolbarPromptPending;
 	const activeManualControlId = manualControlIdRef.current ?? manualControlId;
 	const canCaptureKeyboard =
@@ -3681,6 +3926,15 @@ export function ComputerUseDesktopViewport({
 								autoPlay
 								muted
 								playsInline
+								onLoadedData={() => {
+									lastDesktopVideoFrameAtRef.current = Date.now();
+								}}
+								onPlaying={() => {
+									lastDesktopVideoFrameAtRef.current = Date.now();
+								}}
+								onTimeUpdate={() => {
+									lastDesktopVideoFrameAtRef.current = Date.now();
+								}}
 								className={desktopMediaClassName}
 								style={desktopMediaStyle}
 							/>
@@ -3766,24 +4020,6 @@ export function ComputerUseDesktopViewport({
 								Keyboard captured
 							</Badge>
 						) : null}
-						{showMobilePrompt ? (
-							<>
-								<DesktopToolbarPromptForm
-									canSend={canSend}
-									isAgentWorking={isAgentWorking}
-									onPromptAccepted={() => setToolbarPromptPending(true)}
-									onSubmit={onPromptSubmit}
-									rotated={shouldRotateDesktopContent}
-								/>
-								<div
-									className={cn(
-										"bg-border/60",
-										shouldRotateDesktopContent ? "h-px w-5" : "h-5 w-px",
-									)}
-									aria-hidden="true"
-								/>
-							</>
-						) : null}
 						<Button
 							type="button"
 							size="sm"
@@ -3867,6 +4103,49 @@ export function ComputerUseDesktopViewport({
 							</>
 						) : null}
 					</div>
+					{showMobilePrompt ? (
+						<div
+							ref={promptBarRef}
+							role="toolbar"
+							aria-label="Desktop prompt controls"
+							style={promptBarStyle}
+							onFocusCapture={() => disarmKeyboardCapture({ flushText: true })}
+							onPointerDown={(event) => {
+								disarmKeyboardCapture({ flushText: true });
+								event.stopPropagation();
+							}}
+							onKeyDown={(event) => event.stopPropagation()}
+							onWheel={(event) => event.stopPropagation()}
+							aria-busy={toolbarWorking || undefined}
+							className={cn(
+								"absolute z-20 flex items-center gap-1 rounded-xl border border-white/10 bg-background/70 p-1 text-foreground shadow-[0_18px_45px_rgba(0,0,0,0.45)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55",
+								toolbarWorking && "desktop-control-toolbar-working",
+							)}
+						>
+							<button
+								type="button"
+								aria-label="Move desktop prompt controls"
+								className="flex h-8 w-7 touch-none cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground active:cursor-grabbing"
+								onPointerDown={startPromptBarDrag}
+								onPointerMove={movePromptBarDrag}
+								onPointerUp={endPromptBarDrag}
+								onPointerCancel={endPromptBarDrag}
+							>
+								<GripVertical
+									className={toolbarIconClassName}
+									aria-hidden="true"
+								/>
+							</button>
+							<div className="h-6 w-px bg-border/60" aria-hidden="true" />
+							<DesktopToolbarPromptForm
+								canSend={canSend}
+								isAgentWorking={isAgentWorking}
+								onPromptAccepted={() => setToolbarPromptPending(true)}
+								onSubmit={onPromptSubmit}
+								rotated={false}
+							/>
+						</div>
+					) : null}
 				</section>
 			</div>
 		</>
@@ -3913,7 +4192,7 @@ export function DesktopToolbarPromptForm({
 				"desktop-control-mobile-prompt flex min-w-0 items-center gap-1 rounded-lg border border-white/10 bg-black/25 px-1.5 py-1 shadow-inner shadow-black/20",
 				rotated
 					? "desktop-control-mobile-prompt-rotated absolute left-1/2 top-1/2 h-8 w-[clamp(9rem,34dvh,18rem)] -translate-x-1/2 -translate-y-1/2 rotate-90"
-					: "w-[min(20rem,calc(100dvw-14rem))]",
+					: "flex-1",
 			)}
 			onSubmit={handleSubmit}
 			onPointerDown={(event) => event.stopPropagation()}
