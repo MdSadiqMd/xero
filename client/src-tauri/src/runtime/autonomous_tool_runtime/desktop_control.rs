@@ -3657,7 +3657,7 @@ struct DesktopSidecarProcess {
     session_id: String,
     lease_expires_at: String,
     binary_path: PathBuf,
-    checksum_verified: bool,
+    integrity_verified: bool,
 }
 
 impl DesktopSidecarManager {
@@ -3687,8 +3687,8 @@ impl DesktopSidecarManager {
                         "Desktop sidecar is running from {} with a lease expiring at {}{}.",
                         process.binary_path.display(),
                         process.lease_expires_at,
-                        if process.checksum_verified {
-                            " and a verified checksum"
+                        if process.integrity_verified {
+                            " and verified integrity"
                         } else {
                             " in development checksum mode"
                         }
@@ -3737,8 +3737,8 @@ impl DesktopSidecarManager {
                     "Desktop sidecar is running from {} with a lease expiring at {}{}.",
                     process.binary_path.display(),
                     process.lease_expires_at,
-                    if process.checksum_verified {
-                        " and a verified checksum"
+                    if process.integrity_verified {
+                        " and verified integrity"
                     } else {
                         " in development checksum mode"
                     }
@@ -3777,7 +3777,7 @@ impl DesktopSidecarManager {
 
     fn start(&mut self) -> Result<(), String> {
         let binary_path = resolve_desktop_sidecar_binary()?;
-        let checksum_verified = verify_desktop_sidecar_binary(&binary_path)?;
+        let integrity_verified = verify_desktop_sidecar_binary(&binary_path)?;
         let mut command = Command::new(&binary_path);
         command
             .stdin(Stdio::piped())
@@ -3827,7 +3827,7 @@ impl DesktopSidecarManager {
             session_id,
             lease_expires_at,
             binary_path,
-            checksum_verified,
+            integrity_verified,
         });
         self.health_probe()?;
         Ok(())
@@ -4024,7 +4024,7 @@ fn validate_sidecar_binary_path(path: PathBuf) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn verify_desktop_sidecar_binary(path: &PathBuf) -> Result<bool, String> {
+fn verify_desktop_sidecar_binary(path: &Path) -> Result<bool, String> {
     let bytes = fs::read(path).map_err(|error| {
         format!(
             "Xero could not read desktop sidecar `{}` for verification: {error}",
@@ -4043,18 +4043,171 @@ fn verify_desktop_sidecar_binary(path: &PathBuf) -> Result<bool, String> {
     });
     match configured_expected {
         Some(expected) if expected.eq_ignore_ascii_case(&actual) => Ok(true),
-        Some(expected) => Err(format!(
-            "Desktop sidecar checksum mismatch for `{}`: expected {}, got {}.",
-            path.display(),
-            expected,
-            actual
-        )),
+        Some(expected) => {
+            #[cfg(target_os = "macos")]
+            {
+                verify_macos_bundled_sidecar_signature(path).map_err(|signature_error| {
+                    format!(
+                        "Desktop sidecar checksum mismatch for `{}`: expected {}, got {}; macOS signature verification also failed: {}.",
+                        path.display(),
+                        expected,
+                        actual,
+                        signature_error
+                    )
+                })?;
+                return Ok(true);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(format!(
+                    "Desktop sidecar checksum mismatch for `{}`: expected {}, got {}.",
+                    path.display(),
+                    expected,
+                    actual
+                ))
+            }
+        }
         None if cfg!(debug_assertions) => Ok(false),
-        None => Err(format!(
-            "Desktop sidecar checksum is required in release builds. Set {DESKTOP_SIDECAR_SHA256_ENV} for `{}`.",
-            path.display()
-        )),
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                verify_macos_bundled_sidecar_signature(path).map_err(|signature_error| {
+                    format!(
+                        "Desktop sidecar checksum is required in release builds. Set {DESKTOP_SIDECAR_SHA256_ENV} for `{}`; macOS signature verification also failed: {}.",
+                        path.display(),
+                        signature_error
+                    )
+                })?;
+                return Ok(true);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(format!(
+                    "Desktop sidecar checksum is required in release builds. Set {DESKTOP_SIDECAR_SHA256_ENV} for `{}`.",
+                    path.display()
+                ))
+            }
+        }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn verify_macos_bundled_sidecar_signature(path: &Path) -> Result<(), String> {
+    let sidecar_path = path.canonicalize().map_err(|error| {
+        format!(
+            "Xero could not resolve desktop sidecar path `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let app_bundle = current_macos_app_bundle()
+        .ok_or_else(|| "Xero is not running from a macOS app bundle.".to_string())?;
+    let app_bundle = app_bundle.canonicalize().map_err(|error| {
+        format!(
+            "Xero could not resolve app bundle `{}`: {error}",
+            app_bundle.display()
+        )
+    })?;
+    let resources_dir = app_bundle
+        .join("Contents")
+        .join("Resources")
+        .canonicalize()
+        .map_err(|error| {
+            format!(
+                "Xero could not resolve app resources directory in `{}`: {error}",
+                app_bundle.display()
+            )
+        })?;
+
+    if !sidecar_path.starts_with(&resources_dir) {
+        return Err(format!(
+            "desktop sidecar `{}` is outside the signed app resources directory `{}`",
+            sidecar_path.display(),
+            resources_dir.display()
+        ));
+    }
+
+    run_macos_codesign_verify(&app_bundle, true)?;
+    run_macos_codesign_verify(&sidecar_path, false)?;
+
+    let app_team = macos_codesign_team_identifier(&app_bundle)?;
+    let sidecar_team = macos_codesign_team_identifier(&sidecar_path)?;
+    if app_team != sidecar_team {
+        return Err(format!(
+            "desktop sidecar signing team `{sidecar_team}` does not match app signing team `{app_team}`"
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn current_macos_app_bundle() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let macos_dir = executable.parent()?;
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name().and_then(|value| value.to_str()) != Some("Contents") {
+        return None;
+    }
+    contents_dir.parent().map(Path::to_path_buf)
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_codesign_verify(path: &Path, deep: bool) -> Result<(), String> {
+    let mut command = Command::new("/usr/bin/codesign");
+    command.arg("--verify").arg("--strict");
+    if deep {
+        command.arg("--deep");
+    }
+    let output = command.arg(path).output().map_err(|error| {
+        format!(
+            "Xero could not run codesign verification for `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "codesign rejected `{}`: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codesign_team_identifier(path: &Path) -> Result<String, String> {
+    let output = Command::new("/usr/bin/codesign")
+        .arg("--display")
+        .arg("--verbose=4")
+        .arg(path)
+        .output()
+        .map_err(|error| {
+            format!(
+                "Xero could not inspect codesign metadata for `{}`: {error}",
+                path.display()
+            )
+        })?;
+    let combined_output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    macos_codesign_team_identifier_from_output(&combined_output).ok_or_else(|| {
+        format!(
+            "codesign metadata for `{}` did not include a TeamIdentifier",
+            path.display()
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codesign_team_identifier_from_output(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.strip_prefix("TeamIdentifier=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn mint_sidecar_token() -> String {
@@ -7431,5 +7584,19 @@ mod tests {
         assert_eq!(decoded.schema_version, DESKTOP_SIDECAR_SCHEMA_VERSION);
         assert!(decoded.display_list);
         assert!(decoded.screenshot_fallback_stream);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_codesign_team_identifier_parser_reads_display_output() {
+        let output = "\
+Executable=/Applications/Xero.app/Contents/MacOS/xero-desktop\n\
+Identifier=com.hyperpush.xero\n\
+TeamIdentifier=CD2RXM358N\n";
+
+        assert_eq!(
+            macos_codesign_team_identifier_from_output(output).as_deref(),
+            Some("CD2RXM358N")
+        );
     }
 }
