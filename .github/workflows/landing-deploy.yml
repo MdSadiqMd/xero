@@ -16,7 +16,7 @@ concurrency:
 jobs:
   landing:
     name: Deploy landing to Fly.io
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
       group: fly-deploy-xero-landing
@@ -107,7 +107,7 @@ jobs:
 
   cloud:
     name: Deploy cloud to Fly.io
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
       group: fly-deploy-xero-cloud
@@ -147,7 +147,7 @@ jobs:
 
   server:
     name: Deploy server to Fly.io
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
       group: fly-deploy-xero-server

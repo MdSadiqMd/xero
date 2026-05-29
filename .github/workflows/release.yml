@@ -21,7 +21,7 @@ env:
 jobs:
   create-release:
     name: Create Release
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -117,7 +117,7 @@ jobs:
   deploy-server:
     name: Deploy Server
     needs: create-release
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
       group: fly-deploy-xero-server
@@ -138,7 +138,7 @@ jobs:
   deploy-cloud:
     name: Deploy Cloud
     needs: create-release
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
       group: fly-deploy-xero-cloud
@@ -185,13 +185,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: blacksmith-6vcpu-macos-15
+          - platform: macos-15
             target: aarch64-apple-darwin
             artifact_suffix: macos-aarch64
-          - platform: blacksmith-4vcpu-ubuntu-2404
+          - platform: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64
-          - platform: blacksmith-4vcpu-windows-2025
+          - platform: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_suffix: windows-x86_64
     runs-on: ${{ matrix.platform }}
@@ -324,7 +324,7 @@ jobs:
     needs:
       - create-release
       - build-tui
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
       group: fly-deploy-xero-landing
@@ -402,15 +402,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: blacksmith-6vcpu-macos-15
+          - platform: macos-15
             args: --target aarch64-apple-darwin --config src-tauri/tauri.macos.conf.json -- --bin xero-desktop
             artifact_suffix: macos-aarch64
             platform_key: darwin-aarch64
-          - platform: blacksmith-4vcpu-windows-2025
+          - platform: windows-latest
             args: --bundles nsis -- --bin xero-desktop
             artifact_suffix: windows-x86_64
             platform_key: windows-x86_64
-          - platform: blacksmith-4vcpu-ubuntu-2404
+          - platform: ubuntu-24.04
             args: --bundles appimage -- --bin xero-desktop
             artifact_suffix: linux-x86_64
             platform_key: linux-x86_64
@@ -793,7 +793,7 @@ jobs:
       - deploy-cloud
       - deploy-landing
       - build-tauri
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Download latest.json fragments
         uses: actions/download-artifact@v4

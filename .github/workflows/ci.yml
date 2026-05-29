@@ -17,7 +17,7 @@ concurrency:
 jobs:
   client:
     name: Client
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
 
   landing:
     name: Landing
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,7 +83,7 @@ jobs:
 
   server:
     name: Server
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
@@ -131,7 +131,7 @@ jobs:
 
   tauri-check:
     name: Tauri Rust Check
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       TAURI_CONFIG: '{"bundle":{"resources":[]}}'
     steps:
@@ -179,7 +179,7 @@ jobs:
 
   windows-dictation-check:
     name: Windows Dictation Rust Check
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-latest
     env:
       TAURI_CONFIG: '{"bundle":{"resources":[]}}'
     steps:
@@ -216,11 +216,11 @@ jobs:
       matrix:
         include:
           - name: linux
-            os: blacksmith-4vcpu-ubuntu-2404
+            os: ubuntu-latest
           - name: macos
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15
           - name: windows
-            os: blacksmith-4vcpu-windows-2025
+            os: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
