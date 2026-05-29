@@ -1744,7 +1744,7 @@ fn desktop_tool_feature_env(tool: &str) -> Option<&'static str> {
 }
 
 fn desktop_tool_default_enabled() -> bool {
-    cfg!(debug_assertions) || cfg!(test)
+    true
 }
 
 fn parse_feature_bool(value: &str) -> Option<bool> {
@@ -8446,14 +8446,14 @@ mod tests {
     }
 
     #[test]
-    fn desktop_rollout_defaults_to_fail_closed_in_release_policy() {
-        assert!(!desktop_tool_available_from_rollout_values(
+    fn desktop_rollout_defaults_to_enabled_for_installed_app() {
+        assert!(desktop_tool_available_from_rollout_values(
             AUTONOMOUS_TOOL_DESKTOP_CONTROL,
             None,
             None,
             None,
             "host-1",
-            false,
+            true,
         ));
     }
 
