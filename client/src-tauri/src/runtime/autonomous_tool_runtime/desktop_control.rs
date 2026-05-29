@@ -3959,23 +3959,11 @@ fn resolve_desktop_sidecar_binary() -> Result<PathBuf, String> {
     #[cfg(not(test))]
     {
         let binary_name = desktop_sidecar_binary_name();
-        let mut candidates = Vec::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                candidates.push(dir.join(&binary_name));
-                candidates.push(dir.join("../Resources").join(&binary_name));
-            }
-        }
-        if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
-            let manifest_dir = PathBuf::from(manifest_dir);
-            candidates.push(manifest_dir.join("resources").join(&binary_name));
-            if let Some(target_dir) = manifest_dir.parent() {
-                candidates.push(target_dir.join("target/debug").join(&binary_name));
-                candidates.push(target_dir.join("target/release").join(&binary_name));
-            }
-        }
-
-        candidates
+        desktop_sidecar_binary_candidates(
+            &binary_name,
+            std::env::current_exe().ok(),
+            option_env!("CARGO_MANIFEST_DIR").map(PathBuf::from),
+        )
             .into_iter()
             .find_map(|candidate| validate_sidecar_binary_path(candidate).ok())
             .ok_or_else(|| {
@@ -3985,6 +3973,30 @@ fn resolve_desktop_sidecar_binary() -> Result<PathBuf, String> {
                 )
             })
     }
+}
+
+fn desktop_sidecar_binary_candidates(
+    binary_name: &str,
+    current_exe: Option<PathBuf>,
+    manifest_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(exe) = current_exe {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(binary_name));
+            let bundled_resources_dir = dir.join("../Resources");
+            candidates.push(bundled_resources_dir.join(binary_name));
+            candidates.push(bundled_resources_dir.join("resources").join(binary_name));
+        }
+    }
+    if let Some(manifest_dir) = manifest_dir {
+        candidates.push(manifest_dir.join("resources").join(binary_name));
+        if let Some(target_dir) = manifest_dir.parent() {
+            candidates.push(target_dir.join("target/debug").join(binary_name));
+            candidates.push(target_dir.join("target/release").join(binary_name));
+        }
+    }
+    candidates
 }
 
 #[cfg(not(test))]
@@ -6434,6 +6446,22 @@ mod tests {
             .last_error
             .as_deref()
             .is_some_and(|message| message.contains("closed before sending a response")));
+    }
+
+    #[test]
+    fn sidecar_candidates_include_tauri_preserved_resource_path() {
+        let exe = PathBuf::from("Xero.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("xero-desktop");
+        let resources_dir = PathBuf::from("Xero.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("../Resources");
+        let candidates = desktop_sidecar_binary_candidates("xero-desktop-sidecar", Some(exe), None);
+
+        assert!(candidates.contains(&resources_dir.join("xero-desktop-sidecar")));
+        assert!(candidates.contains(&resources_dir.join("resources").join("xero-desktop-sidecar")));
     }
 
     #[test]
