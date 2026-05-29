@@ -22,6 +22,7 @@ import { getRouter } from "#/router";
 import { activeSessionTargetFromPathname } from "./sessions";
 import {
 	chooseDesktopAdaptiveStreamQuality,
+	isMobileTextKeyboardOpenForSnapshot,
 	readDesktopControlPresentation,
 	shouldRecoverDesktopWebRtcAfterFallback,
 } from "./sessions.$computerId.$sessionId";
@@ -203,6 +204,11 @@ beforeEach(() => {
 			dispatchEvent: vi.fn(),
 		}),
 	});
+	Object.defineProperty(window, "visualViewport", {
+		configurable: true,
+		writable: true,
+		value: undefined,
+	});
 	Object.defineProperty(window, "scrollTo", {
 		writable: true,
 		value: vi.fn(),
@@ -315,7 +321,7 @@ describe.sequential("cloud sessions shell", () => {
 		expect(readDesktopControlPresentation()).toMatchObject({
 			isMobile: true,
 			override: "mobile",
-			rotateDesktop: true,
+			rotateDesktop: false,
 		});
 
 		window.localStorage.setItem(
@@ -327,6 +333,36 @@ describe.sequential("cloud sessions shell", () => {
 			override: "desktop",
 			rotateDesktop: false,
 		});
+	});
+
+	it("detects mobile text keyboard compression from visual viewport metrics", () => {
+		expect(
+			isMobileTextKeyboardOpenForSnapshot({
+				baselineHeight: 844,
+				layoutHeight: 844,
+				textEntryFocused: true,
+				viewportWidth: 390,
+				visualHeight: 520,
+			}),
+		).toBe(true);
+		expect(
+			isMobileTextKeyboardOpenForSnapshot({
+				baselineHeight: 844,
+				layoutHeight: 844,
+				textEntryFocused: false,
+				viewportWidth: 390,
+				visualHeight: 520,
+			}),
+		).toBe(false);
+		expect(
+			isMobileTextKeyboardOpenForSnapshot({
+				baselineHeight: 844,
+				layoutHeight: 844,
+				textEntryFocused: true,
+				viewportWidth: 1024,
+				visualHeight: 520,
+			}),
+		).toBe(false);
 	});
 
 	it("adapts desktop stream quality from transport metrics", () => {

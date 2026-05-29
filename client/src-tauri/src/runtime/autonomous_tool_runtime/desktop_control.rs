@@ -1847,15 +1847,16 @@ impl AutonomousToolRuntime {
                 }
             }
             AutonomousDesktopControlAction::Scroll => {
-                if let Some(message) =
+                let delta_x = request.delta_x.unwrap_or(0);
+                let delta_y = request.delta_y.unwrap_or(0);
+                if delta_x == 0 && delta_y == 0 {
+                    Ok("Ignored empty desktop scroll input.".into())
+                } else if let Some(message) =
                     run_sidecar_desktop_control(&request, &output.policy.decision_id)?
                 {
                     Ok(message)
                 } else {
-                    platform_input::scroll(
-                        request.delta_x.unwrap_or(0),
-                        request.delta_y.unwrap_or(0),
-                    )?;
+                    platform_input::scroll(delta_x, delta_y)?;
                     Ok("Sent desktop scroll input.".into())
                 }
             }
@@ -2910,9 +2911,8 @@ fn validate_desktop_control_request(
             let _ = required_target_point(request)?;
         }
         AutonomousDesktopControlAction::Scroll => {
-            if request.delta_x.unwrap_or(0) == 0 && request.delta_y.unwrap_or(0) == 0 {
-                return Err(CommandError::invalid_request("deltaX/deltaY"));
-            }
+            // Zero-distance wheel events can come from touchpads or web clients during
+            // inertial gesture teardown. Treat them as harmless no-ops at execution time.
         }
         AutonomousDesktopControlAction::KeyPress => {
             validate_non_empty(request.key.as_deref().unwrap_or_default(), "key")?;
@@ -6580,7 +6580,7 @@ mod tests {
                 session_id: "test-session".into(),
                 lease_expires_at: timestamp_after(Duration::from_secs(30)),
                 binary_path: PathBuf::from("fake-sidecar"),
-                checksum_verified: false,
+                integrity_verified: false,
             }),
             last_error: None,
         };

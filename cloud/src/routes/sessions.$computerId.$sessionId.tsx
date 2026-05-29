@@ -39,6 +39,7 @@ import {
 } from "@xero/ui/model/runtime";
 import {
 	GripVertical,
+	Keyboard,
 	Monitor,
 	MousePointer2,
 	SendHorizontal,
@@ -64,6 +65,7 @@ import {
 	type WheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { BrandLogo } from "#/components/brand-logo";
 import { LoadingScreen } from "#/components/loading-screen";
 import { decodeRelayFrame } from "#/lib/relay/envelope";
 import {
@@ -659,14 +661,17 @@ function SessionView() {
 	const [desktopControlsOpen, setDesktopControlsOpen] = useState(false);
 	const [computerUseSidebarDensity, setComputerUseSidebarDensity] =
 		useState<ComputerUseSidebarDensity>("comfortable");
+	const mobileTextKeyboardActive = useMobileTextKeyboardActive();
 	const renderConversationPane = (
 		surface: "main" | "sidebar" = "main",
 		density: ComputerUseSidebarDensity = "comfortable",
 	) => {
 		const isSidebarSurface = surface === "sidebar";
 		const isCompactSidebar = isSidebarSurface && density === "compact";
+		const shouldCollapseEmptyState =
+			mobileTextKeyboardActive && !isSidebarSurface;
 		return (
-			<div className="relative min-h-0 flex-1">
+			<div className="relative h-full min-h-0 flex-1 overflow-hidden">
 				<div
 					ref={conversationViewportRef}
 					onScroll={handleConversationScroll}
@@ -687,14 +692,18 @@ function SessionView() {
 					>
 						{transcript ? (
 							turns.length === 0 ? (
-								<div className="flex flex-1 items-center justify-center">
-									<EmptySessionState
-										projectLabel={projectLabel}
-										context={isComputerUseSession ? "computer-use" : "default"}
-										variant={isCompactSidebar ? "dense" : "default"}
-										onSelectSuggestion={setDraftPrompt}
-									/>
-								</div>
+								shouldCollapseEmptyState ? null : (
+									<div className="flex flex-1 items-center justify-center">
+										<EmptySessionState
+											projectLabel={projectLabel}
+											context={
+												isComputerUseSession ? "computer-use" : "default"
+											}
+											variant={isCompactSidebar ? "dense" : "default"}
+											onSelectSuggestion={setDraftPrompt}
+										/>
+									</div>
+								)
 							) : (
 								<ConversationSection
 									runtimeRun={null}
@@ -813,6 +822,133 @@ function SessionView() {
 			{desktopControlsOpen && isComputerUseSession ? null : conversationPane}
 		</>
 	);
+}
+
+const MOBILE_TEXT_KEYBOARD_MAX_WIDTH = 768;
+const MOBILE_TEXT_KEYBOARD_MIN_HEIGHT_LOSS = 96;
+
+function useMobileTextKeyboardActive() {
+	const [active, setActive] = useState(false);
+	const baselineHeightRef = useRef(0);
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+
+		const update = () => {
+			const nextActive = readMobileTextKeyboardActive(baselineHeightRef);
+			setActive((current) => (current === nextActive ? current : nextActive));
+		};
+		const resetBaseline = () => {
+			baselineHeightRef.current = 0;
+			update();
+		};
+		const visualViewport = window.visualViewport;
+
+		update();
+		window.addEventListener("resize", update);
+		window.addEventListener("orientationchange", resetBaseline);
+		visualViewport?.addEventListener("resize", update);
+		visualViewport?.addEventListener("scroll", update);
+		document.addEventListener("focusin", update);
+		document.addEventListener("focusout", update);
+
+		return () => {
+			window.removeEventListener("resize", update);
+			window.removeEventListener("orientationchange", resetBaseline);
+			visualViewport?.removeEventListener("resize", update);
+			visualViewport?.removeEventListener("scroll", update);
+			document.removeEventListener("focusin", update);
+			document.removeEventListener("focusout", update);
+		};
+	}, []);
+
+	return active;
+}
+
+function readMobileTextKeyboardActive(baselineHeightRef: { current: number }) {
+	const visualViewport = window.visualViewport;
+	const visualHeight = Math.round(visualViewport?.height ?? window.innerHeight);
+	const layoutHeight = Math.round(window.innerHeight || visualHeight);
+	const visualWidth = Math.round(visualViewport?.width ?? window.innerWidth);
+	const viewportWidth = Math.min(window.innerWidth || visualWidth, visualWidth);
+	const textEntryFocused = isTextEntryElement(document.activeElement);
+	const viewportHeight = Math.max(visualHeight, layoutHeight);
+
+	if (
+		baselineHeightRef.current === 0 ||
+		!textEntryFocused ||
+		viewportHeight > baselineHeightRef.current
+	) {
+		baselineHeightRef.current = viewportHeight;
+	}
+
+	const coarseMobileViewport =
+		typeof window.matchMedia === "function" &&
+		window.matchMedia(
+			`(pointer: coarse) and (max-width: ${
+				MOBILE_TEXT_KEYBOARD_MAX_WIDTH + 132
+			}px)`,
+		).matches;
+
+	return isMobileTextKeyboardOpenForSnapshot({
+		baselineHeight: baselineHeightRef.current,
+		coarseMobileViewport,
+		layoutHeight,
+		textEntryFocused,
+		viewportWidth,
+		visualHeight,
+	});
+}
+
+export function isMobileTextKeyboardOpenForSnapshot({
+	baselineHeight,
+	coarseMobileViewport = false,
+	layoutHeight,
+	textEntryFocused,
+	viewportWidth,
+	visualHeight,
+}: {
+	baselineHeight: number;
+	coarseMobileViewport?: boolean;
+	layoutHeight: number;
+	textEntryFocused: boolean;
+	viewportWidth: number;
+	visualHeight: number;
+}) {
+	const heightLoss = Math.max(
+		layoutHeight - visualHeight,
+		baselineHeight - visualHeight,
+	);
+	const keyboardThreshold = Math.max(
+		MOBILE_TEXT_KEYBOARD_MIN_HEIGHT_LOSS,
+		Math.min(180, baselineHeight * 0.15),
+	);
+
+	return (
+		textEntryFocused &&
+		heightLoss >= keyboardThreshold &&
+		(viewportWidth <= MOBILE_TEXT_KEYBOARD_MAX_WIDTH || coarseMobileViewport)
+	);
+}
+
+function isTextEntryElement(element: Element | null) {
+	if (!(element instanceof HTMLElement)) return false;
+	if (element.isContentEditable) return true;
+	if (element instanceof HTMLTextAreaElement) return true;
+	if (!(element instanceof HTMLInputElement)) return false;
+
+	return ![
+		"button",
+		"checkbox",
+		"color",
+		"file",
+		"hidden",
+		"image",
+		"radio",
+		"range",
+		"reset",
+		"submit",
+	].includes(element.type);
 }
 
 type DesktopViewportState =
@@ -1312,12 +1448,22 @@ function ComputerUseDesktopDialog({
 			size="sm"
 			aria-label="Open desktop controls"
 			className="h-8 gap-2 px-2.5"
-			onClick={presentation.isMobile ? undefined : () => onOpenChange(true)}
+			onClick={
+				presentation.isMobile
+					? () => requestNativeDesktopOrientationLock()
+					: () => onOpenChange(true)
+			}
 		>
 			<Monitor className="h-4 w-4" aria-hidden="true" />
 			<span className="hidden sm:inline">Desktop</span>
 		</Button>
 	);
+
+	useEffect(() => {
+		if (!presentation.isMobile || !open) return;
+		requestNativeDesktopOrientationLock();
+		return () => unlockNativeDesktopOrientation();
+	}, [open, presentation.isMobile]);
 
 	if (!presentation.isMobile) {
 		return (
@@ -1473,8 +1619,6 @@ export function readDesktopControlPresentation(): DesktopControlPresentation {
 	const override = readDesktopControlPresentationOverride();
 	const width =
 		window.innerWidth || document.documentElement.clientWidth || 1024;
-	const height =
-		window.innerHeight || document.documentElement.clientHeight || 768;
 	const coarsePointer =
 		typeof window.matchMedia === "function" &&
 		window.matchMedia("(hover: none) and (pointer: coarse)").matches;
@@ -1486,8 +1630,22 @@ export function readDesktopControlPresentation(): DesktopControlPresentation {
 	return {
 		isMobile,
 		override,
-		rotateDesktop: isMobile && height > width,
+		rotateDesktop: false,
 	};
+}
+
+function requestNativeDesktopOrientationLock(): void {
+	if (typeof window === "undefined") return;
+	const orientation = window.screen?.orientation;
+	if (!orientation || typeof orientation.lock !== "function") return;
+	void orientation.lock("landscape").catch(() => undefined);
+}
+
+function unlockNativeDesktopOrientation(): void {
+	if (typeof window === "undefined") return;
+	const orientation = window.screen?.orientation;
+	if (!orientation || typeof orientation.unlock !== "function") return;
+	orientation.unlock();
 }
 
 function readDesktopControlPresentationOverride(): DesktopControlPresentationOverride {
@@ -2396,6 +2554,7 @@ export function ComputerUseDesktopViewport({
 
 	const startStream = () => {
 		if (!channel || !deviceId) return;
+		if (presentation.isMobile) requestNativeDesktopOrientationLock();
 		clearManualPointerGesture();
 		disarmKeyboardCaptureRef.current?.();
 		streamStopRequestedRef.current = false;
@@ -2915,8 +3074,14 @@ export function ComputerUseDesktopViewport({
 		[],
 	);
 	const sendManualPointerClick = useCallback(
-		(click: DesktopManualPointerClick, point: DesktopInputPoint) => {
-			armKeyboardCapture();
+		(
+			click: DesktopManualPointerClick,
+			point: DesktopInputPoint,
+			options: { captureKeyboard?: boolean } = {},
+		) => {
+			if (options.captureKeyboard ?? true) {
+				armKeyboardCapture();
+			}
 			showDesktopClickRipple(
 				click.clientX,
 				click.clientY,
@@ -3114,6 +3279,7 @@ export function ComputerUseDesktopViewport({
 					clicks: event.detail > 1 ? 2 : 1,
 				},
 				point,
+				{ captureKeyboard: false },
 			);
 		},
 		[
@@ -3303,11 +3469,14 @@ export function ComputerUseDesktopViewport({
 	const handleWheel = useCallback(
 		(event: WheelEvent<HTMLElement>) => {
 			if (state !== "manual") return;
+			const deltaX = Math.round(event.deltaX);
+			const deltaY = Math.round(event.deltaY);
+			if (deltaX === 0 && deltaY === 0) return;
 			event.preventDefault();
 			sendManualInput({
 				action: "scroll",
-				deltaX: Math.round(event.deltaX),
-				deltaY: Math.round(event.deltaY),
+				deltaX,
+				deltaY,
 			});
 		},
 		[sendManualInput, state],
@@ -3451,10 +3620,11 @@ export function ComputerUseDesktopViewport({
 	const showMobilePrompt = presentation.isMobile && hasLiveVideo;
 	const toolbarWorking = isAgentWorking || toolbarPromptPending;
 	const activeManualControlId = manualControlIdRef.current ?? manualControlId;
+	const canCaptureKeyboard =
+		state === "manual" && Boolean(activeManualControlId);
 	const keyboardCaptured =
-		state === "manual" &&
+		canCaptureKeyboard &&
 		keyboardCaptureState !== "inactive" &&
-		Boolean(activeManualControlId) &&
 		keyboardCaptureManualControlIdRef.current === activeManualControlId;
 
 	return (
@@ -3641,6 +3811,31 @@ export function ComputerUseDesktopViewport({
 								{state === "manual" ? "Release" : "Manual"}
 							</span>
 						</Button>
+						{presentation.isMobile ? (
+							<Button
+								type="button"
+								size="sm"
+								variant="ghost"
+								aria-label={
+									keyboardCaptured
+										? "Hide desktop keyboard"
+										: "Show desktop keyboard"
+								}
+								aria-pressed={keyboardCaptured}
+								className={toolbarButtonClassName}
+								disabled={!canCaptureKeyboard}
+								onClick={() => {
+									if (keyboardCaptured) {
+										disarmKeyboardCapture({ flushText: true });
+									} else {
+										armKeyboardCapture();
+									}
+								}}
+							>
+								<Keyboard className={toolbarIconClassName} aria-hidden="true" />
+								<span className={toolbarLabelClassName}>Keyboard</span>
+							</Button>
+						) : null}
 						<Button
 							type="button"
 							size="sm"
@@ -3770,11 +3965,27 @@ function DesktopViewportEmptyState({
 	state: DesktopViewportState;
 	status: string;
 }) {
+	const isLoading = state === "connecting";
+
 	return (
 		<div className="relative flex max-w-sm flex-col items-center px-6 text-center">
-			<div className="flex size-14 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-200 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-				<Monitor className="h-6 w-6" aria-hidden="true" />
-			</div>
+			{isLoading ? (
+				<div className="cloud-halo-soft relative flex size-20 items-center justify-center">
+					<span
+						aria-hidden="true"
+						className="absolute inset-0 rounded-full xero-loading-ring"
+						style={{
+							border:
+								"1px solid color-mix(in oklab, var(--primary) 42%, transparent)",
+						}}
+					/>
+					<BrandLogo className="h-7 w-7 xero-loading-breathe" />
+				</div>
+			) : (
+				<div className="flex size-14 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-200 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+					<Monitor className="h-6 w-6" aria-hidden="true" />
+				</div>
+			)}
 			<h3 className="mt-4 text-[15px] font-semibold tracking-tight text-zinc-100">
 				{status}
 			</h3>

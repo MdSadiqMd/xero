@@ -18,7 +18,7 @@ export function SessionTopBar({
 	accessorySlotRef,
 }: SessionTopBarProps) {
 	return (
-		<header className="sticky top-0 z-20 flex items-center justify-between gap-1.5 bg-background px-3.5 lg:px-5 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] lg:py-4">
+		<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-1.5 bg-background px-3.5 lg:px-5 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] lg:py-4">
 			<span
 				aria-hidden
 				className="pointer-events-none absolute inset-x-0 -top-6 h-20 opacity-50"
