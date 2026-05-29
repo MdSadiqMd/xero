@@ -472,6 +472,7 @@ jobs:
         with:
           workspaces: client/src-tauri -> target
           shared-key: ${{ matrix.artifact_suffix }}
+          save-if: ${{ matrix.platform_key != 'windows-x86_64' }}
 
       - name: Install frontend dependencies
         working-directory: client
