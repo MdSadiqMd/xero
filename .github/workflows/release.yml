@@ -553,6 +553,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
           spctl --assess --type execute --verbose "$APP_BUNDLE"
           bash client/src-tauri/scripts/verify-macos-portable-linkage.sh "$APP_BUNDLE"
+          bash client/src-tauri/scripts/verify-macos-desktop-sidecar.sh "$APP_BUNDLE"
 
       - name: Check Azure Windows signing configuration
         id: windows_signing_config

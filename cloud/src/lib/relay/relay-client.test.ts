@@ -539,6 +539,53 @@ describe("pushInboundCommand", () => {
 		);
 	});
 
+	it("sends manual drag input with target coordinates and stream security fields", () => {
+		const push = vi.fn();
+
+		sendComputerUseManualInput({ push } as never, {
+			computerId: "desktop-1",
+			sessionId: "session-1",
+			deviceId: "web-1",
+			manualControlId: "manual-web-1",
+			runId: "run-1",
+			streamToken: "stream-token-1",
+			input: {
+				action: "mouse_drag",
+				x: 100,
+				y: 120,
+				toX: 540,
+				toY: 360,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
+			},
+		});
+
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				computer_id: "desktop-1",
+				session_id: "session-1",
+				device_id: "web-1",
+				kind: "computer_use_manual_control_input",
+				payload: {
+					manualControlId: "manual-web-1",
+					reason: "cloud_manual_control_input",
+					action: "mouse_drag",
+					x: 100,
+					y: 120,
+					toX: 540,
+					toY: 360,
+					sourceWidth: 1280,
+					sourceHeight: 720,
+					button: "left",
+					runId: "run-1",
+					streamToken: "stream-token-1",
+				},
+			}),
+		);
+	});
+
 	it("sends manual keyboard payloads through the brokered input frame", () => {
 		const push = vi.fn();
 		const baseOptions = {

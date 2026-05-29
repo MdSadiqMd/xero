@@ -3959,23 +3959,11 @@ fn resolve_desktop_sidecar_binary() -> Result<PathBuf, String> {
     #[cfg(not(test))]
     {
         let binary_name = desktop_sidecar_binary_name();
-        let mut candidates = Vec::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                candidates.push(dir.join(&binary_name));
-                candidates.push(dir.join("../Resources").join(&binary_name));
-            }
-        }
-        if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
-            let manifest_dir = PathBuf::from(manifest_dir);
-            candidates.push(manifest_dir.join("resources").join(&binary_name));
-            if let Some(target_dir) = manifest_dir.parent() {
-                candidates.push(target_dir.join("target/debug").join(&binary_name));
-                candidates.push(target_dir.join("target/release").join(&binary_name));
-            }
-        }
-
-        candidates
+        desktop_sidecar_binary_candidates(
+            &binary_name,
+            std::env::current_exe().ok(),
+            option_env!("CARGO_MANIFEST_DIR").map(PathBuf::from),
+        )
             .into_iter()
             .find_map(|candidate| validate_sidecar_binary_path(candidate).ok())
             .ok_or_else(|| {
@@ -3985,6 +3973,30 @@ fn resolve_desktop_sidecar_binary() -> Result<PathBuf, String> {
                 )
             })
     }
+}
+
+fn desktop_sidecar_binary_candidates(
+    binary_name: &str,
+    current_exe: Option<PathBuf>,
+    manifest_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(exe) = current_exe {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(binary_name));
+            let bundled_resources_dir = dir.join("../Resources");
+            candidates.push(bundled_resources_dir.join(binary_name));
+            candidates.push(bundled_resources_dir.join("resources").join(binary_name));
+        }
+    }
+    if let Some(manifest_dir) = manifest_dir {
+        candidates.push(manifest_dir.join("resources").join(binary_name));
+        if let Some(target_dir) = manifest_dir.parent() {
+            candidates.push(target_dir.join("target/debug").join(binary_name));
+            candidates.push(target_dir.join("target/release").join(binary_name));
+        }
+    }
+    candidates
 }
 
 #[cfg(not(test))]
@@ -6437,6 +6449,22 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_candidates_include_tauri_preserved_resource_path() {
+        let exe = PathBuf::from("Xero.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("xero-desktop");
+        let resources_dir = PathBuf::from("Xero.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("../Resources");
+        let candidates = desktop_sidecar_binary_candidates("xero-desktop-sidecar", Some(exe), None);
+
+        assert!(candidates.contains(&resources_dir.join("xero-desktop-sidecar")));
+        assert!(candidates.contains(&resources_dir.join("resources").join("xero-desktop-sidecar")));
+    }
+
+    #[test]
     fn cloud_manual_input_requires_active_controller_lease() {
         let repo = tempdir().expect("tempdir");
         let runtime = AutonomousToolRuntime::new(repo.path()).expect("runtime");
@@ -7094,6 +7122,48 @@ mod tests {
             desktop_control_sidecar_operation(&request.action),
             Some(DesktopSidecarOperation::MouseClick)
         );
+    }
+
+    #[test]
+    fn manual_control_drag_sidecar_request_preserves_target_coordinates() {
+        let request = AutonomousDesktopControlRequest {
+            action: AutonomousDesktopControlAction::MouseDrag,
+            display_id: None,
+            window_id: None,
+            app_name: None,
+            bundle_id: None,
+            element_id: None,
+            x: Some(10),
+            y: Some(20),
+            source_width: Some(1280),
+            source_height: Some(720),
+            to_x: Some(300),
+            to_y: Some(240),
+            delta_x: None,
+            delta_y: None,
+            button: Some(AutonomousDesktopMouseButton::Left),
+            clicks: None,
+            key: None,
+            keys: Vec::new(),
+            text: None,
+            value: None,
+            menu_path: Vec::new(),
+            reason: Some("cloud_manual_control_input".into()),
+            sensitivity: None,
+        };
+
+        validate_desktop_control_request(&request).expect("valid drag request");
+        let sidecar = sidecar_control_request(&request);
+
+        assert_eq!(
+            desktop_control_sidecar_operation(&request.action),
+            Some(DesktopSidecarOperation::MouseDrag)
+        );
+        assert_eq!(sidecar.x, Some(10));
+        assert_eq!(sidecar.y, Some(20));
+        assert_eq!(sidecar.to_x, Some(300));
+        assert_eq!(sidecar.to_y, Some(240));
+        assert_eq!(sidecar.button, Some(DesktopSidecarMouseButton::Left));
     }
 
     #[test]

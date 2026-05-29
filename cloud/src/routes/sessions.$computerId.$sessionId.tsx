@@ -915,7 +915,7 @@ const MANUAL_KEYBOARD_TEXT_MAX_CHARS = 8_000;
 const MANUAL_KEYBOARD_COMPOSITION_DUPLICATE_MS = 80;
 const DESKTOP_MOBILE_ZOOM_MIN = 1;
 const DESKTOP_MOBILE_ZOOM_MAX = 4;
-const DESKTOP_MOBILE_TAP_SLOP_PX = 8;
+const DESKTOP_POINTER_TAP_SLOP_PX = 8;
 
 type ManualKeyboardCaptureState = "inactive" | "armed" | "composing";
 
@@ -948,6 +948,22 @@ interface DesktopClickRipple {
 	id: number;
 	x: number;
 	y: number;
+}
+
+interface DesktopManualPointerClick {
+	button: number;
+	clientX: number;
+	clientY: number;
+	clicks: number;
+}
+
+interface DesktopManualPointerGesture extends DesktopManualPointerClick {
+	dragging: boolean;
+	latestPoint: DesktopInputPoint;
+	pointerId: number;
+	startClientX: number;
+	startClientY: number;
+	startPoint: DesktopInputPoint;
 }
 
 function desktopMediaContentRect(
@@ -1676,6 +1692,10 @@ export function ComputerUseDesktopViewport({
 	);
 	const manualControlIdRef = useRef<string | null>(null);
 	const keyboardCaptureManualControlIdRef = useRef<string | null>(null);
+	const manualPointerGestureRef = useRef<DesktopManualPointerGesture | null>(
+		null,
+	);
+	const manualPointerGestureResetKeyRef = useRef("");
 	const lastPointerMoveAtRef = useRef(0);
 	const desktopSurfaceRef = useRef<HTMLElement | null>(null);
 	const controlBarRef = useRef<HTMLDivElement | null>(null);
@@ -1719,6 +1739,7 @@ export function ComputerUseDesktopViewport({
 		presentation.rotateDesktop && hasVisibleDesktopMedia;
 	const presentationModeKey = `${presentation.isMobile}:${shouldRotateDesktopContent}`;
 	const mobileViewportResetKey = `${computerId}:${sessionId}:${presentationModeKey}`;
+	const manualPointerGestureResetKey = `${mobileViewportResetKey}:${streamId ?? ""}`;
 	const setClampedMobileViewportTransform = useCallback(
 		(transform: DesktopMobileViewportTransform) => {
 			const rect = desktopSurfaceRef.current?.getBoundingClientRect() ?? null;
@@ -1737,6 +1758,18 @@ export function ComputerUseDesktopViewport({
 		mobileViewportTransformRef.current =
 			DEFAULT_DESKTOP_MOBILE_VIEWPORT_TRANSFORM;
 		setMobileViewportTransform(DEFAULT_DESKTOP_MOBILE_VIEWPORT_TRANSFORM);
+	}, []);
+	const clearManualPointerGesture = useCallback(() => {
+		const gesture = manualPointerGestureRef.current;
+		if (!gesture) return;
+		manualPointerGestureRef.current = null;
+		const surface = desktopSurfaceRef.current;
+		if (!surface) return;
+		try {
+			surface.releasePointerCapture(gesture.pointerId);
+		} catch {
+			// The browser may have already dropped capture after cancel/release.
+		}
 	}, []);
 
 	useEffect(() => {
@@ -1777,6 +1810,7 @@ export function ComputerUseDesktopViewport({
 			mobileTouchPointersRef.current.clear();
 			mobileTapPointerIdRef.current = null;
 			mobilePinchGestureRef.current = null;
+			manualPointerGestureRef.current = null;
 			if (textBatchTimeoutRef.current !== null) {
 				window.clearTimeout(textBatchTimeoutRef.current);
 				textBatchTimeoutRef.current = null;
@@ -1795,6 +1829,20 @@ export function ComputerUseDesktopViewport({
 	useEffect(() => {
 		manualControlIdRef.current = manualControlId;
 	}, [manualControlId]);
+
+	useEffect(() => {
+		if (state !== "manual") clearManualPointerGesture();
+	}, [clearManualPointerGesture, state]);
+
+	useEffect(() => {
+		if (
+			manualPointerGestureResetKeyRef.current === manualPointerGestureResetKey
+		) {
+			return;
+		}
+		manualPointerGestureResetKeyRef.current = manualPointerGestureResetKey;
+		clearManualPointerGesture();
+	}, [clearManualPointerGesture, manualPointerGestureResetKey]);
 
 	useEffect(() => {
 		streamQualityRef.current = streamQuality;
@@ -2348,6 +2396,7 @@ export function ComputerUseDesktopViewport({
 
 	const startStream = () => {
 		if (!channel || !deviceId) return;
+		clearManualPointerGesture();
 		disarmKeyboardCaptureRef.current?.();
 		streamStopRequestedRef.current = false;
 		liveVideoSeenRef.current = false;
@@ -2372,6 +2421,7 @@ export function ComputerUseDesktopViewport({
 	};
 	const stopStream = () => {
 		if (!channel || !deviceId) return;
+		clearManualPointerGesture();
 		disarmKeyboardCaptureRef.current?.({ flushText: true });
 		const activeStreamId = streamIdRef.current ?? streamId;
 		const activeManualControlId = manualControlIdRef.current ?? manualControlId;
@@ -2403,6 +2453,7 @@ export function ComputerUseDesktopViewport({
 	};
 	const requestManual = () => {
 		if (!channel || !deviceId) return;
+		clearManualPointerGesture();
 		disarmKeyboardCaptureRef.current?.();
 		const nextManualControlId =
 			manualControlIdRef.current ?? createManualControlId(deviceId, sessionId);
@@ -2421,6 +2472,7 @@ export function ComputerUseDesktopViewport({
 	};
 	const releaseManual = () => {
 		if (!channel || !deviceId) return;
+		clearManualPointerGesture();
 		disarmKeyboardCaptureRef.current?.({ flushText: true });
 		const activeManualControlId = manualControlIdRef.current ?? manualControlId;
 		releaseComputerUseManualControl(channel, {
@@ -2834,7 +2886,8 @@ export function ComputerUseDesktopViewport({
 	);
 	const showDesktopClickRipple = useCallback(
 		(
-			event: PointerEvent<HTMLElement>,
+			clientX: number,
+			clientY: number,
 			button: DesktopClickRipple["button"],
 		) => {
 			const surface = desktopSurfaceRef.current;
@@ -2854,29 +2907,30 @@ export function ComputerUseDesktopViewport({
 				{
 					button,
 					id,
-					x: event.clientX - surfaceRect.left,
-					y: event.clientY - surfaceRect.top,
+					x: clientX - surfaceRect.left,
+					y: clientY - surfaceRect.top,
 				},
 			]);
 		},
 		[],
 	);
 	const sendManualPointerClick = useCallback(
-		(event: PointerEvent<HTMLElement>, point: DesktopInputPoint) => {
+		(click: DesktopManualPointerClick, point: DesktopInputPoint) => {
 			armKeyboardCapture();
 			showDesktopClickRipple(
-				event,
-				event.button === 2 ? "secondary" : "primary",
+				click.clientX,
+				click.clientY,
+				click.button === 2 ? "secondary" : "primary",
 			);
 			sendManualInput({
-				action: event.button === 2 ? "mouse_right_click" : "mouse_click",
+				action: click.button === 2 ? "mouse_right_click" : "mouse_click",
 				x: point.x,
 				y: point.y,
 				sourceWidth: point.sourceWidth,
 				sourceHeight: point.sourceHeight,
 				button:
-					event.button === 1 ? "middle" : event.button === 2 ? "right" : "left",
-				clicks: event.detail > 1 ? 2 : 1,
+					click.button === 1 ? "middle" : click.button === 2 ? "right" : "left",
+				clicks: click.clicks,
 			});
 		},
 		[armKeyboardCapture, sendManualInput, showDesktopClickRipple],
@@ -2971,7 +3025,7 @@ export function ComputerUseDesktopViewport({
 				Math.hypot(
 					pointer.clientX - pointer.startClientX,
 					pointer.clientY - pointer.startClientY,
-				) > DESKTOP_MOBILE_TAP_SLOP_PX
+				) > DESKTOP_POINTER_TAP_SLOP_PX
 			) {
 				pointer.moved = true;
 				if (mobileTapPointerIdRef.current === pointer.pointerId) {
@@ -3052,7 +3106,15 @@ export function ComputerUseDesktopViewport({
 				disarmKeyboardCapture();
 				return;
 			}
-			sendManualPointerClick(event, point);
+			sendManualPointerClick(
+				{
+					button: event.button,
+					clientX: event.clientX,
+					clientY: event.clientY,
+					clicks: event.detail > 1 ? 2 : 1,
+				},
+				point,
+			);
 		},
 		[
 			beginMobilePinchGesture,
@@ -3070,28 +3132,47 @@ export function ComputerUseDesktopViewport({
 				return;
 			}
 			if (state !== "manual") {
+				clearManualPointerGesture();
 				disarmKeyboardCapture();
 				return;
 			}
 			if (event.button > 2) {
+				clearManualPointerGesture();
 				disarmKeyboardCapture();
 				return;
 			}
 			const point = pointFromPointerEvent(event);
 			if (!point) {
+				clearManualPointerGesture();
 				disarmKeyboardCapture();
 				return;
 			}
 			event.preventDefault();
-			event.currentTarget.setPointerCapture(event.pointerId);
-			sendManualPointerClick(event, point);
+			clearManualPointerGesture();
+			try {
+				event.currentTarget.setPointerCapture(event.pointerId);
+			} catch {
+				// Embedded webviews can occasionally deny capture during teardown.
+			}
+			manualPointerGestureRef.current = {
+				button: event.button,
+				clientX: event.clientX,
+				clientY: event.clientY,
+				clicks: event.detail > 1 ? 2 : 1,
+				dragging: false,
+				latestPoint: point,
+				pointerId: event.pointerId,
+				startClientX: event.clientX,
+				startClientY: event.clientY,
+				startPoint: point,
+			};
 		},
 		[
+			clearManualPointerGesture,
 			disarmKeyboardCapture,
 			handleMobileTouchPointerDown,
 			pointFromPointerEvent,
 			presentation.isMobile,
-			sendManualPointerClick,
 			state,
 		],
 	);
@@ -3099,6 +3180,21 @@ export function ComputerUseDesktopViewport({
 		(event: PointerEvent<HTMLElement>) => {
 			if (presentation.isMobile && event.pointerType === "touch") {
 				handleMobileTouchPointerMove(event);
+				return;
+			}
+			const gesture = manualPointerGestureRef.current;
+			if (gesture?.pointerId === event.pointerId) {
+				event.preventDefault();
+				if (
+					Math.hypot(
+						event.clientX - gesture.startClientX,
+						event.clientY - gesture.startClientY,
+					) > DESKTOP_POINTER_TAP_SLOP_PX
+				) {
+					gesture.dragging = true;
+				}
+				const point = pointFromPointerEvent(event);
+				if (point) gesture.latestPoint = point;
 				return;
 			}
 			if (state !== "manual" || event.buttons === 0) return;
@@ -3127,17 +3223,82 @@ export function ComputerUseDesktopViewport({
 		(event: PointerEvent<HTMLElement>) => {
 			if (presentation.isMobile && event.pointerType === "touch") {
 				handleMobileTouchPointerEnd(event);
+				return;
 			}
+			const gesture = manualPointerGestureRef.current;
+			if (!gesture || gesture.pointerId !== event.pointerId) return;
+			event.preventDefault();
+			manualPointerGestureRef.current = null;
+			try {
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			} catch {
+				// Capture can already be gone after browser-level cancellation.
+			}
+			const releasePoint = pointFromPointerEvent(event);
+			const targetPoint = releasePoint ?? gesture.latestPoint;
+			const movedBeyondSlop =
+				gesture.dragging ||
+				Math.hypot(
+					event.clientX - gesture.startClientX,
+					event.clientY - gesture.startClientY,
+				) > DESKTOP_POINTER_TAP_SLOP_PX;
+			if (!movedBeyondSlop) {
+				sendManualPointerClick(
+					{
+						button: gesture.button,
+						clientX: gesture.startClientX,
+						clientY: gesture.startClientY,
+						clicks: gesture.clicks,
+					},
+					gesture.startPoint,
+				);
+				return;
+			}
+			if (gesture.button !== 0) return;
+			sendManualInput({
+				action: "mouse_drag",
+				x: gesture.startPoint.x,
+				y: gesture.startPoint.y,
+				toX: targetPoint.x,
+				toY: targetPoint.y,
+				sourceWidth: gesture.startPoint.sourceWidth,
+				sourceHeight: gesture.startPoint.sourceHeight,
+				button: "left",
+			});
 		},
-		[handleMobileTouchPointerEnd, presentation.isMobile],
+		[
+			handleMobileTouchPointerEnd,
+			pointFromPointerEvent,
+			presentation.isMobile,
+			sendManualInput,
+			sendManualPointerClick,
+		],
 	);
 	const handlePointerCancel = useCallback(
 		(event: PointerEvent<HTMLElement>) => {
 			if (presentation.isMobile && event.pointerType === "touch") {
 				handleMobileTouchPointerEnd(event, true);
+				return;
+			}
+			if (manualPointerGestureRef.current?.pointerId !== event.pointerId) {
+				return;
+			}
+			event.preventDefault();
+			clearManualPointerGesture();
+		},
+		[
+			clearManualPointerGesture,
+			handleMobileTouchPointerEnd,
+			presentation.isMobile,
+		],
+	);
+	const handleLostPointerCapture = useCallback(
+		(event: PointerEvent<HTMLElement>) => {
+			if (manualPointerGestureRef.current?.pointerId === event.pointerId) {
+				manualPointerGestureRef.current = null;
 			}
 		},
-		[handleMobileTouchPointerEnd, presentation.isMobile],
+		[],
 	);
 	const handleWheel = useCallback(
 		(event: WheelEvent<HTMLElement>) => {
@@ -3315,6 +3476,7 @@ export function ComputerUseDesktopViewport({
 					onPointerMove={handlePointerMove}
 					onPointerUp={handlePointerUp}
 					onPointerCancel={handlePointerCancel}
+					onLostPointerCapture={handleLostPointerCapture}
 					onWheel={handleWheel}
 					className={cn(
 						"relative flex h-full min-h-0 overflow-hidden bg-zinc-950 outline-none",

@@ -117,8 +117,19 @@ helper_names=(
   xero-harness-evals
   tool-harness
   xero
+  xero-desktop-sidecar
+)
+resource_helper_paths=(
+  "$tauri_dir/resources/xero-desktop-sidecar"
 )
 codesign_timeout_seconds="${XERO_CODESIGN_TIMEOUT_SECONDS:-300}"
+
+sign_helper_binary() {
+  local helper_path="$1"
+  echo "Signing helper binary $helper_path"
+  run_with_timeout "$codesign_timeout_seconds" codesign --force --options runtime --timestamp --sign "$identity" "$helper_path"
+  signed_any=1
+}
 
 signed_any=0
 while IFS= read -r release_dir; do
@@ -128,11 +139,15 @@ while IFS= read -r release_dir; do
       continue
     fi
 
-    echo "Signing target helper binary $helper_path"
-    run_with_timeout "$codesign_timeout_seconds" codesign --force --options runtime --timestamp --sign "$identity" "$helper_path"
-    signed_any=1
+    sign_helper_binary "$helper_path"
   done
 done < <(find "$tauri_dir/target" -type d -path "*/release" 2>/dev/null | sort)
+
+for helper_path in "${resource_helper_paths[@]}"; do
+  if [ -f "$helper_path" ]; then
+    sign_helper_binary "$helper_path"
+  fi
+done
 
 if [ "$signed_any" -eq 0 ]; then
   echo "No target helper binaries found to sign."

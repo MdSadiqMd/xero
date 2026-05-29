@@ -6,7 +6,8 @@
   "bundle": {
     "resources": [
       "resources/scrcpy-server-v2.7.jar",
-      "resources/solana-toolchain/**/*"
+      "resources/solana-toolchain/**/*",
+      "resources/xero-desktop-sidecar*"
     ]
   }
 }

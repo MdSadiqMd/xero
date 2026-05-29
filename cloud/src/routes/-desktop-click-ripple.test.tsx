@@ -49,8 +49,17 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		const { desktop, image, push } = await renderManualDesktopViewport();
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
 		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
 
 		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			detail: 1,
+			pointerId: 7,
+		});
+		expect(push).not.toHaveBeenCalled();
+		fireEvent.pointerUp(desktop, {
 			button: 0,
 			clientX: 160,
 			clientY: 90,
@@ -83,8 +92,16 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		const { desktop, image, push } = await renderManualDesktopViewport();
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 640);
 		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 640);
+		push.mockClear();
 
 		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 410,
+			detail: 1,
+			pointerId: 8,
+		});
+		fireEvent.pointerUp(desktop, {
 			button: 0,
 			clientX: 160,
 			clientY: 410,
@@ -105,6 +122,180 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 				}),
 			}),
 		);
+	});
+
+	it("keeps a small pointer move within click slop as one click", async () => {
+		const { desktop, image, push } = await renderManualDesktopViewport();
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
+
+		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			detail: 1,
+			pointerId: 9,
+		});
+		fireEvent.pointerMove(desktop, {
+			buttons: 1,
+			clientX: 164,
+			clientY: 94,
+			pointerId: 9,
+		});
+		fireEvent.pointerUp(desktop, {
+			button: 0,
+			clientX: 164,
+			clientY: 94,
+			detail: 1,
+			pointerId: 9,
+		});
+
+		expect(push).toHaveBeenCalledTimes(1);
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_manual_control_input",
+				payload: expect.objectContaining({
+					action: "mouse_click",
+					x: 320,
+					y: 180,
+					sourceWidth: 1280,
+					sourceHeight: 720,
+				}),
+			}),
+		);
+	});
+
+	it("sends one left-button drag after movement exceeds click slop", async () => {
+		const { desktop, image, push } = await renderManualDesktopViewport();
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
+
+		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			detail: 1,
+			pointerId: 10,
+		});
+		fireEvent.pointerMove(desktop, {
+			buttons: 1,
+			clientX: 320,
+			clientY: 180,
+			pointerId: 10,
+		});
+		fireEvent.pointerUp(desktop, {
+			button: 0,
+			clientX: 320,
+			clientY: 180,
+			detail: 1,
+			pointerId: 10,
+		});
+
+		expect(push).toHaveBeenCalledTimes(1);
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_manual_control_input",
+				payload: expect.objectContaining({
+					action: "mouse_drag",
+					x: 320,
+					y: 180,
+					toX: 640,
+					toY: 360,
+					sourceWidth: 1280,
+					sourceHeight: 720,
+					button: "left",
+				}),
+			}),
+		);
+		expect(
+			push.mock.calls.some(
+				([, frame]) =>
+					(frame as { payload?: { action?: string } }).payload?.action ===
+					"mouse_click",
+			),
+		).toBe(false);
+		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
+	});
+
+	it("maps drag source and target against the painted stream area", async () => {
+		const { desktop, image, push } = await renderManualDesktopViewport();
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 640);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 640);
+		push.mockClear();
+
+		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 410,
+			detail: 1,
+			pointerId: 11,
+		});
+		fireEvent.pointerMove(desktop, {
+			buttons: 1,
+			clientX: 480,
+			clientY: 230,
+			pointerId: 11,
+		});
+		fireEvent.pointerUp(desktop, {
+			button: 0,
+			clientX: 480,
+			clientY: 230,
+			detail: 1,
+			pointerId: 11,
+		});
+
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_manual_control_input",
+				payload: expect.objectContaining({
+					action: "mouse_drag",
+					x: 320,
+					y: 540,
+					toX: 960,
+					toY: 180,
+					sourceWidth: 1280,
+					sourceHeight: 720,
+				}),
+			}),
+		);
+	});
+
+	it("does not send click or drag when a pointer gesture is cancelled", async () => {
+		const { desktop, image, push } = await renderManualDesktopViewport();
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
+
+		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			detail: 1,
+			pointerId: 12,
+		});
+		fireEvent.pointerMove(desktop, {
+			buttons: 1,
+			clientX: 320,
+			clientY: 180,
+			pointerId: 12,
+		});
+		fireEvent.pointerCancel(desktop, {
+			pointerId: 12,
+		});
+		fireEvent.pointerUp(desktop, {
+			button: 0,
+			clientX: 320,
+			clientY: 180,
+			pointerId: 12,
+		});
+
+		expect(push).not.toHaveBeenCalled();
+		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
 	});
 
 	it("zooms the mobile desktop stream with pinch gestures and maps the next tap through the zoomed media", async () => {
@@ -383,6 +574,13 @@ async function armManualKeyboardCapture() {
 	context.push.mockClear();
 
 	fireEvent.pointerDown(context.desktop, {
+		button: 0,
+		clientX: 160,
+		clientY: 90,
+		detail: 1,
+		pointerId: 10,
+	});
+	fireEvent.pointerUp(context.desktop, {
 		button: 0,
 		clientX: 160,
 		clientY: 90,
