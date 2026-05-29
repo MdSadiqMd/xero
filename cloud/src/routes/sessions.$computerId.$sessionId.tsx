@@ -39,6 +39,7 @@ import {
 } from "@xero/ui/model/runtime";
 import {
 	GripVertical,
+	Keyboard,
 	Monitor,
 	MousePointer2,
 	SendHorizontal,
@@ -64,6 +65,7 @@ import {
 	type WheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { BrandLogo } from "#/components/brand-logo";
 import { LoadingScreen } from "#/components/loading-screen";
 import { decodeRelayFrame } from "#/lib/relay/envelope";
 import {
@@ -659,14 +661,17 @@ function SessionView() {
 	const [desktopControlsOpen, setDesktopControlsOpen] = useState(false);
 	const [computerUseSidebarDensity, setComputerUseSidebarDensity] =
 		useState<ComputerUseSidebarDensity>("comfortable");
+	const mobileTextKeyboardActive = useMobileTextKeyboardActive();
 	const renderConversationPane = (
 		surface: "main" | "sidebar" = "main",
 		density: ComputerUseSidebarDensity = "comfortable",
 	) => {
 		const isSidebarSurface = surface === "sidebar";
 		const isCompactSidebar = isSidebarSurface && density === "compact";
+		const shouldCollapseEmptyState =
+			mobileTextKeyboardActive && !isSidebarSurface;
 		return (
-			<div className="relative min-h-0 flex-1">
+			<div className="relative h-full min-h-0 flex-1 overflow-hidden">
 				<div
 					ref={conversationViewportRef}
 					onScroll={handleConversationScroll}
@@ -687,14 +692,18 @@ function SessionView() {
 					>
 						{transcript ? (
 							turns.length === 0 ? (
-								<div className="flex flex-1 items-center justify-center">
-									<EmptySessionState
-										projectLabel={projectLabel}
-										context={isComputerUseSession ? "computer-use" : "default"}
-										variant={isCompactSidebar ? "dense" : "default"}
-										onSelectSuggestion={setDraftPrompt}
-									/>
-								</div>
+								shouldCollapseEmptyState ? null : (
+									<div className="flex flex-1 items-center justify-center">
+										<EmptySessionState
+											projectLabel={projectLabel}
+											context={
+												isComputerUseSession ? "computer-use" : "default"
+											}
+											variant={isCompactSidebar ? "dense" : "default"}
+											onSelectSuggestion={setDraftPrompt}
+										/>
+									</div>
+								)
 							) : (
 								<ConversationSection
 									runtimeRun={null}
@@ -815,6 +824,133 @@ function SessionView() {
 	);
 }
 
+const MOBILE_TEXT_KEYBOARD_MAX_WIDTH = 768;
+const MOBILE_TEXT_KEYBOARD_MIN_HEIGHT_LOSS = 96;
+
+function useMobileTextKeyboardActive() {
+	const [active, setActive] = useState(false);
+	const baselineHeightRef = useRef(0);
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+
+		const update = () => {
+			const nextActive = readMobileTextKeyboardActive(baselineHeightRef);
+			setActive((current) => (current === nextActive ? current : nextActive));
+		};
+		const resetBaseline = () => {
+			baselineHeightRef.current = 0;
+			update();
+		};
+		const visualViewport = window.visualViewport;
+
+		update();
+		window.addEventListener("resize", update);
+		window.addEventListener("orientationchange", resetBaseline);
+		visualViewport?.addEventListener("resize", update);
+		visualViewport?.addEventListener("scroll", update);
+		document.addEventListener("focusin", update);
+		document.addEventListener("focusout", update);
+
+		return () => {
+			window.removeEventListener("resize", update);
+			window.removeEventListener("orientationchange", resetBaseline);
+			visualViewport?.removeEventListener("resize", update);
+			visualViewport?.removeEventListener("scroll", update);
+			document.removeEventListener("focusin", update);
+			document.removeEventListener("focusout", update);
+		};
+	}, []);
+
+	return active;
+}
+
+function readMobileTextKeyboardActive(baselineHeightRef: { current: number }) {
+	const visualViewport = window.visualViewport;
+	const visualHeight = Math.round(visualViewport?.height ?? window.innerHeight);
+	const layoutHeight = Math.round(window.innerHeight || visualHeight);
+	const visualWidth = Math.round(visualViewport?.width ?? window.innerWidth);
+	const viewportWidth = Math.min(window.innerWidth || visualWidth, visualWidth);
+	const textEntryFocused = isTextEntryElement(document.activeElement);
+	const viewportHeight = Math.max(visualHeight, layoutHeight);
+
+	if (
+		baselineHeightRef.current === 0 ||
+		!textEntryFocused ||
+		viewportHeight > baselineHeightRef.current
+	) {
+		baselineHeightRef.current = viewportHeight;
+	}
+
+	const coarseMobileViewport =
+		typeof window.matchMedia === "function" &&
+		window.matchMedia(
+			`(pointer: coarse) and (max-width: ${
+				MOBILE_TEXT_KEYBOARD_MAX_WIDTH + 132
+			}px)`,
+		).matches;
+
+	return isMobileTextKeyboardOpenForSnapshot({
+		baselineHeight: baselineHeightRef.current,
+		coarseMobileViewport,
+		layoutHeight,
+		textEntryFocused,
+		viewportWidth,
+		visualHeight,
+	});
+}
+
+export function isMobileTextKeyboardOpenForSnapshot({
+	baselineHeight,
+	coarseMobileViewport = false,
+	layoutHeight,
+	textEntryFocused,
+	viewportWidth,
+	visualHeight,
+}: {
+	baselineHeight: number;
+	coarseMobileViewport?: boolean;
+	layoutHeight: number;
+	textEntryFocused: boolean;
+	viewportWidth: number;
+	visualHeight: number;
+}) {
+	const heightLoss = Math.max(
+		layoutHeight - visualHeight,
+		baselineHeight - visualHeight,
+	);
+	const keyboardThreshold = Math.max(
+		MOBILE_TEXT_KEYBOARD_MIN_HEIGHT_LOSS,
+		Math.min(180, baselineHeight * 0.15),
+	);
+
+	return (
+		textEntryFocused &&
+		heightLoss >= keyboardThreshold &&
+		(viewportWidth <= MOBILE_TEXT_KEYBOARD_MAX_WIDTH || coarseMobileViewport)
+	);
+}
+
+function isTextEntryElement(element: Element | null) {
+	if (!(element instanceof HTMLElement)) return false;
+	if (element.isContentEditable) return true;
+	if (element instanceof HTMLTextAreaElement) return true;
+	if (!(element instanceof HTMLInputElement)) return false;
+
+	return ![
+		"button",
+		"checkbox",
+		"color",
+		"file",
+		"hidden",
+		"image",
+		"radio",
+		"range",
+		"reset",
+		"submit",
+	].includes(element.type);
+}
+
 type DesktopViewportState =
 	| "waiting"
 	| "connecting"
@@ -831,7 +967,10 @@ const DESKTOP_STREAM_DATA_CHANNEL_LABEL = "xero-desktop-stream";
 const DESKTOP_STREAM_MAX_BUFFERED_FRAMES = 24;
 const DESKTOP_CONTROL_BAR_MARGIN = 12;
 const DESKTOP_CONTROL_BAR_DEFAULT_TOP = 24;
+const DESKTOP_PROMPT_BAR_DEFAULT_BOTTOM = 16;
 const DESKTOP_KEYFRAME_REFRESH_MS = 10_000;
+const DESKTOP_STREAM_CONNECTING_RETRY_MS = 7_000;
+const DESKTOP_STREAM_STALE_FRAME_MS = 8_000;
 const DESKTOP_STREAM_STATUS_INTERVAL_MS = 5_000;
 const DESKTOP_STREAM_FALLBACK_RECOVERY_COOLDOWN_MS = 2_500;
 const DESKTOP_ADAPTIVE_QUALITY_DOWNGRADE_COOLDOWN_MS = 6_000;
@@ -1312,12 +1451,22 @@ function ComputerUseDesktopDialog({
 			size="sm"
 			aria-label="Open desktop controls"
 			className="h-8 gap-2 px-2.5"
-			onClick={presentation.isMobile ? undefined : () => onOpenChange(true)}
+			onClick={
+				presentation.isMobile
+					? () => requestNativeDesktopOrientationLock()
+					: () => onOpenChange(true)
+			}
 		>
 			<Monitor className="h-4 w-4" aria-hidden="true" />
 			<span className="hidden sm:inline">Desktop</span>
 		</Button>
 	);
+
+	useEffect(() => {
+		if (!presentation.isMobile || !open) return;
+		requestNativeDesktopOrientationLock();
+		return () => unlockNativeDesktopOrientation();
+	}, [open, presentation.isMobile]);
 
 	if (!presentation.isMobile) {
 		return (
@@ -1473,8 +1622,6 @@ export function readDesktopControlPresentation(): DesktopControlPresentation {
 	const override = readDesktopControlPresentationOverride();
 	const width =
 		window.innerWidth || document.documentElement.clientWidth || 1024;
-	const height =
-		window.innerHeight || document.documentElement.clientHeight || 768;
 	const coarsePointer =
 		typeof window.matchMedia === "function" &&
 		window.matchMedia("(hover: none) and (pointer: coarse)").matches;
@@ -1486,8 +1633,22 @@ export function readDesktopControlPresentation(): DesktopControlPresentation {
 	return {
 		isMobile,
 		override,
-		rotateDesktop: isMobile && height > width,
+		rotateDesktop: false,
 	};
+}
+
+function requestNativeDesktopOrientationLock(): void {
+	if (typeof window === "undefined") return;
+	const orientation = window.screen?.orientation;
+	if (!orientation || typeof orientation.lock !== "function") return;
+	void orientation.lock("landscape").catch(() => undefined);
+}
+
+function unlockNativeDesktopOrientation(): void {
+	if (typeof window === "undefined") return;
+	const orientation = window.screen?.orientation;
+	if (!orientation || typeof orientation.unlock !== "function") return;
+	orientation.unlock();
 }
 
 function readDesktopControlPresentationOverride(): DesktopControlPresentationOverride {
@@ -1699,7 +1860,9 @@ export function ComputerUseDesktopViewport({
 	const lastPointerMoveAtRef = useRef(0);
 	const desktopSurfaceRef = useRef<HTMLElement | null>(null);
 	const controlBarRef = useRef<HTMLDivElement | null>(null);
+	const promptBarRef = useRef<HTMLDivElement | null>(null);
 	const controlBarDragRef = useRef<DesktopControlBarDrag | null>(null);
+	const promptBarDragRef = useRef<DesktopControlBarDrag | null>(null);
 	const clickRippleTimeoutsRef = useRef<Set<number>>(new Set());
 	const mobileViewportTransformRef = useRef<DesktopMobileViewportTransform>(
 		DEFAULT_DESKTOP_MOBILE_VIEWPORT_TRANSFORM,
@@ -1727,8 +1890,13 @@ export function ComputerUseDesktopViewport({
 	const adaptiveQualityLastChangedAtRef = useRef(0);
 	const liveVideoSeenRef = useRef(false);
 	const fallbackRecoveryLastAttemptAtRef = useRef(0);
+	const lastDesktopStreamRequestAtRef = useRef(0);
+	const lastDesktopVideoFrameAtRef = useRef(0);
+	const videoFrameCallbackIdRef = useRef<number | null>(null);
 	const streamStopRequestedRef = useRef(false);
 	const [controlBarPosition, setControlBarPosition] =
+		useState<DesktopControlBarPosition | null>(null);
+	const [promptBarPosition, setPromptBarPosition] =
 		useState<DesktopControlBarPosition | null>(null);
 	const [desktopSurfaceSize, setDesktopSurfaceSize] =
 		useState<DesktopSurfaceSize | null>(null);
@@ -1776,6 +1944,9 @@ export function ComputerUseDesktopViewport({
 		setControlBarPosition((position) =>
 			presentationModeKey && position ? null : position,
 		);
+		setPromptBarPosition((position) =>
+			presentationModeKey && position ? null : position,
+		);
 	}, [presentationModeKey]);
 
 	useEffect(() => {
@@ -1800,6 +1971,19 @@ export function ComputerUseDesktopViewport({
 			}
 			closeDesktopPeerConnection(peerConnectionRef.current);
 			peerConnectionRef.current = null;
+			const pendingVideo = videoRef.current as
+				| (HTMLVideoElement & {
+						cancelVideoFrameCallback?: (handle: number) => void;
+				  })
+				| null;
+			if (
+				pendingVideo &&
+				videoFrameCallbackIdRef.current !== null &&
+				typeof pendingVideo.cancelVideoFrameCallback === "function"
+			) {
+				pendingVideo.cancelVideoFrameCallback(videoFrameCallbackIdRef.current);
+			}
+			videoFrameCallbackIdRef.current = null;
 			pendingMediaStreamRef.current = null;
 			dataChannelFramesRef.current.clear();
 			if (videoRef.current) videoRef.current.srcObject = null;
@@ -1902,6 +2086,19 @@ export function ComputerUseDesktopViewport({
 		} = {}) => {
 			closeDesktopPeerConnection(peerConnectionRef.current);
 			peerConnectionRef.current = null;
+			const pendingVideo = videoRef.current as
+				| (HTMLVideoElement & {
+						cancelVideoFrameCallback?: (handle: number) => void;
+				  })
+				| null;
+			if (
+				pendingVideo &&
+				videoFrameCallbackIdRef.current !== null &&
+				typeof pendingVideo.cancelVideoFrameCallback === "function"
+			) {
+				pendingVideo.cancelVideoFrameCallback(videoFrameCallbackIdRef.current);
+			}
+			videoFrameCallbackIdRef.current = null;
 			pendingMediaStreamRef.current = null;
 			dataChannelFramesRef.current.clear();
 			if (videoRef.current) videoRef.current.srcObject = null;
@@ -1975,81 +2172,97 @@ export function ComputerUseDesktopViewport({
 		[showDesktopDataChannelFrame],
 	);
 
-	const ensurePeerConnection = useCallback(() => {
-		if (!channel || !deviceId) return null;
-		if (peerConnectionRef.current) return peerConnectionRef.current;
-		if (typeof RTCPeerConnection === "undefined") {
-			setState(fallbackPreviewUrl ? "degraded" : "waiting");
-			return null;
-		}
-		const peerConnection = new RTCPeerConnection({ iceServers });
-		peerConnection.ondatachannel = (event) => {
-			if (event.channel.label !== DESKTOP_STREAM_DATA_CHANNEL_LABEL) {
-				event.channel.close();
-				return;
+	const ensurePeerConnection = useCallback(
+		(options: { fresh?: boolean } = {}) => {
+			if (!channel || !deviceId) return null;
+			if (options.fresh && peerConnectionRef.current) {
+				closeDesktopPeerConnection(peerConnectionRef.current);
+				peerConnectionRef.current = null;
+				pendingMediaStreamRef.current = null;
+				dataChannelFramesRef.current.clear();
+				if (videoRef.current) videoRef.current.srcObject = null;
+				setHasLiveVideo(false);
 			}
-			event.channel.onmessage = handleDesktopDataChannelMessage;
-			event.channel.onopen = () => {
-				setState((current) => (current === "manual" ? current : "degraded"));
+			if (peerConnectionRef.current) return peerConnectionRef.current;
+			if (typeof RTCPeerConnection === "undefined") {
+				setState(fallbackPreviewUrl ? "degraded" : "waiting");
+				return null;
+			}
+			const peerConnection = new RTCPeerConnection({ iceServers });
+			peerConnection.ondatachannel = (event) => {
+				if (event.channel.label !== DESKTOP_STREAM_DATA_CHANNEL_LABEL) {
+					event.channel.close();
+					return;
+				}
+				event.channel.onmessage = handleDesktopDataChannelMessage;
+				event.channel.onopen = () => {
+					setState((current) => (current === "manual" ? current : "degraded"));
+				};
+				event.channel.onclose = () => {
+					setState((current) =>
+						current === "manual"
+							? current
+							: fallbackPreviewUrl
+								? "degraded"
+								: "paused",
+					);
+				};
 			};
-			event.channel.onclose = () => {
+			peerConnection.ontrack = (event) => {
+				const [mediaStream] = event.streams;
+				if (!mediaStream) return;
+				pendingMediaStreamRef.current = mediaStream;
+				if (videoRef.current) videoRef.current.srcObject = mediaStream;
+				liveVideoSeenRef.current = true;
+				lastDesktopVideoFrameAtRef.current = Date.now();
+				fallbackRecoveryLastAttemptAtRef.current = 0;
+				clearFallbackPreview();
+				setHasLiveVideo(true);
 				setState((current) =>
-					current === "manual"
-						? current
-						: fallbackPreviewUrl
-							? "degraded"
-							: "paused",
+					current === "manual" || manualControlIdRef.current
+						? "manual"
+						: "live",
 				);
 			};
-		};
-		peerConnection.ontrack = (event) => {
-			const [mediaStream] = event.streams;
-			if (!mediaStream) return;
-			pendingMediaStreamRef.current = mediaStream;
-			if (videoRef.current) videoRef.current.srcObject = mediaStream;
-			liveVideoSeenRef.current = true;
-			fallbackRecoveryLastAttemptAtRef.current = 0;
-			clearFallbackPreview();
-			setHasLiveVideo(true);
-			setState("live");
-		};
-		peerConnection.onicecandidate = (event) => {
-			if (!event.candidate || !channel || !deviceId) return;
-			sendComputerUseStreamIceCandidate(channel, {
-				computerId,
-				sessionId,
-				deviceId,
-				runId: streamRunId,
-				streamId: streamIdRef.current,
-				streamToken,
-				candidate: event.candidate.toJSON(),
-			});
-		};
-		peerConnection.onconnectionstatechange = () => {
-			if (
-				peerConnection.connectionState === "failed" ||
-				peerConnection.connectionState === "disconnected"
-			) {
-				setState(fallbackPreviewUrl ? "degraded" : "connecting");
-			}
-			if (peerConnection.connectionState === "closed") {
-				setState(fallbackPreviewUrl ? "degraded" : "paused");
-			}
-		};
-		peerConnectionRef.current = peerConnection;
-		return peerConnection;
-	}, [
-		channel,
-		clearFallbackPreview,
-		computerId,
-		deviceId,
-		fallbackPreviewUrl,
-		handleDesktopDataChannelMessage,
-		iceServers,
-		sessionId,
-		streamRunId,
-		streamToken,
-	]);
+			peerConnection.onicecandidate = (event) => {
+				if (!event.candidate || !channel || !deviceId) return;
+				sendComputerUseStreamIceCandidate(channel, {
+					computerId,
+					sessionId,
+					deviceId,
+					runId: streamRunId,
+					streamId: streamIdRef.current,
+					streamToken,
+					candidate: event.candidate.toJSON(),
+				});
+			};
+			peerConnection.onconnectionstatechange = () => {
+				if (
+					peerConnection.connectionState === "failed" ||
+					peerConnection.connectionState === "disconnected"
+				) {
+					setState(fallbackPreviewUrl ? "degraded" : "connecting");
+				}
+				if (peerConnection.connectionState === "closed") {
+					setState(fallbackPreviewUrl ? "degraded" : "paused");
+				}
+			};
+			peerConnectionRef.current = peerConnection;
+			return peerConnection;
+		},
+		[
+			channel,
+			clearFallbackPreview,
+			computerId,
+			deviceId,
+			fallbackPreviewUrl,
+			handleDesktopDataChannelMessage,
+			iceServers,
+			sessionId,
+			streamRunId,
+			streamToken,
+		],
+	);
 
 	const handleWebRtcSignal = useCallback(
 		async (payload: ComputerUseDesktopPayload) => {
@@ -2058,7 +2271,11 @@ export function ComputerUseDesktopViewport({
 				if (payload.schema === "xero.computer_use_stream_offer.v1") {
 					const offer = desktopStreamSessionDescription(payload, "offer");
 					if (!offer) return;
-					const peerConnection = ensurePeerConnection();
+					if (payload.streamId) {
+						streamIdRef.current = payload.streamId;
+						setStreamId(payload.streamId);
+					}
+					const peerConnection = ensurePeerConnection({ fresh: true });
 					if (!peerConnection) return;
 					setState("connecting");
 					await peerConnection.setRemoteDescription(offer);
@@ -2162,6 +2379,7 @@ export function ComputerUseDesktopViewport({
 			fallbackRecoveryLastAttemptAtRef.current = now;
 			clearDesktopStreamMedia({ clearPreview: true });
 			setState("connecting");
+			lastDesktopStreamRequestAtRef.current = now;
 			requestComputerUseStream(channel, {
 				computerId,
 				sessionId,
@@ -2382,6 +2600,44 @@ export function ComputerUseDesktopViewport({
 	}, [hasLiveVideo]);
 
 	useEffect(() => {
+		const video = videoRef.current as
+			| (HTMLVideoElement & {
+					requestVideoFrameCallback?: (callback: () => void) => number;
+					cancelVideoFrameCallback?: (handle: number) => void;
+			  })
+			| null;
+		if (!hasLiveVideo || !video) return;
+
+		let disposed = false;
+		const markFrame = () => {
+			lastDesktopVideoFrameAtRef.current = Date.now();
+		};
+		const scheduleFrameProbe = () => {
+			if (disposed || typeof video.requestVideoFrameCallback !== "function") {
+				return;
+			}
+			videoFrameCallbackIdRef.current = video.requestVideoFrameCallback(() => {
+				videoFrameCallbackIdRef.current = null;
+				markFrame();
+				scheduleFrameProbe();
+			});
+		};
+
+		markFrame();
+		scheduleFrameProbe();
+		return () => {
+			disposed = true;
+			if (
+				videoFrameCallbackIdRef.current !== null &&
+				typeof video.cancelVideoFrameCallback === "function"
+			) {
+				video.cancelVideoFrameCallback(videoFrameCallbackIdRef.current);
+			}
+			videoFrameCallbackIdRef.current = null;
+		};
+	}, [hasLiveVideo]);
+
+	useEffect(() => {
 		if (!canSend || !streamId || !KEYFRAME_REFRESH_STATES.has(state)) return;
 		const firstRequest = window.setTimeout(requestStreamKeyframe, 250);
 		const recurringRequest = window.setInterval(
@@ -2394,13 +2650,91 @@ export function ComputerUseDesktopViewport({
 		};
 	}, [canSend, requestStreamKeyframe, state, streamId]);
 
+	useEffect(() => {
+		if (!canSend || state !== "connecting") return;
+		const retryConnectingStream = () => {
+			if (streamStopRequestedRef.current) return;
+			const now = Date.now();
+			if (
+				now - lastDesktopStreamRequestAtRef.current <
+				DESKTOP_STREAM_CONNECTING_RETRY_MS
+			) {
+				return;
+			}
+			lastDesktopStreamRequestAtRef.current = now;
+			closeDesktopPeerConnection(peerConnectionRef.current);
+			peerConnectionRef.current = null;
+			pendingMediaStreamRef.current = null;
+			dataChannelFramesRef.current.clear();
+			if (videoRef.current) videoRef.current.srcObject = null;
+			setHasLiveVideo(false);
+			requestComputerUseStream(channel, {
+				computerId,
+				sessionId,
+				deviceId,
+				streamId: streamIdRef.current,
+				quality: streamQualityRef.current,
+				runId: streamRunId,
+				streamToken,
+				iceServers,
+			});
+		};
+		const handle = window.setInterval(retryConnectingStream, 1_000);
+		return () => window.clearInterval(handle);
+	}, [
+		canSend,
+		channel,
+		computerId,
+		deviceId,
+		iceServers,
+		sessionId,
+		state,
+		streamRunId,
+		streamToken,
+	]);
+
+	useEffect(() => {
+		if (
+			!canSend ||
+			!streamId ||
+			!hasLiveVideo ||
+			(state !== "live" && state !== "manual")
+		) {
+			return;
+		}
+		const recoverStaleVideo = () => {
+			if (streamStopRequestedRef.current) return;
+			const lastFrameAt = lastDesktopVideoFrameAtRef.current;
+			if (
+				!lastFrameAt ||
+				Date.now() - lastFrameAt < DESKTOP_STREAM_STALE_FRAME_MS
+			) {
+				return;
+			}
+			requestStreamKeyframe();
+			recoverDesktopWebRtcStream(streamIdRef.current);
+		};
+		const handle = window.setInterval(recoverStaleVideo, 1_000);
+		return () => window.clearInterval(handle);
+	}, [
+		canSend,
+		hasLiveVideo,
+		recoverDesktopWebRtcStream,
+		requestStreamKeyframe,
+		state,
+		streamId,
+	]);
+
 	const startStream = () => {
 		if (!channel || !deviceId) return;
+		if (presentation.isMobile) requestNativeDesktopOrientationLock();
 		clearManualPointerGesture();
 		disarmKeyboardCaptureRef.current?.();
 		streamStopRequestedRef.current = false;
 		liveVideoSeenRef.current = false;
 		fallbackRecoveryLastAttemptAtRef.current = 0;
+		lastDesktopStreamRequestAtRef.current = Date.now();
+		lastDesktopVideoFrameAtRef.current = 0;
 		streamIdRef.current = null;
 		streamQualityRef.current = "balanced";
 		adaptiveQualityMetricsRef.current = null;
@@ -2915,8 +3249,14 @@ export function ComputerUseDesktopViewport({
 		[],
 	);
 	const sendManualPointerClick = useCallback(
-		(click: DesktopManualPointerClick, point: DesktopInputPoint) => {
-			armKeyboardCapture();
+		(
+			click: DesktopManualPointerClick,
+			point: DesktopInputPoint,
+			options: { captureKeyboard?: boolean } = {},
+		) => {
+			if (options.captureKeyboard ?? true) {
+				armKeyboardCapture();
+			}
 			showDesktopClickRipple(
 				click.clientX,
 				click.clientY,
@@ -2980,7 +3320,6 @@ export function ComputerUseDesktopViewport({
 	}, [setClampedMobileViewportTransform]);
 	const handleMobileTouchPointerDown = useCallback(
 		(event: PointerEvent<HTMLElement>) => {
-			event.preventDefault();
 			try {
 				event.currentTarget.setPointerCapture(event.pointerId);
 			} catch {
@@ -3018,7 +3357,6 @@ export function ComputerUseDesktopViewport({
 		(event: PointerEvent<HTMLElement>) => {
 			const pointer = mobileTouchPointersRef.current.get(event.pointerId);
 			if (!pointer) return;
-			event.preventDefault();
 			pointer.clientX = event.clientX;
 			pointer.clientY = event.clientY;
 			if (
@@ -3066,7 +3404,6 @@ export function ComputerUseDesktopViewport({
 		(event: PointerEvent<HTMLElement>, cancelled = false) => {
 			const pointer = mobileTouchPointersRef.current.get(event.pointerId);
 			if (!pointer) return;
-			event.preventDefault();
 			try {
 				event.currentTarget.releasePointerCapture(event.pointerId);
 			} catch {
@@ -3114,6 +3451,7 @@ export function ComputerUseDesktopViewport({
 					clicks: event.detail > 1 ? 2 : 1,
 				},
 				point,
+				{ captureKeyboard: false },
 			);
 		},
 		[
@@ -3303,31 +3641,32 @@ export function ComputerUseDesktopViewport({
 	const handleWheel = useCallback(
 		(event: WheelEvent<HTMLElement>) => {
 			if (state !== "manual") return;
+			const deltaX = Math.round(event.deltaX);
+			const deltaY = Math.round(event.deltaY);
+			if (deltaX === 0 && deltaY === 0) return;
 			event.preventDefault();
 			sendManualInput({
 				action: "scroll",
-				deltaX: Math.round(event.deltaX),
-				deltaY: Math.round(event.deltaY),
+				deltaX,
+				deltaY,
 			});
 		},
 		[sendManualInput, state],
 	);
-	const clampControlBarPosition = useCallback(
-		(position: DesktopControlBarPosition): DesktopControlBarPosition => {
+	const clampFloatingBarPosition = useCallback(
+		(
+			position: DesktopControlBarPosition,
+			bar: HTMLElement | null,
+		): DesktopControlBarPosition => {
 			const surface = desktopSurfaceRef.current;
-			const controlBar = controlBarRef.current;
-			if (!surface || !controlBar) return position;
+			if (!surface || !bar) return position;
 			const maxX = Math.max(
 				DESKTOP_CONTROL_BAR_MARGIN,
-				surface.clientWidth -
-					controlBar.offsetWidth -
-					DESKTOP_CONTROL_BAR_MARGIN,
+				surface.clientWidth - bar.offsetWidth - DESKTOP_CONTROL_BAR_MARGIN,
 			);
 			const maxY = Math.max(
 				DESKTOP_CONTROL_BAR_MARGIN,
-				surface.clientHeight -
-					controlBar.offsetHeight -
-					DESKTOP_CONTROL_BAR_MARGIN,
+				surface.clientHeight - bar.offsetHeight - DESKTOP_CONTROL_BAR_MARGIN,
 			);
 			return {
 				x: Math.min(maxX, Math.max(DESKTOP_CONTROL_BAR_MARGIN, position.x)),
@@ -3335,6 +3674,16 @@ export function ComputerUseDesktopViewport({
 			};
 		},
 		[],
+	);
+	const clampControlBarPosition = useCallback(
+		(position: DesktopControlBarPosition): DesktopControlBarPosition =>
+			clampFloatingBarPosition(position, controlBarRef.current),
+		[clampFloatingBarPosition],
+	);
+	const clampPromptBarPosition = useCallback(
+		(position: DesktopControlBarPosition): DesktopControlBarPosition =>
+			clampFloatingBarPosition(position, promptBarRef.current),
+		[clampFloatingBarPosition],
 	);
 	const startControlBarDrag = useCallback(
 		(event: PointerEvent<HTMLButtonElement>) => {
@@ -3388,6 +3737,58 @@ export function ComputerUseDesktopViewport({
 		},
 		[],
 	);
+	const startPromptBarDrag = useCallback(
+		(event: PointerEvent<HTMLButtonElement>) => {
+			if (event.button !== 0) return;
+			const surface = desktopSurfaceRef.current;
+			const promptBar = promptBarRef.current;
+			if (!surface || !promptBar) return;
+			const surfaceRect = surface.getBoundingClientRect();
+			const promptBarRect = promptBar.getBoundingClientRect();
+			const origin = clampPromptBarPosition({
+				x: promptBarRect.left - surfaceRect.left,
+				y: promptBarRect.top - surfaceRect.top,
+			});
+			promptBarDragRef.current = {
+				pointerId: event.pointerId,
+				startClientX: event.clientX,
+				startClientY: event.clientY,
+				originX: origin.x,
+				originY: origin.y,
+			};
+			setPromptBarPosition(origin);
+			event.currentTarget.setPointerCapture(event.pointerId);
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		[clampPromptBarPosition],
+	);
+	const movePromptBarDrag = useCallback(
+		(event: PointerEvent<HTMLButtonElement>) => {
+			const drag = promptBarDragRef.current;
+			if (!drag || drag.pointerId !== event.pointerId) return;
+			setPromptBarPosition(
+				clampPromptBarPosition({
+					x: drag.originX + event.clientX - drag.startClientX,
+					y: drag.originY + event.clientY - drag.startClientY,
+				}),
+			);
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		[clampPromptBarPosition],
+	);
+	const endPromptBarDrag = useCallback(
+		(event: PointerEvent<HTMLButtonElement>) => {
+			const drag = promptBarDragRef.current;
+			if (!drag || drag.pointerId !== event.pointerId) return;
+			promptBarDragRef.current = null;
+			event.currentTarget.releasePointerCapture(event.pointerId);
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		[],
+	);
 	const controlBarStyle: CSSProperties = controlBarPosition
 		? {
 				left: controlBarPosition.x,
@@ -3406,6 +3807,19 @@ export function ComputerUseDesktopViewport({
 						: DESKTOP_CONTROL_BAR_DEFAULT_TOP,
 					transform: "translateX(-50%)",
 				};
+	const promptBarStyle: CSSProperties = {
+		width: "min(28rem, calc(100% - 24px))",
+		...(promptBarPosition
+			? {
+					left: promptBarPosition.x,
+					top: promptBarPosition.y,
+				}
+			: {
+					bottom: `calc(env(safe-area-inset-bottom) + ${DESKTOP_PROMPT_BAR_DEFAULT_BOTTOM}px)`,
+					left: "50%",
+					transform: "translateX(-50%)",
+				}),
+	};
 	const desktopMediaClassName = cn(
 		"object-contain",
 		shouldRotateDesktopContent
@@ -3448,13 +3862,14 @@ export function ComputerUseDesktopViewport({
 		shouldRotateDesktopContent && "rotate-90",
 	);
 	const toolbarLabelClassName = presentation.isMobile ? "sr-only" : undefined;
-	const showMobilePrompt = presentation.isMobile && hasLiveVideo;
+	const showMobilePrompt = presentation.isMobile && hasVisibleDesktopMedia;
 	const toolbarWorking = isAgentWorking || toolbarPromptPending;
 	const activeManualControlId = manualControlIdRef.current ?? manualControlId;
+	const canCaptureKeyboard =
+		state === "manual" && Boolean(activeManualControlId);
 	const keyboardCaptured =
-		state === "manual" &&
+		canCaptureKeyboard &&
 		keyboardCaptureState !== "inactive" &&
-		Boolean(activeManualControlId) &&
 		keyboardCaptureManualControlIdRef.current === activeManualControlId;
 
 	return (
@@ -3511,6 +3926,15 @@ export function ComputerUseDesktopViewport({
 								autoPlay
 								muted
 								playsInline
+								onLoadedData={() => {
+									lastDesktopVideoFrameAtRef.current = Date.now();
+								}}
+								onPlaying={() => {
+									lastDesktopVideoFrameAtRef.current = Date.now();
+								}}
+								onTimeUpdate={() => {
+									lastDesktopVideoFrameAtRef.current = Date.now();
+								}}
 								className={desktopMediaClassName}
 								style={desktopMediaStyle}
 							/>
@@ -3596,24 +4020,6 @@ export function ComputerUseDesktopViewport({
 								Keyboard captured
 							</Badge>
 						) : null}
-						{showMobilePrompt ? (
-							<>
-								<DesktopToolbarPromptForm
-									canSend={canSend}
-									isAgentWorking={isAgentWorking}
-									onPromptAccepted={() => setToolbarPromptPending(true)}
-									onSubmit={onPromptSubmit}
-									rotated={shouldRotateDesktopContent}
-								/>
-								<div
-									className={cn(
-										"bg-border/60",
-										shouldRotateDesktopContent ? "h-px w-5" : "h-5 w-px",
-									)}
-									aria-hidden="true"
-								/>
-							</>
-						) : null}
 						<Button
 							type="button"
 							size="sm"
@@ -3641,6 +4047,31 @@ export function ComputerUseDesktopViewport({
 								{state === "manual" ? "Release" : "Manual"}
 							</span>
 						</Button>
+						{presentation.isMobile ? (
+							<Button
+								type="button"
+								size="sm"
+								variant="ghost"
+								aria-label={
+									keyboardCaptured
+										? "Hide desktop keyboard"
+										: "Show desktop keyboard"
+								}
+								aria-pressed={keyboardCaptured}
+								className={toolbarButtonClassName}
+								disabled={!canCaptureKeyboard}
+								onClick={() => {
+									if (keyboardCaptured) {
+										disarmKeyboardCapture({ flushText: true });
+									} else {
+										armKeyboardCapture();
+									}
+								}}
+							>
+								<Keyboard className={toolbarIconClassName} aria-hidden="true" />
+								<span className={toolbarLabelClassName}>Keyboard</span>
+							</Button>
+						) : null}
 						<Button
 							type="button"
 							size="sm"
@@ -3672,6 +4103,49 @@ export function ComputerUseDesktopViewport({
 							</>
 						) : null}
 					</div>
+					{showMobilePrompt ? (
+						<div
+							ref={promptBarRef}
+							role="toolbar"
+							aria-label="Desktop prompt controls"
+							style={promptBarStyle}
+							onFocusCapture={() => disarmKeyboardCapture({ flushText: true })}
+							onPointerDown={(event) => {
+								disarmKeyboardCapture({ flushText: true });
+								event.stopPropagation();
+							}}
+							onKeyDown={(event) => event.stopPropagation()}
+							onWheel={(event) => event.stopPropagation()}
+							aria-busy={toolbarWorking || undefined}
+							className={cn(
+								"absolute z-20 flex items-center gap-1 rounded-xl border border-white/10 bg-background/70 p-1 text-foreground shadow-[0_18px_45px_rgba(0,0,0,0.45)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55",
+								toolbarWorking && "desktop-control-toolbar-working",
+							)}
+						>
+							<button
+								type="button"
+								aria-label="Move desktop prompt controls"
+								className="flex h-8 w-7 touch-none cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground active:cursor-grabbing"
+								onPointerDown={startPromptBarDrag}
+								onPointerMove={movePromptBarDrag}
+								onPointerUp={endPromptBarDrag}
+								onPointerCancel={endPromptBarDrag}
+							>
+								<GripVertical
+									className={toolbarIconClassName}
+									aria-hidden="true"
+								/>
+							</button>
+							<div className="h-6 w-px bg-border/60" aria-hidden="true" />
+							<DesktopToolbarPromptForm
+								canSend={canSend}
+								isAgentWorking={isAgentWorking}
+								onPromptAccepted={() => setToolbarPromptPending(true)}
+								onSubmit={onPromptSubmit}
+								rotated={false}
+							/>
+						</div>
+					) : null}
 				</section>
 			</div>
 		</>
@@ -3718,7 +4192,7 @@ export function DesktopToolbarPromptForm({
 				"desktop-control-mobile-prompt flex min-w-0 items-center gap-1 rounded-lg border border-white/10 bg-black/25 px-1.5 py-1 shadow-inner shadow-black/20",
 				rotated
 					? "desktop-control-mobile-prompt-rotated absolute left-1/2 top-1/2 h-8 w-[clamp(9rem,34dvh,18rem)] -translate-x-1/2 -translate-y-1/2 rotate-90"
-					: "w-[min(20rem,calc(100dvw-14rem))]",
+					: "flex-1",
 			)}
 			onSubmit={handleSubmit}
 			onPointerDown={(event) => event.stopPropagation()}
@@ -3770,11 +4244,27 @@ function DesktopViewportEmptyState({
 	state: DesktopViewportState;
 	status: string;
 }) {
+	const isLoading = state === "connecting";
+
 	return (
 		<div className="relative flex max-w-sm flex-col items-center px-6 text-center">
-			<div className="flex size-14 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-200 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-				<Monitor className="h-6 w-6" aria-hidden="true" />
-			</div>
+			{isLoading ? (
+				<div className="cloud-halo-soft relative flex size-20 items-center justify-center">
+					<span
+						aria-hidden="true"
+						className="absolute inset-0 rounded-full xero-loading-ring"
+						style={{
+							border:
+								"1px solid color-mix(in oklab, var(--primary) 42%, transparent)",
+						}}
+					/>
+					<BrandLogo className="h-7 w-7 xero-loading-breathe" />
+				</div>
+			) : (
+				<div className="flex size-14 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-200 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+					<Monitor className="h-6 w-6" aria-hidden="true" />
+				</div>
+			)}
 			<h3 className="mt-4 text-[15px] font-semibold tracking-tight text-zinc-100">
 				{status}
 			</h3>

@@ -45,6 +45,105 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		vi.clearAllMocks();
 	});
 
+	it("shows the pulsing logo while a requested stream is connecting", () => {
+		const push = vi.fn();
+		const channel = {
+			on: vi.fn(() => "frame-ref"),
+			off: vi.fn(),
+			push,
+		} as unknown as Channel;
+
+		render(
+			<ComputerUseDesktopViewport
+				channel={channel}
+				computerId="desktop-1"
+				deviceId="web-1"
+				iceServers={[]}
+				isAgentWorking={false}
+				isOnline
+				onPromptSubmit={vi.fn()}
+				previewUrl={null}
+				presentation={{
+					isMobile: false,
+					override: "desktop",
+					rotateDesktop: false,
+				}}
+				sessionId="session-1"
+				streamRunId="run-1"
+				streamToken="stream-token-1"
+			/>,
+		);
+
+		const desktop = screen.getByLabelText("Desktop");
+		const toolbar = within(desktop).getByRole("toolbar", {
+			name: "Desktop stream controls",
+		});
+		fireEvent.click(within(toolbar).getByRole("button", { name: /start/i }));
+
+		expect(screen.getByText("Connecting stream")).toBeTruthy();
+		expect(desktop.querySelector(".xero-loading-ring")).toBeTruthy();
+		expect(desktop.querySelector(".xero-loading-breathe")).toBeTruthy();
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_stream_request",
+				payload: expect.objectContaining({
+					quality: "balanced",
+					streamToken: "stream-token-1",
+				}),
+			}),
+		);
+	});
+
+	it("retries the desktop stream request when connecting stalls before media arrives", () => {
+		vi.useFakeTimers();
+		try {
+			const push = vi.fn();
+			const channel = {
+				on: vi.fn(() => "frame-ref"),
+				off: vi.fn(),
+				push,
+			} as unknown as Channel;
+
+			render(
+				<ComputerUseDesktopViewport
+					channel={channel}
+					computerId="desktop-1"
+					deviceId="web-1"
+					iceServers={[]}
+					isAgentWorking={false}
+					isOnline
+					onPromptSubmit={vi.fn()}
+					previewUrl={null}
+					presentation={{
+						isMobile: false,
+						override: "desktop",
+						rotateDesktop: false,
+					}}
+					sessionId="session-1"
+					streamRunId="run-1"
+					streamToken="stream-token-1"
+				/>,
+			);
+
+			const desktop = screen.getByLabelText("Desktop");
+			const toolbar = within(desktop).getByRole("toolbar", {
+				name: "Desktop stream controls",
+			});
+			fireEvent.click(within(toolbar).getByRole("button", { name: /start/i }));
+
+			expect(streamRequestCalls(push)).toHaveLength(1);
+
+			act(() => {
+				vi.advanceTimersByTime(7_000);
+			});
+
+			expect(streamRequestCalls(push)).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("shows a click ripple where manual input lands on the streamed desktop", async () => {
 		const { desktop, image, push } = await renderManualDesktopViewport();
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
@@ -298,6 +397,27 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
 	});
 
+	it("ignores zero-distance manual scroll events before they reach the desktop", async () => {
+		const { desktop, push } = await renderManualDesktopViewport();
+		push.mockClear();
+
+		fireEvent.wheel(desktop, { deltaX: 0.2, deltaY: -0.2 });
+		expect(push).not.toHaveBeenCalled();
+
+		fireEvent.wheel(desktop, { deltaX: 0.2, deltaY: 2.8 });
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_manual_control_input",
+				payload: expect.objectContaining({
+					action: "scroll",
+					deltaX: 0,
+					deltaY: 3,
+				}),
+			}),
+		);
+	});
+
 	it("zooms the mobile desktop stream with pinch gestures and maps the next tap through the zoomed media", async () => {
 		const { desktop, image, push } = await renderManualDesktopViewport({
 			presentation: {
@@ -389,6 +509,83 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 				}),
 			}),
 		);
+	});
+
+	it("keeps mobile taps from opening the keyboard until the toolbar button is used", async () => {
+		const { desktop, image, keyboard, push, toolbar } =
+			await renderManualDesktopViewport({
+				presentation: {
+					isMobile: true,
+					override: "mobile",
+					rotateDesktop: false,
+				},
+			});
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
+		const promptToolbar = within(desktop).getByRole("toolbar", {
+			name: "Desktop prompt controls",
+		});
+		expect(promptToolbar.getAttribute("style")).toContain("bottom:");
+		expect(
+			within(toolbar).queryByRole("form", { name: "Computer Use prompt" }),
+		).toBeNull();
+		expect(
+			within(promptToolbar).getByRole("form", {
+				name: "Computer Use prompt",
+			}),
+		).toBeTruthy();
+
+		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			pointerId: 31,
+			pointerType: "touch",
+		});
+		fireEvent.pointerUp(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			detail: 1,
+			pointerId: 31,
+			pointerType: "touch",
+		});
+
+		expect(document.activeElement).not.toBe(keyboard);
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_manual_control_input",
+				payload: expect.objectContaining({
+					action: "mouse_click",
+					x: 320,
+					y: 180,
+				}),
+			}),
+		);
+
+		push.mockClear();
+		fireEvent.click(
+			within(toolbar).getByRole("button", { name: "Show desktop keyboard" }),
+		);
+
+		await waitFor(() => {
+			expect(document.activeElement).toBe(keyboard);
+		});
+		fireTextInput(keyboard, "hi");
+		await waitFor(() => {
+			expect(push).toHaveBeenCalledWith(
+				"frame",
+				expect.objectContaining({
+					kind: "computer_use_manual_control_input",
+					payload: expect.objectContaining({
+						action: "type_text",
+						text: "hi",
+					}),
+				}),
+			);
+		});
 	});
 
 	it("arms keyboard capture after a manual desktop click and sends text input", async () => {
@@ -736,6 +933,13 @@ function relayFrame(payload: unknown) {
 				.replace(/=+$/, ""),
 		},
 	};
+}
+
+function streamRequestCalls(push: ReturnType<typeof vi.fn>) {
+	return push.mock.calls.filter(
+		([, frame]) =>
+			(frame as { kind?: string }).kind === "computer_use_stream_request",
+	);
 }
 
 function domRect(left: number, top: number, width: number, height: number) {

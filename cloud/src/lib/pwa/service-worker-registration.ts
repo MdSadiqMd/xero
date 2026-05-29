@@ -1,6 +1,7 @@
 export interface XeroCloudServiceWorkerRegistrationOptions {
 	serviceWorker?: ServiceWorkerContainer;
 	onUpdateReady?: (registration: ServiceWorkerRegistration) => void;
+	updateCheckIntervalMs?: number;
 }
 
 export interface XeroCloudServiceWorkerUpdateOptions {
@@ -15,8 +16,13 @@ export function registerXeroCloudServiceWorker(
 	if (!serviceWorker) return noop;
 
 	let disposed = false;
+	let cleanupUpdateChecks: () => void = noop;
 	const notifyUpdateReady = (registration: ServiceWorkerRegistration) => {
 		if (!disposed) options.onUpdateReady?.(registration);
+	};
+	const maybeCheckForUpdate = (registration: ServiceWorkerRegistration) => {
+		if (typeof registration.update !== "function") return;
+		void registration.update().catch(noop);
 	};
 
 	void serviceWorker.register("/sw.js", { scope: "/" }).then((registration) => {
@@ -24,6 +30,7 @@ export function registerXeroCloudServiceWorker(
 		if (registration.waiting && serviceWorker.controller) {
 			notifyUpdateReady(registration);
 		}
+		maybeCheckForUpdate(registration);
 
 		registration.addEventListener("updatefound", () => {
 			const installing = registration.installing;
@@ -39,10 +46,37 @@ export function registerXeroCloudServiceWorker(
 				}
 			});
 		});
+
+		if (typeof window === "undefined" || typeof document === "undefined") {
+			return;
+		}
+
+		const handleFocus = () => maybeCheckForUpdate(registration);
+		const handleVisibilityChange = () => {
+			if (document.visibilityState === "visible") {
+				maybeCheckForUpdate(registration);
+			}
+		};
+		window.addEventListener("focus", handleFocus);
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		const updateInterval =
+			options.updateCheckIntervalMs === 0
+				? null
+				: window.setInterval(
+						() => maybeCheckForUpdate(registration),
+						options.updateCheckIntervalMs ?? 5 * 60_000,
+					);
+		cleanupUpdateChecks = () => {
+			window.removeEventListener("focus", handleFocus);
+			document.removeEventListener("visibilitychange", handleVisibilityChange);
+			if (updateInterval !== null) window.clearInterval(updateInterval);
+		};
+		if (disposed) cleanupUpdateChecks();
 	});
 
 	return () => {
 		disposed = true;
+		cleanupUpdateChecks();
 	};
 }
 

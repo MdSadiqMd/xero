@@ -1,3 +1,5 @@
+/** @vitest-environment jsdom */
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -15,6 +17,7 @@ class MockRegistration extends EventTarget {
 	scope = "https://cloud.xeroshell.test/";
 	installing: MockWorker | null = null;
 	waiting: MockWorker | null = null;
+	update = vi.fn(async () => undefined);
 	unregister = vi.fn(async () => true);
 }
 
@@ -79,6 +82,26 @@ describe("service worker registration", () => {
 		await flushPromises();
 
 		expect(onUpdateReady).toHaveBeenCalledWith(registration);
+	});
+
+	it("checks for service worker updates on registration and when the PWA returns to focus", async () => {
+		const registration = new MockRegistration();
+		serviceWorker.register = vi.fn(async () => registration);
+
+		const dispose = registerXeroCloudServiceWorker({
+			serviceWorker: serviceWorker as unknown as ServiceWorkerContainer,
+			updateCheckIntervalMs: 0,
+		});
+		await flushPromises();
+
+		expect(registration.update).toHaveBeenCalledTimes(1);
+
+		window.dispatchEvent(new Event("focus"));
+		expect(registration.update).toHaveBeenCalledTimes(2);
+
+		dispose();
+		window.dispatchEvent(new Event("focus"));
+		expect(registration.update).toHaveBeenCalledTimes(2);
 	});
 
 	it("reloads only after the user activates a waiting service worker", () => {

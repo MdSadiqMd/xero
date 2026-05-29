@@ -90,7 +90,7 @@ function SessionsShell() {
 
 	return (
 		<SessionsShellContext.Provider value={shellContext}>
-			<div className="flex h-dvh bg-background text-foreground">
+			<div className="flex h-dvh overflow-hidden bg-background text-foreground">
 				<SessionSidebar
 					session={session as CloudSession}
 					visibleSessions={shell.visibleSessions}
@@ -103,7 +103,7 @@ function SessionsShell() {
 					pendingProjectKey={shell.pendingProjectKey}
 					isSessionDirectoryLoading={shell.isSessionDirectoryLoading}
 				/>
-				<main className="flex h-dvh min-w-0 flex-1 flex-col">
+				<main className="flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
 					<SessionTopBar
 						title={topBarTitle}
 						projectLabel={topBarProjectLabel}
@@ -134,7 +134,9 @@ function SessionsShell() {
 							/>
 						}
 					/>
-					{activeTarget ? <Outlet /> : <SessionsIndexContent />}
+					<div className="flex min-h-0 flex-1 overflow-hidden">
+						{activeTarget ? <Outlet /> : <SessionsIndexContent />}
+					</div>
 				</main>
 			</div>
 		</SessionsShellContext.Provider>

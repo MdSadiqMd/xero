@@ -11,9 +11,10 @@ export function PwaServiceWorkerManager() {
 	useEffect(() => {
 		return registerXeroCloudServiceWorker({
 			onUpdateReady: (registration) => {
+				activateWaitingXeroCloudServiceWorker(registration);
 				toast({
 					title: "Xero Cloud update ready",
-					description: "Reload when you are ready to use the latest version.",
+					description: "Reloading to use the latest version.",
 					duration: 30_000,
 					action: (
 						<ToastAction
