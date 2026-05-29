@@ -3943,6 +3943,34 @@ mod tests {
     }
 
     #[test]
+    fn manual_control_drag_payload_maps_to_desktop_control_request() {
+        let request = manual_control_input_request(&json!({
+            "action": "mouse_drag",
+            "x": 42,
+            "y": 64,
+            "toX": 320,
+            "toY": 240,
+            "sourceWidth": 1280,
+            "sourceHeight": 720,
+            "button": "left",
+        }))
+        .expect("manual drag input request");
+
+        assert_eq!(request.action, AutonomousDesktopControlAction::MouseDrag);
+        assert_eq!(request.x, Some(42));
+        assert_eq!(request.y, Some(64));
+        assert_eq!(request.to_x, Some(320));
+        assert_eq!(request.to_y, Some(240));
+        assert_eq!(request.source_width, Some(1280));
+        assert_eq!(request.source_height, Some(720));
+        assert_eq!(request.button, Some(AutonomousDesktopMouseButton::Left));
+        assert_eq!(
+            request.reason.as_deref(),
+            Some("cloud_manual_control_input")
+        );
+    }
+
+    #[test]
     fn manual_control_keyboard_payloads_map_to_desktop_control_requests() {
         let text_request = manual_control_input_request(&json!({
             "action": "type_text",

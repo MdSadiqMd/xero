@@ -8,11 +8,11 @@ use serde_json::json;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use xero_desktop_control_ipc::{
     hash_session_token, DesktopSidecarActor, DesktopSidecarAuth, DesktopSidecarAuthScheme,
-    DesktopSidecarCapabilities, DesktopSidecarHandshake, DesktopSidecarOperation,
-    DesktopSidecarPermissionsPayload, DesktopSidecarRequest, DesktopSidecarResponse,
-    DesktopSidecarStreamCapabilitiesPayload, DesktopSidecarStreamPayload,
-    DesktopSidecarStreamStatus, DesktopSidecarStreamTransport, DESKTOP_SIDECAR_PROTOCOL,
-    DESKTOP_SIDECAR_SCHEMA_VERSION,
+    DesktopSidecarCapabilities, DesktopSidecarControlRequest, DesktopSidecarHandshake,
+    DesktopSidecarMouseButton, DesktopSidecarOperation, DesktopSidecarPermissionsPayload,
+    DesktopSidecarRequest, DesktopSidecarResponse, DesktopSidecarStreamCapabilitiesPayload,
+    DesktopSidecarStreamPayload, DesktopSidecarStreamStatus, DesktopSidecarStreamTransport,
+    DESKTOP_SIDECAR_PROTOCOL, DESKTOP_SIDECAR_SCHEMA_VERSION,
 };
 
 struct SidecarHarness {
@@ -312,4 +312,22 @@ fn sidecar_ipc_rejects_shell_like_payload_keys() {
         response.error.expect("forbidden payload error").code,
         "sidecar_forbidden_payload"
     );
+}
+
+#[test]
+fn mouse_drag_control_contract_decodes_target_coordinates() {
+    let request = serde_json::from_value::<DesktopSidecarControlRequest>(json!({
+        "x": 10,
+        "y": 20,
+        "toX": 300,
+        "toY": 240,
+        "button": "left"
+    }))
+    .expect("mouse drag control request");
+
+    assert_eq!(request.x, Some(10));
+    assert_eq!(request.y, Some(20));
+    assert_eq!(request.to_x, Some(300));
+    assert_eq!(request.to_y, Some(240));
+    assert_eq!(request.button, Some(DesktopSidecarMouseButton::Left));
 }

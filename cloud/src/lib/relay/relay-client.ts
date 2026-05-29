@@ -43,6 +43,18 @@ interface StreamTokenOptions {
 	streamToken?: string | null;
 }
 
+type ComputerUseManualInputAction =
+	| "mouse_move"
+	| "mouse_click"
+	| "mouse_double_click"
+	| "mouse_right_click"
+	| "mouse_drag"
+	| "scroll"
+	| "key_press"
+	| "hotkey"
+	| "type_text"
+	| "paste_text";
+
 let socket: Socket | null = null;
 
 function socketIsReusable(socketInstance: Socket): boolean {
@@ -485,9 +497,11 @@ export function sendComputerUseManualInput(
 		deviceId: string;
 		manualControlId?: string | null;
 		input: {
-			action: string;
+			action: ComputerUseManualInputAction;
 			x?: number;
 			y?: number;
+			toX?: number;
+			toY?: number;
 			sourceWidth?: number;
 			sourceHeight?: number;
 			deltaX?: number;

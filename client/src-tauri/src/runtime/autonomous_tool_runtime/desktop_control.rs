@@ -7097,6 +7097,48 @@ mod tests {
     }
 
     #[test]
+    fn manual_control_drag_sidecar_request_preserves_target_coordinates() {
+        let request = AutonomousDesktopControlRequest {
+            action: AutonomousDesktopControlAction::MouseDrag,
+            display_id: None,
+            window_id: None,
+            app_name: None,
+            bundle_id: None,
+            element_id: None,
+            x: Some(10),
+            y: Some(20),
+            source_width: Some(1280),
+            source_height: Some(720),
+            to_x: Some(300),
+            to_y: Some(240),
+            delta_x: None,
+            delta_y: None,
+            button: Some(AutonomousDesktopMouseButton::Left),
+            clicks: None,
+            key: None,
+            keys: Vec::new(),
+            text: None,
+            value: None,
+            menu_path: Vec::new(),
+            reason: Some("cloud_manual_control_input".into()),
+            sensitivity: None,
+        };
+
+        validate_desktop_control_request(&request).expect("valid drag request");
+        let sidecar = sidecar_control_request(&request);
+
+        assert_eq!(
+            desktop_control_sidecar_operation(&request.action),
+            Some(DesktopSidecarOperation::MouseDrag)
+        );
+        assert_eq!(sidecar.x, Some(10));
+        assert_eq!(sidecar.y, Some(20));
+        assert_eq!(sidecar.to_x, Some(300));
+        assert_eq!(sidecar.to_y, Some(240));
+        assert_eq!(sidecar.button, Some(DesktopSidecarMouseButton::Left));
+    }
+
+    #[test]
     fn maps_scaled_stream_points_to_display_coordinates() {
         let display = AutonomousDesktopDisplay {
             display_id: "display-1".into(),
