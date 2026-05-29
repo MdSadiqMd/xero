@@ -47,12 +47,15 @@ config :xero, XeroWeb.Endpoint, http: [port: String.to_integer(System.get_env("P
 
 # --- CORS (cors_plug) ---
 # Comma-separated list of allowed origins. "*" is allowed for dev only.
+web_app_url = System.get_env("XERO_WEB_APP_URL", "https://cloud.xeroshell.com")
+
 default_cors_origins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "http://localhost:3002",
   "http://127.0.0.1:3002",
-  "tauri://localhost"
+  "tauri://localhost",
+  web_app_url
 ]
 
 cors_origins =
@@ -155,6 +158,18 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "example.com"
 
+  default_socket_check_origins = ["https://#{host}", web_app_url]
+
+  socket_check_origins =
+    System.get_env("XERO_SOCKET_ORIGINS", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> case do
+      [] -> default_socket_check_origins
+      origins -> origins
+    end
+    |> Enum.uniq()
+
   config :xero, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :xero, XeroWeb.Endpoint,
@@ -166,6 +181,7 @@ if config_env() == :prod do
       # for details about using IPv6 vs IPv4 and loopback vs public addresses.
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
+    check_origin: socket_check_origins,
     secret_key_base: secret_key_base
 
   # ## SSL Support
