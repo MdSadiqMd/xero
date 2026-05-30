@@ -91,11 +91,14 @@ interface StreamTokenOptions {
 }
 
 type ComputerUseManualInputAction =
+	| "mouse_down"
 	| "mouse_move"
 	| "mouse_click"
 	| "mouse_double_click"
 	| "mouse_right_click"
 	| "mouse_drag"
+	| "mouse_drag_move"
+	| "mouse_up"
 	| "scroll"
 	| "key_press"
 	| "hotkey"

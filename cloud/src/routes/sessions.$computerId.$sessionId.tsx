@@ -1164,13 +1164,18 @@ interface DesktopManualPointerClick {
 }
 
 interface DesktopManualPointerGesture extends DesktopManualPointerClick {
+	dragStarted: boolean;
 	dragging: boolean;
+	lastDragMoveAt: number;
+	lastDragMovePoint: DesktopInputPoint | null;
 	latestPoint: DesktopInputPoint;
 	pointerId: number;
 	startClientX: number;
 	startClientY: number;
 	startPoint: DesktopInputPoint;
 }
+
+type DesktopManualInput = Parameters<typeof sendComputerUseManualInput>[1]["input"];
 
 function desktopMediaContentRect(
 	rect: DOMRect,
@@ -1934,7 +1939,11 @@ export function ComputerUseDesktopViewport({
 	const manualPointerGestureRef = useRef<DesktopManualPointerGesture | null>(
 		null,
 	);
+	const releaseManualPointerDragRef = useRef<
+		((gesture: DesktopManualPointerGesture) => void) | null
+	>(null);
 	const manualPointerGestureResetKeyRef = useRef("");
+	const manualInputOrderRef = useRef<Promise<void>>(Promise.resolve());
 	const lastPointerMoveAtRef = useRef(0);
 	const desktopSurfaceRef = useRef<HTMLElement | null>(null);
 	const controlBarRef = useRef<HTMLDivElement | null>(null);
@@ -2015,6 +2024,9 @@ export function ComputerUseDesktopViewport({
 		const gesture = manualPointerGestureRef.current;
 		if (!gesture) return;
 		manualPointerGestureRef.current = null;
+		if (gesture.dragStarted) {
+			releaseManualPointerDragRef.current?.(gesture);
+		}
 		const surface = desktopSurfaceRef.current;
 		if (!surface) return;
 		try {
@@ -2079,7 +2091,11 @@ export function ComputerUseDesktopViewport({
 			mobileTouchPointersRef.current.clear();
 			mobileTapPointerIdRef.current = null;
 			mobilePinchGestureRef.current = null;
+			const gesture = manualPointerGestureRef.current;
 			manualPointerGestureRef.current = null;
+			if (gesture?.dragStarted) {
+				releaseManualPointerDragRef.current?.(gesture);
+			}
 			if (textBatchTimeoutRef.current !== null) {
 				window.clearTimeout(textBatchTimeoutRef.current);
 				textBatchTimeoutRef.current = null;
@@ -3127,20 +3143,43 @@ export function ComputerUseDesktopViewport({
 		});
 	};
 	const sendManualInput = useCallback(
-		(input: Parameters<typeof sendComputerUseManualInput>[1]["input"]) => {
-			const activeManualControlId =
-				manualControlIdRef.current ?? manualControlId;
-			if (!channel || !deviceId || !manualActive || !activeManualControlId)
+		(
+			input: DesktopManualInput,
+			options: { allowInactive?: boolean; ordered?: boolean } = {},
+		) => {
+			const send = async () => {
+				const activeManualControlId =
+					manualControlIdRef.current ?? manualControlId;
+				if (
+					!channel ||
+					!deviceId ||
+					(!manualActive && !options.allowInactive) ||
+					!activeManualControlId
+				) {
+					return;
+				}
+				await sendComputerUseManualInput(channel, {
+					computerId,
+					sessionId,
+					deviceId,
+					manualControlId: activeManualControlId,
+					runId: streamRunId,
+					streamToken,
+					input,
+				});
+			};
+			if (options.ordered) {
+				const next = manualInputOrderRef.current
+					.catch(() => undefined)
+					.then(send);
+				manualInputOrderRef.current = next.then(
+					() => undefined,
+					() => undefined,
+				);
+				void next;
 				return;
-			void sendComputerUseManualInput(channel, {
-				computerId,
-				sessionId,
-				deviceId,
-				manualControlId: activeManualControlId,
-				runId: streamRunId,
-				streamToken,
-				input,
-			});
+			}
+			void send();
 		},
 		[
 			channel,
@@ -3580,6 +3619,100 @@ export function ComputerUseDesktopViewport({
 		},
 		[armKeyboardCapture, sendManualInput, showDesktopClickRipple],
 	);
+	const sendManualPointerDragMove = useCallback(
+		(point: DesktopInputPoint) => {
+			sendManualInput(
+				{
+					action: "mouse_drag_move",
+					x: point.x,
+					y: point.y,
+					sourceWidth: point.sourceWidth,
+					sourceHeight: point.sourceHeight,
+					button: "left",
+				},
+				{ allowInactive: true, ordered: true },
+			);
+		},
+		[sendManualInput],
+	);
+	const startManualPointerDrag = useCallback(
+		(gesture: DesktopManualPointerGesture, targetPoint: DesktopInputPoint) => {
+			if (gesture.dragStarted) return;
+			armKeyboardCapture();
+			gesture.dragStarted = true;
+			gesture.lastDragMoveAt = Date.now();
+			gesture.lastDragMovePoint = targetPoint;
+			sendManualInput(
+				{
+					action: "mouse_down",
+					x: gesture.startPoint.x,
+					y: gesture.startPoint.y,
+					sourceWidth: gesture.startPoint.sourceWidth,
+					sourceHeight: gesture.startPoint.sourceHeight,
+					button: "left",
+				},
+				{ ordered: true },
+			);
+			sendManualPointerDragMove(targetPoint);
+		},
+		[armKeyboardCapture, sendManualInput, sendManualPointerDragMove],
+	);
+	const continueManualPointerDrag = useCallback(
+		(
+			gesture: DesktopManualPointerGesture,
+			targetPoint: DesktopInputPoint,
+			options: { force?: boolean } = {},
+		) => {
+			if (!gesture.dragStarted) return;
+			const now = Date.now();
+			if (
+				!options.force &&
+				now - gesture.lastDragMoveAt < MANUAL_POINTER_MOVE_INTERVAL_MS
+			) {
+				return;
+			}
+			gesture.lastDragMoveAt = now;
+			gesture.lastDragMovePoint = targetPoint;
+			sendManualPointerDragMove(targetPoint);
+		},
+		[sendManualPointerDragMove],
+	);
+	const releaseManualPointerDrag = useCallback(
+		(
+			gesture: DesktopManualPointerGesture,
+			targetPoint: DesktopInputPoint = gesture.latestPoint,
+		) => {
+			if (!gesture.dragStarted) return;
+			if (
+				!gesture.lastDragMovePoint ||
+				gesture.lastDragMovePoint.x !== targetPoint.x ||
+				gesture.lastDragMovePoint.y !== targetPoint.y
+			) {
+				continueManualPointerDrag(gesture, targetPoint, { force: true });
+			}
+			gesture.dragStarted = false;
+			sendManualInput(
+				{
+					action: "mouse_up",
+					x: targetPoint.x,
+					y: targetPoint.y,
+					sourceWidth: targetPoint.sourceWidth,
+					sourceHeight: targetPoint.sourceHeight,
+					button: "left",
+				},
+				{ allowInactive: true, ordered: true },
+			);
+		},
+		[continueManualPointerDrag, sendManualInput],
+	);
+	useEffect(() => {
+		releaseManualPointerDragRef.current = releaseManualPointerDrag;
+		return () => {
+			if (releaseManualPointerDragRef.current === releaseManualPointerDrag) {
+				releaseManualPointerDragRef.current = null;
+			}
+		};
+	}, [releaseManualPointerDrag]);
 	const beginMobilePinchGesture = useCallback(() => {
 		const [first, second] = Array.from(
 			mobileTouchPointersRef.current.values(),
@@ -3801,7 +3934,10 @@ export function ComputerUseDesktopViewport({
 				clientX: event.clientX,
 				clientY: event.clientY,
 				clicks: event.detail > 1 ? 2 : 1,
+				dragStarted: false,
 				dragging: false,
+				lastDragMoveAt: 0,
+				lastDragMovePoint: null,
 				latestPoint: point,
 				pointerId: event.pointerId,
 				startClientX: event.clientX,
@@ -3827,16 +3963,24 @@ export function ComputerUseDesktopViewport({
 			const gesture = manualPointerGestureRef.current;
 			if (gesture?.pointerId === event.pointerId) {
 				event.preventDefault();
-				if (
+				const movedBeyondSlop =
 					Math.hypot(
 						event.clientX - gesture.startClientX,
 						event.clientY - gesture.startClientY,
-					) > DESKTOP_POINTER_TAP_SLOP_PX
-				) {
+					) > DESKTOP_POINTER_TAP_SLOP_PX;
+				if (movedBeyondSlop) {
 					gesture.dragging = true;
 				}
 				const point = pointFromPointerEvent(event);
 				if (point) gesture.latestPoint = point;
+				const targetPoint = point ?? gesture.latestPoint;
+				if (gesture.button === 0 && gesture.dragging) {
+					if (gesture.dragStarted) {
+						continueManualPointerDrag(gesture, targetPoint);
+					} else {
+						startManualPointerDrag(gesture, targetPoint);
+					}
+				}
 				return;
 			}
 			if (!manualActive || event.buttons === 0) return;
@@ -3859,11 +4003,13 @@ export function ComputerUseDesktopViewport({
 			});
 		},
 		[
+			continueManualPointerDrag,
 			handleMobileTouchPointerMove,
 			manualActive,
 			pointFromPointerEvent,
 			presentation.isMobile,
 			sendManualInput,
+			startManualPointerDrag,
 		],
 	);
 	const handlePointerUp = useCallback(
@@ -3902,23 +4048,18 @@ export function ComputerUseDesktopViewport({
 				return;
 			}
 			if (gesture.button !== 0) return;
-			sendManualInput({
-				action: "mouse_drag",
-				x: gesture.startPoint.x,
-				y: gesture.startPoint.y,
-				toX: targetPoint.x,
-				toY: targetPoint.y,
-				sourceWidth: gesture.startPoint.sourceWidth,
-				sourceHeight: gesture.startPoint.sourceHeight,
-				button: "left",
-			});
+			if (!gesture.dragStarted) {
+				startManualPointerDrag(gesture, targetPoint);
+			}
+			releaseManualPointerDrag(gesture, targetPoint);
 		},
 		[
 			handleMobileTouchPointerEnd,
 			pointFromPointerEvent,
 			presentation.isMobile,
-			sendManualInput,
+			releaseManualPointerDrag,
 			sendManualPointerClick,
+			startManualPointerDrag,
 		],
 	);
 	const handlePointerCancel = useCallback(
@@ -3941,11 +4082,15 @@ export function ComputerUseDesktopViewport({
 	);
 	const handleLostPointerCapture = useCallback(
 		(event: PointerEvent<HTMLElement>) => {
-			if (manualPointerGestureRef.current?.pointerId === event.pointerId) {
+			const gesture = manualPointerGestureRef.current;
+			if (gesture?.pointerId === event.pointerId) {
 				manualPointerGestureRef.current = null;
+				if (gesture.dragStarted) {
+					releaseManualPointerDrag(gesture);
+				}
 			}
 		},
-		[],
+		[releaseManualPointerDrag],
 	);
 	const handleWheel = useCallback(
 		(event: WheelEvent<HTMLElement>) => {

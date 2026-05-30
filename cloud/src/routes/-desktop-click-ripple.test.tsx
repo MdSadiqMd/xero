@@ -574,7 +574,7 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		);
 	});
 
-	it("sends one left-button drag after movement exceeds click slop", async () => {
+	it("sends live left-button drag events after movement exceeds click slop", async () => {
 		const { desktop, image, push } = await renderManualDesktopViewport();
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
 		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
@@ -593,6 +593,11 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 			clientY: 180,
 			pointerId: 10,
 		});
+		await waitFor(() => {
+			expect(manualInputPayloads(push).map((payload) => payload.action)).toEqual(
+				["mouse_down", "mouse_drag_move"],
+			);
+		});
 		fireEvent.pointerUp(desktop, {
 			button: 0,
 			clientX: 320,
@@ -601,28 +606,49 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 			pointerId: 10,
 		});
 
-		expect(push).toHaveBeenCalledTimes(1);
-		expect(push).toHaveBeenCalledWith(
-			"frame",
+		await waitFor(() => {
+			expect(manualInputPayloads(push).map((payload) => payload.action)).toEqual(
+				["mouse_down", "mouse_drag_move", "mouse_up"],
+			);
+		});
+		expect(manualInputPayloads(push)).toEqual([
 			expect.objectContaining({
-				kind: "computer_use_manual_control_input",
-				payload: expect.objectContaining({
-					action: "mouse_drag",
-					x: 320,
-					y: 180,
-					toX: 640,
-					toY: 360,
-					sourceWidth: 1280,
-					sourceHeight: 720,
-					button: "left",
-				}),
+				action: "mouse_down",
+				x: 320,
+				y: 180,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
 			}),
-		);
+			expect.objectContaining({
+				action: "mouse_drag_move",
+				x: 640,
+				y: 360,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
+			}),
+			expect.objectContaining({
+				action: "mouse_up",
+				x: 640,
+				y: 360,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
+			}),
+		]);
 		expect(
 			push.mock.calls.some(
 				([, frame]) =>
 					(frame as { payload?: { action?: string } }).payload?.action ===
 					"mouse_click",
+			),
+		).toBe(false);
+		expect(
+			push.mock.calls.some(
+				([, frame]) =>
+					(frame as { payload?: { action?: string } }).payload?.action ===
+					"mouse_drag",
 			),
 		).toBe(false);
 		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
@@ -655,24 +681,36 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 			pointerId: 11,
 		});
 
-		expect(push).toHaveBeenCalledWith(
-			"frame",
-			expect.objectContaining({
-				kind: "computer_use_manual_control_input",
-				payload: expect.objectContaining({
-					action: "mouse_drag",
-					x: 320,
-					y: 540,
-					toX: 960,
-					toY: 180,
-					sourceWidth: 1280,
-					sourceHeight: 720,
-				}),
-			}),
-		);
+		await waitFor(() => {
+			expect(manualInputPayloads(push)).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						action: "mouse_down",
+						x: 320,
+						y: 540,
+						sourceWidth: 1280,
+						sourceHeight: 720,
+					}),
+					expect.objectContaining({
+						action: "mouse_drag_move",
+						x: 960,
+						y: 180,
+						sourceWidth: 1280,
+						sourceHeight: 720,
+					}),
+					expect.objectContaining({
+						action: "mouse_up",
+						x: 960,
+						y: 180,
+						sourceWidth: 1280,
+						sourceHeight: 720,
+					}),
+				]),
+			);
+		});
 	});
 
-	it("does not send click or drag when a pointer gesture is cancelled", async () => {
+	it("releases a live drag when a pointer gesture is cancelled", async () => {
 		const { desktop, image, push } = await renderManualDesktopViewport();
 		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
 		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
@@ -694,13 +732,51 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		fireEvent.pointerCancel(desktop, {
 			pointerId: 12,
 		});
+
+		await waitFor(() => {
+			expect(manualInputPayloads(push).map((payload) => payload.action)).toEqual(
+				["mouse_down", "mouse_drag_move", "mouse_up"],
+			);
+		});
+		expect(
+			manualInputPayloads(push).some(
+				(payload) =>
+					payload.action === "mouse_click" || payload.action === "mouse_drag",
+			),
+		).toBe(false);
+		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
+	});
+
+	it("does not send click or drag when a pointer gesture is cancelled before a live drag starts", async () => {
+		const { desktop, image, push } = await renderManualDesktopViewport();
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
+
+		fireEvent.pointerDown(desktop, {
+			button: 0,
+			clientX: 160,
+			clientY: 90,
+			detail: 1,
+			pointerId: 13,
+		});
+		fireEvent.pointerMove(desktop, {
+			buttons: 1,
+			clientX: 164,
+			clientY: 94,
+			pointerId: 13,
+		});
+		fireEvent.pointerCancel(desktop, {
+			pointerId: 13,
+		});
 		fireEvent.pointerUp(desktop, {
 			button: 0,
-			clientX: 320,
-			clientY: 180,
-			pointerId: 12,
+			clientX: 164,
+			clientY: 94,
+			pointerId: 13,
 		});
 
+		await Promise.resolve();
 		expect(push).not.toHaveBeenCalled();
 		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
 	});
@@ -1366,6 +1442,13 @@ function manualInputCalls(push: ReturnType<typeof vi.fn>) {
 	return push.mock.calls.filter(
 		([, frame]) =>
 			(frame as { kind?: string }).kind === "computer_use_manual_control_input",
+	);
+}
+
+function manualInputPayloads(push: ReturnType<typeof vi.fn>) {
+	return manualInputCalls(push).map(
+		([, frame]) =>
+			(frame as { payload?: Record<string, unknown> }).payload ?? {},
 	);
 }
 

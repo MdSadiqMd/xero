@@ -327,11 +327,14 @@ fn handle_request(lease: &DesktopSidecarLease, line: &str) -> DesktopSidecarResp
                 Err(error) => sidecar_error_response(request.request_id, request.operation, error),
             }
         }
-        DesktopSidecarOperation::MouseMove
+        DesktopSidecarOperation::MouseDown
+        | DesktopSidecarOperation::MouseMove
         | DesktopSidecarOperation::MouseClick
         | DesktopSidecarOperation::MouseDoubleClick
         | DesktopSidecarOperation::MouseRightClick
         | DesktopSidecarOperation::MouseDrag
+        | DesktopSidecarOperation::MouseDragMove
+        | DesktopSidecarOperation::MouseUp
         | DesktopSidecarOperation::Scroll
         | DesktopSidecarOperation::KeyPress
         | DesktopSidecarOperation::Hotkey
@@ -2495,10 +2498,13 @@ fn validate_control_request(
     request: &DesktopSidecarControlRequest,
 ) -> Result<(), DesktopSidecarErrorBody> {
     match operation {
-        DesktopSidecarOperation::MouseMove
+        DesktopSidecarOperation::MouseDown
+        | DesktopSidecarOperation::MouseMove
         | DesktopSidecarOperation::MouseClick
         | DesktopSidecarOperation::MouseDoubleClick
-        | DesktopSidecarOperation::MouseRightClick => required_point(request).map(|_| ()),
+        | DesktopSidecarOperation::MouseRightClick
+        | DesktopSidecarOperation::MouseDragMove
+        | DesktopSidecarOperation::MouseUp => required_point(request).map(|_| ()),
         DesktopSidecarOperation::MouseDrag => {
             required_point(request)?;
             required_target_point(request)?;
@@ -2577,6 +2583,10 @@ fn platform_control(
     request: DesktopSidecarControlRequest,
 ) -> Result<(), DesktopSidecarErrorBody> {
     match operation {
+        DesktopSidecarOperation::MouseDown => macos_input::mouse_down(
+            required_point(&request)?,
+            request.button.unwrap_or_default(),
+        ),
         DesktopSidecarOperation::MouseMove => macos_input::mouse_move(required_point(&request)?),
         DesktopSidecarOperation::MouseClick
         | DesktopSidecarOperation::MouseDoubleClick
@@ -2597,6 +2607,13 @@ fn platform_control(
         DesktopSidecarOperation::MouseDrag => {
             macos_input::mouse_drag(required_point(&request)?, required_target_point(&request)?)
         }
+        DesktopSidecarOperation::MouseDragMove => {
+            macos_input::mouse_drag_move(required_point(&request)?)
+        }
+        DesktopSidecarOperation::MouseUp => macos_input::mouse_up(
+            required_point(&request)?,
+            request.button.unwrap_or_default(),
+        ),
         DesktopSidecarOperation::Scroll => {
             let delta_x = request.delta_x.unwrap_or(0);
             let delta_y = request.delta_y.unwrap_or(0);
@@ -2649,6 +2666,10 @@ fn platform_control(
     request: DesktopSidecarControlRequest,
 ) -> Result<(), DesktopSidecarErrorBody> {
     match operation {
+        DesktopSidecarOperation::MouseDown => cross_platform_input::mouse_down(
+            required_point(&request)?,
+            request.button.unwrap_or_default(),
+        ),
         DesktopSidecarOperation::MouseMove => {
             cross_platform_input::mouse_move(required_point(&request)?)
         }
@@ -2671,6 +2692,13 @@ fn platform_control(
         DesktopSidecarOperation::MouseDrag => cross_platform_input::mouse_drag(
             required_point(&request)?,
             required_target_point(&request)?,
+        ),
+        DesktopSidecarOperation::MouseDragMove => {
+            cross_platform_input::mouse_drag_move(required_point(&request)?)
+        }
+        DesktopSidecarOperation::MouseUp => cross_platform_input::mouse_up(
+            required_point(&request)?,
+            request.button.unwrap_or_default(),
         ),
         DesktopSidecarOperation::Scroll => {
             let delta_x = request.delta_x.unwrap_or(0);
@@ -3771,6 +3799,19 @@ mod cross_platform_input {
             .map_err(input_error)
     }
 
+    pub(super) fn mouse_down(
+        point: (i32, i32),
+        button: DesktopSidecarMouseButton,
+    ) -> Result<(), DesktopSidecarErrorBody> {
+        let mut enigo = new_enigo()?;
+        enigo
+            .move_mouse(point.0, point.1, Coordinate::Abs)
+            .map_err(input_error)?;
+        enigo
+            .button(mouse_button(button), Direction::Press)
+            .map_err(input_error)
+    }
+
     pub(super) fn mouse_click(
         point: (i32, i32),
         button: DesktopSidecarMouseButton,
@@ -3805,6 +3846,26 @@ mod cross_platform_input {
             .map_err(input_error)?;
         enigo
             .button(Button::Left, Direction::Release)
+            .map_err(input_error)
+    }
+
+    pub(super) fn mouse_drag_move(point: (i32, i32)) -> Result<(), DesktopSidecarErrorBody> {
+        let mut enigo = new_enigo()?;
+        enigo
+            .move_mouse(point.0, point.1, Coordinate::Abs)
+            .map_err(input_error)
+    }
+
+    pub(super) fn mouse_up(
+        point: (i32, i32),
+        button: DesktopSidecarMouseButton,
+    ) -> Result<(), DesktopSidecarErrorBody> {
+        let mut enigo = new_enigo()?;
+        enigo
+            .move_mouse(point.0, point.1, Coordinate::Abs)
+            .map_err(input_error)?;
+        enigo
+            .button(mouse_button(button), Direction::Release)
             .map_err(input_error)
     }
 
@@ -4008,6 +4069,37 @@ mod macos_input {
         Ok(())
     }
 
+    pub(super) fn mouse_down(
+        point: (i32, i32),
+        button: DesktopSidecarMouseButton,
+    ) -> Result<(), DesktopSidecarErrorBody> {
+        use core_graphics::{
+            event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton},
+            event_source::{CGEventSource, CGEventSourceStateID},
+            geometry::CGPoint,
+        };
+        let cg_button = match button {
+            DesktopSidecarMouseButton::Left => CGMouseButton::Left,
+            DesktopSidecarMouseButton::Right => CGMouseButton::Right,
+            DesktopSidecarMouseButton::Middle => CGMouseButton::Center,
+        };
+        let event_type = match button {
+            DesktopSidecarMouseButton::Right => CGEventType::RightMouseDown,
+            _ => CGEventType::LeftMouseDown,
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| input_source_error())?;
+        let event = CGEvent::new_mouse_event(
+            source,
+            event_type,
+            CGPoint::new(point.0 as f64, point.1 as f64),
+            cg_button,
+        )
+        .map_err(|_| event_error("mouse down"))?;
+        event.post(CGEventTapLocation::HID);
+        Ok(())
+    }
+
     pub(super) fn mouse_click(
         point: (i32, i32),
         button: DesktopSidecarMouseButton,
@@ -4042,6 +4134,56 @@ mod macos_input {
             down_event.post(CGEventTapLocation::HID);
             up_event.post(CGEventTapLocation::HID);
         }
+        Ok(())
+    }
+
+    pub(super) fn mouse_drag_move(point: (i32, i32)) -> Result<(), DesktopSidecarErrorBody> {
+        use core_graphics::{
+            event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton},
+            event_source::{CGEventSource, CGEventSourceStateID},
+            geometry::CGPoint,
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| input_source_error())?;
+        let event = CGEvent::new_mouse_event(
+            source,
+            CGEventType::LeftMouseDragged,
+            CGPoint::new(point.0 as f64, point.1 as f64),
+            CGMouseButton::Left,
+        )
+        .map_err(|_| event_error("mouse drag move"))?;
+        event.post(CGEventTapLocation::HID);
+        Ok(())
+    }
+
+    pub(super) fn mouse_up(
+        point: (i32, i32),
+        button: DesktopSidecarMouseButton,
+    ) -> Result<(), DesktopSidecarErrorBody> {
+        use core_graphics::{
+            event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton},
+            event_source::{CGEventSource, CGEventSourceStateID},
+            geometry::CGPoint,
+        };
+        let cg_button = match button {
+            DesktopSidecarMouseButton::Left => CGMouseButton::Left,
+            DesktopSidecarMouseButton::Right => CGMouseButton::Right,
+            DesktopSidecarMouseButton::Middle => CGMouseButton::Center,
+        };
+        let event_type = match button {
+            DesktopSidecarMouseButton::Right => CGEventType::RightMouseUp,
+            _ => CGEventType::LeftMouseUp,
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| input_source_error())?;
+        let event = CGEvent::new_mouse_event(
+            source,
+            event_type,
+            CGPoint::new(point.0 as f64, point.1 as f64),
+            cg_button,
+        )
+        .map_err(|_| event_error("mouse up"))?;
+        event.post(CGEventTapLocation::HID);
         Ok(())
     }
 

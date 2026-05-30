@@ -4186,6 +4186,51 @@ mod tests {
     }
 
     #[test]
+    fn manual_control_stateful_drag_payloads_map_to_desktop_control_requests() {
+        let down = manual_control_input_request(&json!({
+            "action": "mouse_down",
+            "x": 42,
+            "y": 64,
+            "sourceWidth": 1280,
+            "sourceHeight": 720,
+            "button": "left",
+        }))
+        .expect("manual mouse down input request");
+        let drag_move = manual_control_input_request(&json!({
+            "action": "mouse_drag_move",
+            "x": 320,
+            "y": 240,
+            "sourceWidth": 1280,
+            "sourceHeight": 720,
+            "button": "left",
+        }))
+        .expect("manual mouse drag move input request");
+        let up = manual_control_input_request(&json!({
+            "action": "mouse_up",
+            "x": 320,
+            "y": 240,
+            "sourceWidth": 1280,
+            "sourceHeight": 720,
+            "button": "left",
+        }))
+        .expect("manual mouse up input request");
+
+        assert_eq!(down.action, AutonomousDesktopControlAction::MouseDown);
+        assert_eq!(down.x, Some(42));
+        assert_eq!(down.y, Some(64));
+        assert_eq!(down.button, Some(AutonomousDesktopMouseButton::Left));
+        assert_eq!(
+            drag_move.action,
+            AutonomousDesktopControlAction::MouseDragMove
+        );
+        assert_eq!(drag_move.x, Some(320));
+        assert_eq!(drag_move.y, Some(240));
+        assert_eq!(up.action, AutonomousDesktopControlAction::MouseUp);
+        assert_eq!(up.x, Some(320));
+        assert_eq!(up.y, Some(240));
+    }
+
+    #[test]
     fn manual_control_keyboard_payloads_map_to_desktop_control_requests() {
         let text_request = manual_control_input_request(&json!({
             "action": "type_text",

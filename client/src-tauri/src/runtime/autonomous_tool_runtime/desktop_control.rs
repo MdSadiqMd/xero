@@ -110,11 +110,14 @@ impl AutonomousDesktopObserveAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomousDesktopControlAction {
+    MouseDown,
     MouseMove,
     MouseClick,
     MouseDoubleClick,
     MouseRightClick,
     MouseDrag,
+    MouseDragMove,
+    MouseUp,
     Scroll,
     KeyPress,
     Hotkey,
@@ -134,11 +137,14 @@ pub enum AutonomousDesktopControlAction {
 impl AutonomousDesktopControlAction {
     fn as_str(&self) -> &'static str {
         match self {
+            Self::MouseDown => "mouse_down",
             Self::MouseMove => "mouse_move",
             Self::MouseClick => "mouse_click",
             Self::MouseDoubleClick => "mouse_double_click",
             Self::MouseRightClick => "mouse_right_click",
             Self::MouseDrag => "mouse_drag",
+            Self::MouseDragMove => "mouse_drag_move",
+            Self::MouseUp => "mouse_up",
             Self::Scroll => "scroll",
             Self::KeyPress => "key_press",
             Self::Hotkey => "hotkey",
@@ -1801,6 +1807,19 @@ impl AutonomousToolRuntime {
                     Ok("Cancelled current desktop action and released the controller lock.".into())
                 }
             }
+            AutonomousDesktopControlAction::MouseDown => {
+                if let Some(message) =
+                    run_sidecar_desktop_control(&request, &output.policy.decision_id)?
+                {
+                    Ok(message)
+                } else {
+                    platform_input::mouse_down(
+                        required_point(&request)?,
+                        request.button.unwrap_or_default(),
+                    )?;
+                    Ok("Pressed desktop pointer button.".into())
+                }
+            }
             AutonomousDesktopControlAction::MouseMove => {
                 if let Some(message) =
                     run_sidecar_desktop_control(&request, &output.policy.decision_id)?
@@ -1844,6 +1863,29 @@ impl AutonomousToolRuntime {
                     let to = required_target_point(&request)?;
                     platform_input::mouse_drag(from, to)?;
                     Ok("Dragged desktop pointer target.".into())
+                }
+            }
+            AutonomousDesktopControlAction::MouseDragMove => {
+                if let Some(message) =
+                    run_sidecar_desktop_control(&request, &output.policy.decision_id)?
+                {
+                    Ok(message)
+                } else {
+                    platform_input::mouse_drag_move(required_point(&request)?)?;
+                    Ok("Moved held desktop pointer.".into())
+                }
+            }
+            AutonomousDesktopControlAction::MouseUp => {
+                if let Some(message) =
+                    run_sidecar_desktop_control(&request, &output.policy.decision_id)?
+                {
+                    Ok(message)
+                } else {
+                    platform_input::mouse_up(
+                        required_point(&request)?,
+                        request.button.unwrap_or_default(),
+                    )?;
+                    Ok("Released desktop pointer button.".into())
                 }
             }
             AutonomousDesktopControlAction::Scroll => {
@@ -2900,10 +2942,13 @@ fn validate_desktop_control_request(
     }
 
     match request.action {
-        AutonomousDesktopControlAction::MouseMove
+        AutonomousDesktopControlAction::MouseDown
+        | AutonomousDesktopControlAction::MouseMove
         | AutonomousDesktopControlAction::MouseClick
         | AutonomousDesktopControlAction::MouseDoubleClick
-        | AutonomousDesktopControlAction::MouseRightClick => {
+        | AutonomousDesktopControlAction::MouseRightClick
+        | AutonomousDesktopControlAction::MouseDragMove
+        | AutonomousDesktopControlAction::MouseUp => {
             let _ = required_point(request)?;
         }
         AutonomousDesktopControlAction::MouseDrag => {
@@ -5701,6 +5746,7 @@ fn desktop_control_sidecar_operation(
     action: &AutonomousDesktopControlAction,
 ) -> Option<DesktopSidecarOperation> {
     Some(match action {
+        AutonomousDesktopControlAction::MouseDown => DesktopSidecarOperation::MouseDown,
         AutonomousDesktopControlAction::MouseMove => DesktopSidecarOperation::MouseMove,
         AutonomousDesktopControlAction::MouseClick => DesktopSidecarOperation::MouseClick,
         AutonomousDesktopControlAction::MouseDoubleClick => {
@@ -5708,6 +5754,8 @@ fn desktop_control_sidecar_operation(
         }
         AutonomousDesktopControlAction::MouseRightClick => DesktopSidecarOperation::MouseRightClick,
         AutonomousDesktopControlAction::MouseDrag => DesktopSidecarOperation::MouseDrag,
+        AutonomousDesktopControlAction::MouseDragMove => DesktopSidecarOperation::MouseDragMove,
+        AutonomousDesktopControlAction::MouseUp => DesktopSidecarOperation::MouseUp,
         AutonomousDesktopControlAction::Scroll => DesktopSidecarOperation::Scroll,
         AutonomousDesktopControlAction::KeyPress => DesktopSidecarOperation::KeyPress,
         AutonomousDesktopControlAction::Hotkey => DesktopSidecarOperation::Hotkey,
@@ -5967,6 +6015,46 @@ mod platform_input {
     }
 
     #[cfg(target_os = "macos")]
+    pub(super) fn mouse_down(
+        point: (i32, i32),
+        button: AutonomousDesktopMouseButton,
+    ) -> CommandResult<()> {
+        use core_graphics::{
+            event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton},
+            event_source::{CGEventSource, CGEventSourceStateID},
+            geometry::CGPoint,
+        };
+        let cg_button = match button {
+            AutonomousDesktopMouseButton::Left => CGMouseButton::Left,
+            AutonomousDesktopMouseButton::Right => CGMouseButton::Right,
+            AutonomousDesktopMouseButton::Middle => CGMouseButton::Center,
+        };
+        let event_type = match button {
+            AutonomousDesktopMouseButton::Right => CGEventType::RightMouseDown,
+            _ => CGEventType::LeftMouseDown,
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| input_source_error())?;
+        let event = CGEvent::new_mouse_event(
+            source,
+            event_type,
+            CGPoint::new(point.0 as f64, point.1 as f64),
+            cg_button,
+        )
+        .map_err(|_| event_error("mouse down"))?;
+        event.post(CGEventTapLocation::HID);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn mouse_down(
+        _point: (i32, i32),
+        _button: AutonomousDesktopMouseButton,
+    ) -> CommandResult<()> {
+        unsupported_input()
+    }
+
+    #[cfg(target_os = "macos")]
     pub(super) fn mouse_click(
         point: (i32, i32),
         button: AutonomousDesktopMouseButton,
@@ -6044,6 +6132,71 @@ mod platform_input {
 
     #[cfg(not(target_os = "macos"))]
     pub(super) fn mouse_drag(_from: (i32, i32), _to: (i32, i32)) -> CommandResult<()> {
+        unsupported_input()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn mouse_drag_move(point: (i32, i32)) -> CommandResult<()> {
+        use core_graphics::{
+            event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton},
+            event_source::{CGEventSource, CGEventSourceStateID},
+            geometry::CGPoint,
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| input_source_error())?;
+        let event = CGEvent::new_mouse_event(
+            source,
+            CGEventType::LeftMouseDragged,
+            CGPoint::new(point.0 as f64, point.1 as f64),
+            CGMouseButton::Left,
+        )
+        .map_err(|_| event_error("mouse drag move"))?;
+        event.post(CGEventTapLocation::HID);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn mouse_drag_move(_point: (i32, i32)) -> CommandResult<()> {
+        unsupported_input()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn mouse_up(
+        point: (i32, i32),
+        button: AutonomousDesktopMouseButton,
+    ) -> CommandResult<()> {
+        use core_graphics::{
+            event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton},
+            event_source::{CGEventSource, CGEventSourceStateID},
+            geometry::CGPoint,
+        };
+        let cg_button = match button {
+            AutonomousDesktopMouseButton::Left => CGMouseButton::Left,
+            AutonomousDesktopMouseButton::Right => CGMouseButton::Right,
+            AutonomousDesktopMouseButton::Middle => CGMouseButton::Center,
+        };
+        let event_type = match button {
+            AutonomousDesktopMouseButton::Right => CGEventType::RightMouseUp,
+            _ => CGEventType::LeftMouseUp,
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| input_source_error())?;
+        let event = CGEvent::new_mouse_event(
+            source,
+            event_type,
+            CGPoint::new(point.0 as f64, point.1 as f64),
+            cg_button,
+        )
+        .map_err(|_| event_error("mouse up"))?;
+        event.post(CGEventTapLocation::HID);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn mouse_up(
+        _point: (i32, i32),
+        _button: AutonomousDesktopMouseButton,
+    ) -> CommandResult<()> {
         unsupported_input()
     }
 
@@ -7028,6 +7181,16 @@ mod tests {
             .as_ref()
             .and_then(|stream| stream.stream_id.clone())
             .expect("stream id");
+        if std::env::var_os(DESKTOP_SIDECAR_PATH_ENV).is_some() {
+            let stream = start_output.stream.as_ref().expect("stream state");
+            assert_eq!(stream.transport, AutonomousDesktopStreamTransport::WebRtc);
+            assert_eq!(stream.status, AutonomousDesktopStreamStatus::Starting);
+            assert!(start_output
+                .stream_signal
+                .as_ref()
+                .and_then(|signal| signal.session_description.as_ref())
+                .is_some());
+        }
 
         runtime
             .desktop_stream_with_operator_approval(AutonomousDesktopStreamRequest {
@@ -7317,6 +7480,60 @@ mod tests {
         assert_eq!(sidecar.to_x, Some(300));
         assert_eq!(sidecar.to_y, Some(240));
         assert_eq!(sidecar.button, Some(DesktopSidecarMouseButton::Left));
+    }
+
+    #[test]
+    fn stateful_manual_drag_actions_map_to_sidecar_operations() {
+        for (action, operation) in [
+            (
+                AutonomousDesktopControlAction::MouseDown,
+                DesktopSidecarOperation::MouseDown,
+            ),
+            (
+                AutonomousDesktopControlAction::MouseDragMove,
+                DesktopSidecarOperation::MouseDragMove,
+            ),
+            (
+                AutonomousDesktopControlAction::MouseUp,
+                DesktopSidecarOperation::MouseUp,
+            ),
+        ] {
+            let request = AutonomousDesktopControlRequest {
+                action,
+                display_id: None,
+                window_id: None,
+                app_name: None,
+                bundle_id: None,
+                element_id: None,
+                x: Some(10),
+                y: Some(20),
+                source_width: Some(1280),
+                source_height: Some(720),
+                to_x: None,
+                to_y: None,
+                delta_x: None,
+                delta_y: None,
+                button: Some(AutonomousDesktopMouseButton::Left),
+                clicks: None,
+                key: None,
+                keys: Vec::new(),
+                text: None,
+                value: None,
+                menu_path: Vec::new(),
+                reason: Some("cloud_manual_control_input".into()),
+                sensitivity: None,
+            };
+
+            validate_desktop_control_request(&request).expect("valid stateful drag request");
+            let sidecar = sidecar_control_request(&request);
+            assert_eq!(
+                desktop_control_sidecar_operation(&request.action),
+                Some(operation)
+            );
+            assert_eq!(sidecar.x, Some(10));
+            assert_eq!(sidecar.y, Some(20));
+            assert_eq!(sidecar.button, Some(DesktopSidecarMouseButton::Left));
+        }
     }
 
     #[test]

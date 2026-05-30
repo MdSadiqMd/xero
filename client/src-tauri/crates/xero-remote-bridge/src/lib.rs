@@ -880,7 +880,15 @@ impl Default for DesktopBridgeLoopOptions {
     }
 }
 
-const CONTROL_SESSION_IDS: [&str; 4] = ["__sessions__", "__projects__", "__new__", "__theme__"];
+// Bridge-local auto-join topics. The server decides separately which topics are
+// control-only and should omit stream tokens from web join replies.
+const AUTO_JOIN_SESSION_IDS: [&str; 5] = [
+    "__sessions__",
+    "__projects__",
+    "__new__",
+    "__theme__",
+    "__computer_use__",
+];
 const MAX_SESSION_REPLAY_FRAMES: usize = 512;
 const RELAY_TOKEN_REFRESH_SKEW_SECONDS: i64 = 120;
 const ACCOUNT_DEVICES_CACHE_TTL: Duration = Duration::from_secs(5);
@@ -1633,7 +1641,7 @@ where
                 let session_id = required_json_string(&message.4, "session_id")?;
                 let join_ref = required_json_string(&message.4, "join_ref")?;
                 let auth_topic = required_json_string(&message.4, "auth_topic")?;
-                if is_control_session_id(session_id) {
+                if is_auto_join_session_id(session_id) {
                     connection.authorize_session_join(join_ref, auth_topic, true, None)?;
                     if joined_sessions.insert(session_id.to_owned()) {
                         let _reply = connection.join_session(session_id)?;
@@ -1923,7 +1931,7 @@ fn relay_token_refresh_auth_candidates(
 
 fn initial_desktop_session_ids() -> Vec<String> {
     let mut session_ids = Vec::new();
-    for session_id in CONTROL_SESSION_IDS {
+    for session_id in AUTO_JOIN_SESSION_IDS {
         session_ids.push(session_id.to_owned());
     }
     session_ids
@@ -1937,8 +1945,8 @@ fn required_json_string<'a>(value: &'a JsonValue, key: &'static str) -> BridgeRe
         .ok_or(BridgeError::MissingServerField(key))
 }
 
-fn is_control_session_id(session_id: &str) -> bool {
-    CONTROL_SESSION_IDS.contains(&session_id)
+fn is_auto_join_session_id(session_id: &str) -> bool {
+    AUTO_JOIN_SESSION_IDS.contains(&session_id)
 }
 
 fn outbound_priority_for_payload(payload: &JsonValue) -> OutboundPriority {
@@ -2252,7 +2260,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_desktop_session_ids_include_control_topics() {
+    fn initial_desktop_session_ids_include_auto_join_topics() {
         assert_eq!(
             initial_desktop_session_ids(),
             vec![
@@ -2260,8 +2268,10 @@ mod tests {
                 "__projects__".to_string(),
                 "__new__".to_string(),
                 "__theme__".to_string(),
+                "__computer_use__".to_string(),
             ]
         );
+        assert!(is_auto_join_session_id("__computer_use__"));
     }
 
     #[test]

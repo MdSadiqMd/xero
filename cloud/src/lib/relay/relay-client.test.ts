@@ -741,6 +741,84 @@ describe("pushInboundCommand", () => {
 		);
 	});
 
+	it("sends manual stateful drag inputs with stream security fields", () => {
+		const push = vi.fn();
+		const baseOptions = {
+			computerId: "desktop-1",
+			sessionId: "session-1",
+			deviceId: "web-1",
+			manualControlId: "manual-web-1",
+			runId: "run-1",
+			streamToken: "stream-token-1",
+		};
+
+		sendComputerUseManualInput({ push } as never, {
+			...baseOptions,
+			input: {
+				action: "mouse_down",
+				x: 100,
+				y: 120,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
+			},
+		});
+		sendComputerUseManualInput({ push } as never, {
+			...baseOptions,
+			input: {
+				action: "mouse_drag_move",
+				x: 540,
+				y: 360,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
+			},
+		});
+		sendComputerUseManualInput({ push } as never, {
+			...baseOptions,
+			input: {
+				action: "mouse_up",
+				x: 540,
+				y: 360,
+				sourceWidth: 1280,
+				sourceHeight: 720,
+				button: "left",
+			},
+		});
+
+		expect(
+			push.mock.calls.map(
+				([, frame]) =>
+					(frame as { payload?: { action?: string; runId?: string } }).payload,
+			),
+		).toEqual([
+			expect.objectContaining({
+				action: "mouse_down",
+				x: 100,
+				y: 120,
+				button: "left",
+				runId: "run-1",
+				streamToken: "stream-token-1",
+			}),
+			expect.objectContaining({
+				action: "mouse_drag_move",
+				x: 540,
+				y: 360,
+				button: "left",
+				runId: "run-1",
+				streamToken: "stream-token-1",
+			}),
+			expect.objectContaining({
+				action: "mouse_up",
+				x: 540,
+				y: 360,
+				button: "left",
+				runId: "run-1",
+				streamToken: "stream-token-1",
+			}),
+		]);
+	});
+
 	it("sends manual keyboard payloads through the brokered input frame", () => {
 		const push = vi.fn();
 		const baseOptions = {
