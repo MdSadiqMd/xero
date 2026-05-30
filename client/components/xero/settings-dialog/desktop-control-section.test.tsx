@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopControlSection } from '@/components/xero/settings-dialog/desktop-control-section'
 import type {
@@ -12,6 +12,43 @@ afterEach(() => {
 })
 
 describe('DesktopControlSection', () => {
+  it('shows loading skeletons instead of fallback status while initial desktop status is pending', async () => {
+    const status = makeStatus({
+      permissions: [
+        {
+          name: 'Screen Recording',
+          status: 'granted',
+          requiredFor: ['screenshot', 'stream'],
+          remediation: 'Screen capture permission is granted.',
+          action: null,
+        },
+      ],
+    })
+    const pendingStatus = createDeferred<DesktopControlStatusDto>()
+    const adapter = makeAdapter({ status })
+    adapter.desktopControlStatus.mockImplementationOnce(async () => pendingStatus.promise)
+
+    render(<DesktopControlSection adapter={adapter} />)
+
+    expect(
+      screen.getByRole('status', { name: 'Loading desktop-control status' }),
+    ).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
+    expect(screen.queryByText('unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByText('idle · unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Allow cloud viewing' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Screen Recording')).not.toBeInTheDocument()
+
+    await act(async () => {
+      pendingStatus.resolve(status)
+      await pendingStatus.promise
+    })
+
+    expect(await screen.findByText('ready')).toBeVisible()
+    expect(screen.getByRole('switch', { name: 'Allow cloud viewing' })).toBeChecked()
+    expect(screen.getByText('Screen Recording')).toBeVisible()
+  })
+
   it('shows brokered macOS permission actions and retry guidance', async () => {
     const adapter = makeAdapter({
       status: makeStatus({
@@ -100,6 +137,15 @@ function makeAdapter({ status }: { status: DesktopControlStatusDto }) {
     desktopControlStop: vi.fn(async () => status),
     desktopControlOpenPermissionSettings: vi.fn(async () => undefined),
   }
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve
+  })
+
+  return { promise, resolve }
 }
 
 function makeStatus(overrides: Partial<DesktopControlStatusDto> = {}): DesktopControlStatusDto {
