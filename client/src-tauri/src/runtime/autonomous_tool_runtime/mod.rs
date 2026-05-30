@@ -2349,9 +2349,15 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
         catalog_entry(
             AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
             "environment",
-            "Read compact, redacted developer-environment facts from the app-global environment profile.",
+            "Read compact, redacted developer-environment facts from the app-global environment profile. Also discoverable as fetch_dev_tools for installed developer tool availability.",
             &[
                 "environment",
+                "fetch_dev_tools",
+                "dev tools",
+                "developer tools",
+                "tool availability",
+                "environment profile",
+                "first run",
                 "installed tools",
                 "cli",
                 "package manager",

@@ -3076,7 +3076,10 @@ fn explicit_tool_names_from_prompt(prompt: &str) -> BTreeSet<String> {
             line if line.starts_with("tool:tool_search ") => {
                 names.insert(AUTONOMOUS_TOOL_TOOL_SEARCH.into());
             }
-            line if line.starts_with("tool:environment_context ") => {
+            line if line == "tool:fetch_dev_tools"
+                || line.starts_with("tool:fetch_dev_tools ")
+                || line.starts_with("tool:environment_context ") =>
+            {
                 names.insert(AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT.into());
             }
             line if line.starts_with("tool:project_context_search")
@@ -4437,7 +4440,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
         ),
         descriptor(
             AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
-            "Read compact, redacted developer-environment facts only after the model explicitly asks for them.",
+            "Read compact, redacted developer-environment facts only after the model explicitly asks for them. Use this as the fetch_dev_tools surface when checking installed developer tool availability.",
             object_schema(
                 &["action"],
                 &[
@@ -8733,6 +8736,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let controls = runtime_controls_from_request(None);
         let registry = ToolRegistry::for_prompt(root.path(), "Diagnose my setup.", &controls);
+        let names = registry.descriptor_names();
         let compilation = PromptCompiler::new(
             root.path(),
             None,
@@ -8744,8 +8748,36 @@ mod tests {
         .compile()
         .expect("compile prompt");
 
+        assert!(!names.contains(AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT));
         assert!(!compilation.prompt.contains("environment_context"));
+        assert!(!compilation.prompt.contains("fetch_dev_tools"));
         assert!(!compilation.prompt.contains("protoc"));
+        assert!(!compilation.prompt.contains("node_project_ready"));
+    }
+
+    #[test]
+    fn fetch_dev_tools_alias_activates_environment_context_without_prompt_facts() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let controls = runtime_controls_from_request(None);
+        let registry = ToolRegistry::for_prompt(
+            root.path(),
+            "tool:fetch_dev_tools Check whether protoc is available.",
+            &controls,
+        );
+        let names = registry.descriptor_names();
+        let compilation = PromptCompiler::new(
+            root.path(),
+            None,
+            None,
+            RuntimeAgentIdDto::Ask,
+            BrowserControlPreferenceDto::Default,
+            registry.descriptors(),
+        )
+        .compile()
+        .expect("compile prompt");
+
+        assert!(names.contains(AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT));
+        assert!(compilation.prompt.contains("environment_context"));
         assert!(!compilation.prompt.contains("node_project_ready"));
     }
 }
