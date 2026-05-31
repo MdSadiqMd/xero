@@ -4947,7 +4947,7 @@ fn verify_desktop_sidecar_binary(path: &Path) -> Result<bool, String> {
                         signature_error
                     )
                 })?;
-                return Ok(true);
+                Ok(true)
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -4970,7 +4970,7 @@ fn verify_desktop_sidecar_binary(path: &Path) -> Result<bool, String> {
                         signature_error
                     )
                 })?;
-                return Ok(true);
+                Ok(true)
             }
             #[cfg(not(target_os = "macos"))]
             {

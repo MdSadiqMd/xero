@@ -3,6 +3,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
     thread,
 };
 
@@ -54,6 +55,8 @@ use xero_desktop_lib::{
 #[path = "support/runtime_shell.rs"]
 mod runtime_shell;
 
+static NEXT_PROJECT_ID: AtomicUsize = AtomicUsize::new(1);
+
 fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
     configure_builder_with_state(tauri::test::mock_builder(), state)
         .build(tauri::generate_context!())
@@ -76,8 +79,13 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
     let canonical_root = fs::canonicalize(&repo_root).expect("canonical repo root");
     let root_path_string = canonical_root.to_string_lossy().into_owned();
 
+    let project_id = format!(
+        "project-{}",
+        NEXT_PROJECT_ID.fetch_add(1, Ordering::Relaxed)
+    );
+
     let repository = CanonicalRepository {
-        project_id: "project-1".into(),
+        project_id,
         repository_id: "repo-1".into(),
         root_path: canonical_root.clone(),
         root_path_string: root_path_string.clone(),
@@ -290,8 +298,7 @@ fn spawn_mcp_http_server(sse_result: bool) -> String {
     let address = listener.local_addr().expect("test mcp http server addr");
 
     thread::spawn(move || {
-        for _ in 0..12 {
-            let (mut stream, _) = listener.accept().expect("accept test mcp request");
+        while let Ok((mut stream, _)) = listener.accept() {
             let body = read_http_request_body(&mut stream);
             let value: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
@@ -304,7 +311,7 @@ fn spawn_mcp_http_server(sse_result: bool) -> String {
             if id.is_none() {
                 write!(
                     stream,
-                    "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+                    "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
                 .expect("write notification response");
                 continue;
@@ -348,7 +355,7 @@ fn spawn_mcp_http_server(sse_result: bool) -> String {
             };
             write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nmcp-session-id: test-session\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nmcp-session-id: test-session\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 response_body.len(),
                 response_body,
             )

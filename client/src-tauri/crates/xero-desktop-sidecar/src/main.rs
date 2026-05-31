@@ -36,30 +36,30 @@ use webrtc::{
     track::track_local::{track_local_static_sample::TrackLocalStaticSample, TrackLocal},
 };
 use xcap::{Monitor, Window};
+#[cfg(target_os = "windows")]
+use xero_desktop_control_ipc::DesktopSidecarNotificationEntry;
 use xero_desktop_control_ipc::{
     validate_sidecar_handshake, validate_sidecar_request, DesktopSidecarAccessibilityElement,
     DesktopSidecarAccessibilitySnapshotPayload, DesktopSidecarAccessibilitySnapshotRequest,
     DesktopSidecarAccessibilitySnapshotRow, DesktopSidecarAccessibilitySnapshotTarget,
     DesktopSidecarApp, DesktopSidecarAppInventoryEntry, DesktopSidecarAppInventoryPayload,
-    DesktopSidecarAppListPayload, DesktopSidecarCapabilities,
-    DesktopSidecarClipboardFilesPayload, DesktopSidecarClipboardHtmlPayload,
-    DesktopSidecarClipboardImagePayload, DesktopSidecarClipboardRtfPayload,
-    DesktopSidecarClipboardTextPayload, DesktopSidecarControlRequest,
-    DesktopSidecarCursorStatePayload, DesktopSidecarDisplay, DesktopSidecarDisplayArrangementPayload,
-    DesktopSidecarDisplayBounds, DesktopSidecarDisplayListPayload, DesktopSidecarElementAtPointPayload,
-    DesktopSidecarErrorBody, DesktopSidecarForegroundStatePayload, DesktopSidecarHandshake,
-    DesktopSidecarLease, DesktopSidecarNotificationSnapshotPayload, DesktopSidecarOcrSnapshotPayload,
+    DesktopSidecarAppListPayload, DesktopSidecarCapabilities, DesktopSidecarClipboardFilesPayload,
+    DesktopSidecarClipboardHtmlPayload, DesktopSidecarClipboardImagePayload,
+    DesktopSidecarClipboardRtfPayload, DesktopSidecarClipboardTextPayload,
+    DesktopSidecarControlRequest, DesktopSidecarCursorStatePayload, DesktopSidecarDisplay,
+    DesktopSidecarDisplayArrangementPayload, DesktopSidecarDisplayBounds,
+    DesktopSidecarDisplayListPayload, DesktopSidecarElementAtPointPayload, DesktopSidecarErrorBody,
+    DesktopSidecarForegroundStatePayload, DesktopSidecarHandshake, DesktopSidecarLease,
+    DesktopSidecarNotificationSnapshotPayload, DesktopSidecarOcrSnapshotPayload,
     DesktopSidecarOcrSnapshotRequest, DesktopSidecarOcrTextBlock, DesktopSidecarOperation,
-    DesktopSidecarPermissionGrant, DesktopSidecarPermissionStatus, DesktopSidecarPermissionsPayload,
-    DesktopSidecarPointRequest, DesktopSidecarRequest, DesktopSidecarResponse,
-    DesktopSidecarScreenshotPayload, DesktopSidecarScreenshotRequest,
+    DesktopSidecarPermissionGrant, DesktopSidecarPermissionStatus,
+    DesktopSidecarPermissionsPayload, DesktopSidecarPointRequest, DesktopSidecarRequest,
+    DesktopSidecarResponse, DesktopSidecarScreenshotPayload, DesktopSidecarScreenshotRequest,
     DesktopSidecarSessionDescription, DesktopSidecarStreamCapabilitiesPayload,
     DesktopSidecarStreamMetrics, DesktopSidecarStreamPayload, DesktopSidecarStreamQuality,
     DesktopSidecarStreamRequest, DesktopSidecarStreamStatus, DesktopSidecarStreamTransport,
     DesktopSidecarWindow, DesktopSidecarWindowListPayload,
 };
-#[cfg(target_os = "windows")]
-use xero_desktop_control_ipc::DesktopSidecarNotificationEntry;
 
 const WEBRTC_MAX_WIDTH: u32 = 1920;
 const WEBRTC_MAX_FRAME_RATE: u32 = 30;
@@ -313,9 +313,11 @@ fn handle_request(lease: &DesktopSidecarLease, line: &str) -> DesktopSidecarResp
             Ok(payload) => json_response(request.request_id, request.operation, payload),
             Err(error) => sidecar_error_response(request.request_id, request.operation, error),
         },
-        DesktopSidecarOperation::NotificationSnapshot => {
-            json_response(request.request_id, request.operation, sidecar_notification_snapshot())
-        }
+        DesktopSidecarOperation::NotificationSnapshot => json_response(
+            request.request_id,
+            request.operation,
+            sidecar_notification_snapshot(),
+        ),
         DesktopSidecarOperation::ForegroundState => match sidecar_foreground_state() {
             Ok(payload) => json_response(request.request_id, request.operation, payload),
             Err(error) => sidecar_error_response(request.request_id, request.operation, error),
@@ -739,7 +741,10 @@ fn display_arrangement_from_displays(
     if displays.is_empty() {
         diagnostics.push("display_arrangement_empty".into());
     }
-    if displays.iter().any(|display| display.width == 0 || display.height == 0) {
+    if displays
+        .iter()
+        .any(|display| display.width == 0 || display.height == 0)
+    {
         diagnostics.push("display_arrangement_contains_zero_sized_display".into());
     }
     if primary_display_id.is_none() {
@@ -1061,7 +1066,13 @@ foreach ($notification in @($notifications)) {
 } | ConvertTo-Json -Depth 8 -Compress
 "#;
     let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .output()
         .map_err(|error| format!("windows_notification_listener_failed: {error}"))?;
     if !output.status.success() {
@@ -1144,13 +1155,12 @@ fn merge_running_apps_into_inventory(
     running_apps: Vec<DesktopSidecarApp>,
 ) {
     for running in running_apps {
-        let matching_index = inventory.iter().position(|entry| {
-            entry
-                .bundle_id
-                .as_deref()
-                .is_some_and(|bundle_id| app_inventory_names_match(bundle_id, &running.app_name))
-                || app_inventory_names_match(&entry.app_name, &running.app_name)
-        });
+        let matching_index =
+            inventory.iter().position(|entry| {
+                entry.bundle_id.as_deref().is_some_and(|bundle_id| {
+                    app_inventory_names_match(bundle_id, &running.app_name)
+                }) || app_inventory_names_match(&entry.app_name, &running.app_name)
+            });
         if let Some(index) = matching_index {
             let entry = &mut inventory[index];
             entry.running = true;
@@ -1246,9 +1256,11 @@ fn macos_app_inventory_entry(path: &Path, source: &str) -> DesktopSidecarAppInve
         .map(|executable| path.join("Contents/MacOS").join(executable))
         .filter(|path| path.exists())
         .map(|path| path.to_string_lossy().into_owned());
-    let launch_target = bundle_id
-        .clone()
-        .or_else(|| path.file_stem().and_then(|name| name.to_str()).map(ToOwned::to_owned));
+    let launch_target = bundle_id.clone().or_else(|| {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned)
+    });
     DesktopSidecarAppInventoryEntry {
         app_name,
         bundle_id,
@@ -1302,7 +1314,13 @@ foreach ($item in $folder.Items()) {
 $items | ConvertTo-Json -Compress
 "#;
     let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .output()
         .map_err(|error| format!("windows_app_inventory_powershell_failed: {error}"))?;
     if !output.status.success() {
@@ -1369,19 +1387,23 @@ fn platform_app_inventory_entries(
 fn dedupe_app_inventory_entries(entries: &mut Vec<DesktopSidecarAppInventoryEntry>) {
     let mut deduped = Vec::new();
     for entry in entries.drain(..) {
-        let is_duplicate = deduped.iter().any(|existing: &DesktopSidecarAppInventoryEntry| {
-            match (
-                existing.bundle_id.as_deref(),
-                entry.bundle_id.as_deref(),
-                existing.launch_target.as_deref(),
-                entry.launch_target.as_deref(),
-            ) {
-                (Some(left), Some(right), _, _) if left.eq_ignore_ascii_case(right) => true,
-                (_, _, Some(left), Some(right)) if left.eq_ignore_ascii_case(right) => true,
-                _ => app_inventory_names_match(&existing.app_name, &entry.app_name)
-                    && existing.source == entry.source,
-            }
-        });
+        let is_duplicate = deduped
+            .iter()
+            .any(|existing: &DesktopSidecarAppInventoryEntry| {
+                match (
+                    existing.bundle_id.as_deref(),
+                    entry.bundle_id.as_deref(),
+                    existing.launch_target.as_deref(),
+                    entry.launch_target.as_deref(),
+                ) {
+                    (Some(left), Some(right), _, _) if left.eq_ignore_ascii_case(right) => true,
+                    (_, _, Some(left), Some(right)) if left.eq_ignore_ascii_case(right) => true,
+                    _ => {
+                        app_inventory_names_match(&existing.app_name, &entry.app_name)
+                            && existing.source == entry.source
+                    }
+                }
+            });
         if !is_duplicate {
             deduped.push(entry);
         }
@@ -1625,7 +1647,8 @@ fn sidecar_ocr_snapshot(
     platform_ocr_snapshot(request)
 }
 
-fn sidecar_clipboard_read_text() -> Result<DesktopSidecarClipboardTextPayload, DesktopSidecarErrorBody> {
+fn sidecar_clipboard_read_text(
+) -> Result<DesktopSidecarClipboardTextPayload, DesktopSidecarErrorBody> {
     let text = platform_clipboard_read_text()?;
     let length = text.chars().count();
     Ok(DesktopSidecarClipboardTextPayload {
@@ -1689,18 +1712,20 @@ fn sidecar_clipboard_read_rtf(
 fn sidecar_clipboard_read_image(
     payload: serde_json::Value,
 ) -> Result<DesktopSidecarClipboardImagePayload, DesktopSidecarErrorBody> {
-    let request = serde_json::from_value::<ClipboardReadImageRequest>(payload).map_err(|error| {
-        DesktopSidecarErrorBody::new(
-            "sidecar_schema_invalid",
-            format!("Desktop sidecar could not decode clipboard image request: {error}"),
-            false,
-            false,
-        )
-    })?;
+    let request =
+        serde_json::from_value::<ClipboardReadImageRequest>(payload).map_err(|error| {
+            DesktopSidecarErrorBody::new(
+                "sidecar_schema_invalid",
+                format!("Desktop sidecar could not decode clipboard image request: {error}"),
+                false,
+                false,
+            )
+        })?;
     clipboard_resources::read_image(request)
 }
 
-fn sidecar_clipboard_read_files() -> Result<DesktopSidecarClipboardFilesPayload, DesktopSidecarErrorBody> {
+fn sidecar_clipboard_read_files(
+) -> Result<DesktopSidecarClipboardFilesPayload, DesktopSidecarErrorBody> {
     clipboard_resources::read_files()
 }
 
@@ -3106,7 +3131,10 @@ impl WindowsCaptureLease {
                 true,
             )
         })?;
-        set_stream_metric_string(&metrics.capture_backend, Some("dxgi_output_duplication".into()));
+        set_stream_metric_string(
+            &metrics.capture_backend,
+            Some("dxgi_output_duplication".into()),
+        );
         Ok(Self {
             recorder,
             receiver: Arc::new(Mutex::new(receiver)),
@@ -3216,13 +3244,11 @@ impl WindowsOpenH264Encoder {
         if force_keyframe {
             self.encoder.force_intra_frame();
         }
-        let source = openh264::formats::RgbaSliceU8::new(
-            &rgba,
-            (self.width as usize, self.height as usize),
-        );
+        let source =
+            openh264::formats::RgbaSliceU8::new(&rgba, (self.width as usize, self.height as usize));
         let yuv = openh264::formats::YUVBuffer::from_rgb_source(source);
-        let timestamp_ms = (u64::try_from(frame_index.max(0)).unwrap_or(0) * 1_000)
-            / u64::from(self.fps.max(1));
+        let timestamp_ms =
+            (u64::try_from(frame_index.max(0)).unwrap_or(0) * 1_000) / u64::from(self.fps.max(1));
         let bitstream = self
             .encoder
             .encode_at(&yuv, openh264::Timestamp::from_millis(timestamp_ms))
@@ -3250,10 +3276,7 @@ impl WindowsOpenH264Encoder {
         Ok(EncodedVideoSample {
             bytes,
             duration: Duration::from_micros(1_000_000 / u64::from(self.fps.max(1))),
-            encode_latency_ms: started_at
-                .elapsed()
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
+            encode_latency_ms: started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
             keyframe,
         })
     }
@@ -3290,9 +3313,8 @@ async fn run_windows_webrtc_media_loop(
         let Some(capture_lease) = capture.as_ref() else {
             continue;
         };
-        let frame_interval = Duration::from_micros(
-            1_000_000 / u64::from(capture_lease.target.fps.max(1)),
-        );
+        let frame_interval =
+            Duration::from_micros(1_000_000 / u64::from(capture_lease.target.fps.max(1)));
         let now = Instant::now();
         if now < next_frame_at {
             tokio::time::sleep(next_frame_at - now).await;
@@ -3399,12 +3421,11 @@ fn overlay_windows_cursor(
     use windows::Win32::{
         Foundation::HANDLE,
         Graphics::Gdi::{
-            CreateCompatibleDC, CreateDIBSection, HBRUSH, HDC, RGBQUAD, SelectObject, BI_RGB,
-            BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+            CreateCompatibleDC, CreateDIBSection, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+            BI_RGB, DIB_RGB_COLORS, HBRUSH, HDC, RGBQUAD,
         },
         UI::WindowsAndMessaging::{
-            DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL,
-            ICONINFO,
+            DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, ICONINFO,
         },
     };
 
@@ -3621,7 +3642,8 @@ fn windows_stream_frame_rgba(
             false,
         )
     })?;
-    let resized = image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
+    let resized =
+        image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
     Ok((resized.into_raw(), width, height))
 }
 
@@ -4161,9 +4183,7 @@ fn validate_control_request(
         | DesktopSidecarOperation::AxExpand
         | DesktopSidecarOperation::AxCollapse
         | DesktopSidecarOperation::AxScrollToVisible
-        | DesktopSidecarOperation::AxToggle => {
-            validate_accessibility_control_target(request)
-        }
+        | DesktopSidecarOperation::AxToggle => validate_accessibility_control_target(request),
         DesktopSidecarOperation::AxSetValue => {
             validate_accessibility_control_target(request)?;
             validate_accessibility_value_request(request)
@@ -4218,8 +4238,7 @@ fn validate_window_layout_bounds(
     if partial_position {
         return Err(schema_error("x/y"));
     }
-    let has_size =
-        matches!((request.width, request.height), (Some(width), Some(height)) if width > 0 && height > 0);
+    let has_size = matches!((request.width, request.height), (Some(width), Some(height)) if width > 0 && height > 0);
     let partial_size = matches!(
         (request.width, request.height),
         (Some(_), None) | (None, Some(_))
@@ -4356,9 +4375,7 @@ fn validate_accessibility_value_request(
 }
 
 fn desktop_text_input_route(text: &str) -> DesktopTextInputRoute {
-    if text.chars().count() > TYPE_TEXT_PASTE_FIRST_THRESHOLD_CHARS
-        || text.chars().any(|ch| !ch.is_ascii())
-    {
+    if text.chars().count() > TYPE_TEXT_PASTE_FIRST_THRESHOLD_CHARS || !text.is_ascii() {
         DesktopTextInputRoute::ClipboardPaste
     } else {
         DesktopTextInputRoute::KeyEvents
@@ -4984,11 +5001,10 @@ mod macos_accessibility {
 
     use super::{
         desktop_label_preview, macos_clipboard, macos_input, schema_error,
-        DesktopSidecarAccessibilityElement,
-        DesktopSidecarAccessibilitySnapshotPayload, DesktopSidecarAccessibilitySnapshotRequest,
-        DesktopSidecarAccessibilitySnapshotRow, DesktopSidecarAccessibilitySnapshotTarget,
-        DesktopSidecarControlRequest, DesktopSidecarElementAtPointPayload, DesktopSidecarErrorBody,
-        DesktopSidecarPointRequest,
+        DesktopSidecarAccessibilityElement, DesktopSidecarAccessibilitySnapshotPayload,
+        DesktopSidecarAccessibilitySnapshotRequest, DesktopSidecarAccessibilitySnapshotRow,
+        DesktopSidecarAccessibilitySnapshotTarget, DesktopSidecarControlRequest,
+        DesktopSidecarElementAtPointPayload, DesktopSidecarErrorBody, DesktopSidecarPointRequest,
     };
 
     type AXError = i32;
@@ -5188,11 +5204,7 @@ mod macos_accessibility {
             if width == 0 || height == 0 {
                 return Err(schema_error("width/height"));
             }
-            set_size_attribute(
-                &window,
-                "AXSize",
-                CGSize::new(width as f64, height as f64),
-            )?;
+            set_size_attribute(&window, "AXSize", CGSize::new(width as f64, height as f64))?;
         }
         Ok(())
     }
@@ -5383,7 +5395,9 @@ mod macos_accessibility {
         let item = find_descendant_by_label(&system_ui, label).ok_or_else(|| {
             DesktopSidecarErrorBody::new(
                 "desktop_status_item_not_found",
-                format!("Could not find menu bar status item `{label}` through macOS Accessibility."),
+                format!(
+                    "Could not find menu bar status item `{label}` through macOS Accessibility."
+                ),
                 false,
                 true,
             )
@@ -5445,7 +5459,10 @@ mod macos_accessibility {
     fn window_control_target(
         request: &DesktopSidecarControlRequest,
     ) -> Result<AxElement, DesktopSidecarErrorBody> {
-        if let Some(window_id) = request.window_id.as_deref().filter(|value| !value.trim().is_empty())
+        if let Some(window_id) = request
+            .window_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
         {
             let target = resolve_window_snapshot_target(window_id)?;
             if let Some(window) = target.window {
@@ -5518,7 +5535,9 @@ mod macos_accessibility {
         })
     }
 
-    fn application_by_process_name(process_name: &str) -> Result<AxElement, DesktopSidecarErrorBody> {
+    fn application_by_process_name(
+        process_name: &str,
+    ) -> Result<AxElement, DesktopSidecarErrorBody> {
         if !accessibility_permission_granted() {
             return Err(DesktopSidecarErrorBody::new(
                 "permission_accessibility_denied",
@@ -5916,7 +5935,8 @@ mod macos_accessibility {
                 .app_name
                 .clone()
                 .or_else(|| ax_string_attribute(&target.app, "AXTitle")),
-            window_title: ax_string_attribute(window, "AXTitle").or_else(|| target.window_title.clone()),
+            window_title: ax_string_attribute(window, "AXTitle")
+                .or_else(|| target.window_title.clone()),
             window_bounds: element_bounds(window),
             ancestry_path: vec![window_index],
         }
@@ -6073,7 +6093,8 @@ mod macos_accessibility {
                 Err(error)
             });
         }
-        let (x, y) = parse_legacy_element_id_point(element_id).ok_or_else(|| schema_error("elementId"))?;
+        let (x, y) =
+            parse_legacy_element_id_point(element_id).ok_or_else(|| schema_error("elementId"))?;
         element_at_position(&system_wide, x, y)
     }
 
@@ -6127,10 +6148,7 @@ mod macos_accessibility {
         ))
     }
 
-    fn matching_windows_for_handle(
-        app: &AxElement,
-        handle: &MacosElementHandle,
-    ) -> Vec<AxElement> {
+    fn matching_windows_for_handle(app: &AxElement, handle: &MacosElementHandle) -> Vec<AxElement> {
         let windows = ax_element_array_attribute(app, "AXWindows");
         if windows.is_empty() {
             return vec![app.clone()];
@@ -6160,9 +6178,9 @@ mod macos_accessibility {
             .as_deref()
             .filter(|title| !title.trim().is_empty())
             .is_some_and(|title| ax_string_attribute(window, "AXTitle").as_deref() == Some(title));
-        let bounds_matches = handle
-            .window_bounds
-            .is_some_and(|bounds| element_bounds(window).is_some_and(|actual| bounds_close(actual, bounds, 4)));
+        let bounds_matches = handle.window_bounds.is_some_and(|bounds| {
+            element_bounds(window).is_some_and(|actual| bounds_close(actual, bounds, 4))
+        });
         title_matches || bounds_matches
     }
 
@@ -6174,10 +6192,11 @@ mod macos_accessibility {
         if handle.ancestry_path.is_empty() {
             return (element_match_score(app, handle) >= 5).then(|| app.clone());
         }
-        let window = windows
-            .first()
-            .cloned()
-            .or_else(|| ax_element_array_attribute(app, "AXWindows").into_iter().next())?;
+        let window = windows.first().cloned().or_else(|| {
+            ax_element_array_attribute(app, "AXWindows")
+                .into_iter()
+                .next()
+        })?;
         if handle.ancestry_path.len() == 1 {
             return (element_match_score(&window, handle) >= 5).then_some(window);
         }
@@ -6215,7 +6234,7 @@ mod macos_accessibility {
         let score = element_match_score(element, handle);
         if best
             .as_ref()
-            .map_or(true, |(best_score, _)| score > *best_score)
+            .is_none_or(|(best_score, _)| score > *best_score)
         {
             *best = Some((score, element.clone()));
         }
@@ -6261,16 +6280,19 @@ mod macos_accessibility {
         {
             score += 2;
         }
-        if handle
-            .bounds
-            .is_some_and(|bounds| element_bounds(element).is_some_and(|actual| bounds_close(actual, bounds, 4)))
-        {
+        if handle.bounds.is_some_and(|bounds| {
+            element_bounds(element).is_some_and(|actual| bounds_close(actual, bounds, 4))
+        }) {
             score += 5;
         }
         score
     }
 
-    fn bounds_close(actual: MacosElementBounds, expected: MacosElementBounds, tolerance: u32) -> bool {
+    fn bounds_close(
+        actual: MacosElementBounds,
+        expected: MacosElementBounds,
+        tolerance: u32,
+    ) -> bool {
         (actual.x - expected.x).unsigned_abs() <= tolerance
             && (actual.y - expected.y).unsigned_abs() <= tolerance
             && actual.width.abs_diff(expected.width) <= tolerance
@@ -6436,12 +6458,18 @@ mod macos_accessibility {
         if expected.is_empty() {
             return false;
         }
-        ["AXTitle", "AXDescription", "AXValue", "AXHelp", "AXIdentifier"]
-            .into_iter()
-            .filter_map(|attribute| ax_string_attribute(element, attribute))
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .any(|value| value == expected || value.contains(&expected) || expected.contains(&value))
+        [
+            "AXTitle",
+            "AXDescription",
+            "AXValue",
+            "AXHelp",
+            "AXIdentifier",
+        ]
+        .into_iter()
+        .filter_map(|attribute| ax_string_attribute(element, attribute))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .any(|value| value == expected || value.contains(&expected) || expected.contains(&value))
     }
 
     fn perform_action(element: &AxElement, action: &str) -> Result<(), DesktopSidecarErrorBody> {
@@ -6506,7 +6534,10 @@ mod macos_accessibility {
         if status == AX_ERROR_SUCCESS {
             Ok(())
         } else {
-            Err(ax_action_error(format!("set Accessibility {attribute}"), status))
+            Err(ax_action_error(
+                format!("set Accessibility {attribute}"),
+                status,
+            ))
         }
     }
 
@@ -7162,7 +7193,7 @@ $Element = Resolve-XeroTargetElement $env:XERO_UIA_ELEMENT_ID $env:XERO_UIA_X $e
 Set-XeroElementValue $Element ([string]$env:XERO_UIA_VALUE)
 "####;
 
-const UIA_FOCUS_SCRIPT: &str = r####"
+    const UIA_FOCUS_SCRIPT: &str = r####"
 $Element = Resolve-XeroTargetElement $env:XERO_UIA_ELEMENT_ID $env:XERO_UIA_X $env:XERO_UIA_Y
 $Element.SetFocus()
 "####;
@@ -7280,14 +7311,25 @@ try {
         run_powershell_json(
             &format!("{UIA_COMMON_SCRIPT}\n{UIA_SNAPSHOT_SCRIPT}"),
             &[
-                ("XERO_UIA_WINDOW_ID", request.window_id.as_deref().unwrap_or_default()),
+                (
+                    "XERO_UIA_WINDOW_ID",
+                    request.window_id.as_deref().unwrap_or_default(),
+                ),
                 (
                     "XERO_UIA_FOCUSED_ONLY",
-                    if request.focused_only { "true" } else { "false" },
+                    if request.focused_only {
+                        "true"
+                    } else {
+                        "false"
+                    },
                 ),
                 (
                     "XERO_UIA_INCLUDE_CHILDREN",
-                    if request.include_children { "true" } else { "false" },
+                    if request.include_children {
+                        "true"
+                    } else {
+                        "false"
+                    },
                 ),
                 (
                     "XERO_UIA_MAX_DEPTH",
@@ -7469,12 +7511,12 @@ try {
         run_powershell_unit(
             &format!("{UIA_COMMON_SCRIPT}\n{UIA_MENU_SELECT_SCRIPT}"),
             &[
-                ("XERO_UIA_WINDOW_ID", request.window_id.as_deref().unwrap_or_default()),
-                ("XERO_UIA_MENU_PATH_JSON", menu_path_json.as_str()),
                 (
-                    "XERO_UIA_MENU_MNEMONICS_JSON",
-                    menu_mnemonics_json.as_str(),
+                    "XERO_UIA_WINDOW_ID",
+                    request.window_id.as_deref().unwrap_or_default(),
                 ),
+                ("XERO_UIA_MENU_PATH_JSON", menu_path_json.as_str()),
+                ("XERO_UIA_MENU_MNEMONICS_JSON", menu_mnemonics_json.as_str()),
             ],
             "desktop_windows_uia_menu_select_failed",
             "Windows UI Automation could not select the requested menu path",
@@ -7490,10 +7532,22 @@ try {
         run_powershell_unit(
             &format!("{UIA_COMMON_SCRIPT}\n{action_script}"),
             &[
-                ("XERO_UIA_ELEMENT_ID", request.element_id.as_deref().unwrap_or_default()),
-                ("XERO_UIA_X", &request.x.map(|value| value.to_string()).unwrap_or_default()),
-                ("XERO_UIA_Y", &request.y.map(|value| value.to_string()).unwrap_or_default()),
-                ("XERO_UIA_VALUE", request.value.as_deref().unwrap_or_default()),
+                (
+                    "XERO_UIA_ELEMENT_ID",
+                    request.element_id.as_deref().unwrap_or_default(),
+                ),
+                (
+                    "XERO_UIA_X",
+                    &request.x.map(|value| value.to_string()).unwrap_or_default(),
+                ),
+                (
+                    "XERO_UIA_Y",
+                    &request.y.map(|value| value.to_string()).unwrap_or_default(),
+                ),
+                (
+                    "XERO_UIA_VALUE",
+                    request.value.as_deref().unwrap_or_default(),
+                ),
             ],
             code,
             context,
@@ -7558,7 +7612,10 @@ try {
         } else {
             Err(DesktopSidecarErrorBody::new(
                 code,
-                format!("{context}: {}", command_output_message(&output.stdout, &output.stderr)),
+                format!(
+                    "{context}: {}",
+                    command_output_message(&output.stdout, &output.stderr)
+                ),
                 true,
                 true,
             ))
@@ -7878,11 +7935,17 @@ throw 'No Windows app target was provided.'
                 ),
                 (
                     "XERO_DESKTOP_WINDOW_WIDTH",
-                    &request.width.map(|value| value.to_string()).unwrap_or_default(),
+                    &request
+                        .width
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
                 ),
                 (
                     "XERO_DESKTOP_WINDOW_HEIGHT",
-                    &request.height.map(|value| value.to_string()).unwrap_or_default(),
+                    &request
+                        .height
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
                 ),
             ],
             "desktop_window_layout_failed",
@@ -8384,12 +8447,8 @@ mod cross_platform_input {
             "medianext" | "media_next" | "media_next_track" | "nexttrack" | "next_track" => {
                 Ok(Key::MediaNextTrack)
             }
-            "mediaprevious"
-            | "media_previous"
-            | "media_prev"
-            | "media_prev_track"
-            | "previous_track"
-            | "prev_track" => Ok(Key::MediaPrevTrack),
+            "mediaprevious" | "media_previous" | "media_prev" | "media_prev_track"
+            | "previous_track" | "prev_track" => Ok(Key::MediaPrevTrack),
             "mediastop" | "media_stop" => Ok(Key::MediaStop),
             "mediafast" | "media_fast" | "media_fast_forward" | "fast_forward" => {
                 Ok(Key::MediaFast)
@@ -8755,12 +8814,8 @@ mod macos_input {
             "medianext" | "media_next" | "media_next_track" | "nexttrack" | "next_track" => {
                 Some(enigo::Key::MediaNextTrack)
             }
-            "mediaprevious"
-            | "media_previous"
-            | "media_prev"
-            | "media_prev_track"
-            | "previous_track"
-            | "prev_track" => Some(enigo::Key::MediaPrevTrack),
+            "mediaprevious" | "media_previous" | "media_prev" | "media_prev_track"
+            | "previous_track" | "prev_track" => Some(enigo::Key::MediaPrevTrack),
             "mediafast" | "media_fast" | "media_fast_forward" | "fast_forward" => {
                 Some(enigo::Key::MediaFast)
             }
@@ -9272,9 +9327,8 @@ mod clipboard_resources {
         DesktopSidecarClipboardFilesPayload, DesktopSidecarClipboardHtmlPayload,
         DesktopSidecarClipboardImagePayload, DesktopSidecarClipboardRtfPayload,
         DesktopSidecarControlRequest, DesktopSidecarErrorBody, CLIPBOARD_HTML_DEFAULT_MAX_BYTES,
-        CLIPBOARD_HTML_MAX_BYTES,
-        CLIPBOARD_IMAGE_DEFAULT_MAX_BYTES, CLIPBOARD_IMAGE_MAX_BYTES, CLIPBOARD_MAX_FILE_PATHS,
-        CLIPBOARD_RTF_DEFAULT_MAX_BYTES, CLIPBOARD_RTF_MAX_BYTES,
+        CLIPBOARD_HTML_MAX_BYTES, CLIPBOARD_IMAGE_DEFAULT_MAX_BYTES, CLIPBOARD_IMAGE_MAX_BYTES,
+        CLIPBOARD_MAX_FILE_PATHS, CLIPBOARD_RTF_DEFAULT_MAX_BYTES, CLIPBOARD_RTF_MAX_BYTES,
     };
 
     pub(super) fn read_image(
@@ -9315,7 +9369,8 @@ mod clipboard_resources {
             width: image.width as u32,
             height: image.height as u32,
             byte_length: png_bytes.len(),
-            data_base64: include_data.then(|| base64::engine::general_purpose::STANDARD.encode(&png_bytes)),
+            data_base64: include_data
+                .then(|| base64::engine::general_purpose::STANDARD.encode(&png_bytes)),
             truncated: request.include_data && png_bytes.len() > max_bytes,
         })
     }
@@ -9492,7 +9547,14 @@ $rtf = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataF
 [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($rtf))
 "#;
         let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .args([
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
             .output()
             .map_err(|error| {
                 clipboard_error(
@@ -9549,9 +9611,8 @@ $rtf = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataF
         let wrote = autoreleasepool(|_| {
             let pasteboard = NSPasteboard::generalPasteboard();
             pasteboard.clearContents();
-            let data = unsafe {
-                NSData::dataWithBytes_length(rtf.as_ptr().cast::<c_void>(), rtf.len())
-            };
+            let data =
+                unsafe { NSData::dataWithBytes_length(rtf.as_ptr().cast::<c_void>(), rtf.len()) };
             pasteboard.setData_forType(Some(&data), unsafe { NSPasteboardTypeRTF })
         });
         if wrote {
@@ -9578,7 +9639,14 @@ $rtf = [Console]::In.ReadToEnd()
 [System.Windows.Forms.Clipboard]::SetText($rtf, [System.Windows.Forms.TextDataFormat]::Rtf)
 "#;
         let mut child = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .args([
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -9638,7 +9706,7 @@ $rtf = [Console]::In.ReadToEnd()
     fn nsdata_to_vec(data: &objc2_foundation::NSData) -> Vec<u8> {
         use std::{ffi::c_void, ptr::NonNull};
 
-        let len = data.length() as usize;
+        let len = data.length();
         let mut bytes = vec![0u8; len];
         if len > 0 {
             let ptr = NonNull::new(bytes.as_mut_ptr().cast::<c_void>())
@@ -9690,7 +9758,8 @@ $rtf = [Console]::In.ReadToEnd()
         }
     }
 
-    pub(super) fn read_files() -> Result<DesktopSidecarClipboardFilesPayload, DesktopSidecarErrorBody> {
+    pub(super) fn read_files(
+    ) -> Result<DesktopSidecarClipboardFilesPayload, DesktopSidecarErrorBody> {
         let mut clipboard = open_clipboard("read file list")?;
         let files = match clipboard.get().file_list() {
             Ok(files) => files,
@@ -10705,12 +10774,12 @@ mod tests {
             "sidecar_schema_invalid"
         );
         status.target_label = Some("Wi-Fi".into());
-        assert!(validate_control_request(DesktopSidecarOperation::StatusItemPress, &status).is_ok());
+        assert!(
+            validate_control_request(DesktopSidecarOperation::StatusItemPress, &status).is_ok()
+        );
 
-        let root = std::env::temp_dir().join(format!(
-            "xero-sidecar-dialog-test-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("xero-sidecar-dialog-test-{}", std::process::id()));
         fs::create_dir_all(&root).expect("dialog temp dir");
         let save_target = root.join("draft.txt");
         let mut dialog = DesktopSidecarControlRequest {
@@ -10727,13 +10796,11 @@ mod tests {
                 .code,
             "sidecar_schema_invalid"
         );
-        assert!(
-            validate_control_request(
-                DesktopSidecarOperation::FileDialogConfirm,
-                &DesktopSidecarControlRequest::default()
-            )
-            .is_ok()
-        );
+        assert!(validate_control_request(
+            DesktopSidecarOperation::FileDialogConfirm,
+            &DesktopSidecarControlRequest::default()
+        )
+        .is_ok());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -10967,11 +11034,8 @@ mod tests {
 
     #[test]
     fn windows_menu_alt_mnemonics_prefer_explicit_and_safe_keys() {
-        let mnemonics = windows_menu_alt_mnemonics(&[
-            "&File".into(),
-            "Save && Close".into(),
-            "E&xit".into(),
-        ]);
+        let mnemonics =
+            windows_menu_alt_mnemonics(&["&File".into(), "Save && Close".into(), "E&xit".into()]);
 
         assert_eq!(mnemonics, vec!["f", "s", "x"]);
     }

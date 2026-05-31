@@ -1740,9 +1740,9 @@ where
                     payload,
                 } => {
                     if joined_sessions.insert(session_id.clone()) {
-                        connection.join_session(&session_id)?;
+                        connection.join_session(session_id)?;
                     }
-                    connection.push_session_frame(&session_id, payload.clone())
+                    connection.push_session_frame(session_id, payload.clone())
                 }
                 OutboundFrame::SessionAuthorization {
                     join_ref,
@@ -1752,13 +1752,13 @@ where
                     run_id,
                 } => {
                     let result = connection.authorize_session_join(
-                        &join_ref,
-                        &auth_topic,
+                        join_ref,
+                        auth_topic,
                         *authorized,
                         run_id.as_deref(),
                     );
                     if result.is_ok() && *authorized && joined_sessions.insert(session_id.clone()) {
-                        connection.join_session(&session_id)?;
+                        connection.join_session(session_id)?;
                     }
                     result
                 }

@@ -3535,16 +3535,30 @@ fn computer_use_manifest_availability_reasons(
     reasons
 }
 
-fn computer_use_manifest_availability_diagnostics(
-    tool_name: &str,
+struct ComputerUseManifestAvailabilityContext<'a> {
+    tool_name: &'a str,
     allowed_by_policy: bool,
     host_available: bool,
     runtime_available: bool,
     active_by_default: bool,
     available_through_tool_access: bool,
-    activation_groups: &[String],
+    activation_groups: &'a [String],
     skill_tool_enabled: bool,
+}
+
+fn computer_use_manifest_availability_diagnostics(
+    context: ComputerUseManifestAvailabilityContext<'_>,
 ) -> JsonValue {
+    let ComputerUseManifestAvailabilityContext {
+        tool_name,
+        allowed_by_policy,
+        host_available,
+        runtime_available,
+        active_by_default,
+        available_through_tool_access,
+        activation_groups,
+        skill_tool_enabled,
+    } = context;
     let rollout_gate = computer_use_manifest_rollout_gate(tool_name);
     let platform_gate = computer_use_manifest_platform_gate(tool_name);
     let availability_reasons = computer_use_manifest_availability_reasons(
@@ -5382,16 +5396,18 @@ impl AutonomousToolRuntime {
                     && runtime_available
                     && !active_by_default
                     && !activation_groups.is_empty();
-                let availability_diagnostics = computer_use_manifest_availability_diagnostics(
+                let availability_context = ComputerUseManifestAvailabilityContext {
                     tool_name,
                     allowed_by_policy,
                     host_available,
                     runtime_available,
                     active_by_default,
                     available_through_tool_access,
-                    &activation_groups,
-                    self.skill_tool_enabled(),
-                );
+                    activation_groups: &activation_groups,
+                    skill_tool_enabled: self.skill_tool_enabled(),
+                };
+                let availability_diagnostics =
+                    computer_use_manifest_availability_diagnostics(availability_context);
                 json!({
                     "toolName": tool_name,
                     "group": entry.group,

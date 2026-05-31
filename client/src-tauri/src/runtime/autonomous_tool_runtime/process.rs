@@ -2092,7 +2092,7 @@ fn resolve_host_command_cwd(cwd: Option<&str>) -> CommandResult<PathBuf> {
 
 fn expand_home_path(value: &str) -> CommandResult<PathBuf> {
     if value == "~" {
-        return Ok(host_home_dir()?);
+        return host_home_dir();
     }
     if let Some(rest) = value
         .strip_prefix("~/")

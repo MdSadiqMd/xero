@@ -7225,7 +7225,7 @@ mod tests {
                 serialized.len() <= max_bytes,
                 "{action} environment_context projection used {} byte(s), above the {max_bytes} byte budget (roughly {} token(s))",
                 serialized.len(),
-                (max_bytes + 3) / 4
+                max_bytes.div_ceil(4)
             );
             assert_eq!(
                 visible["output"]["xeroCompact"]["format"],
