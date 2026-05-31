@@ -266,3 +266,153 @@ fn normalize_bounded_usize(
 fn is_success_status(status: u16) -> bool {
     (200..=299).contains(&status)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug, Clone)]
+    struct StaticTransport {
+        response: AutonomousWebTransportResponse,
+        last_request: Arc<Mutex<Option<AutonomousWebTransportRequest>>>,
+    }
+
+    impl AutonomousWebTransport for StaticTransport {
+        fn execute(
+            &self,
+            request: &AutonomousWebTransportRequest,
+        ) -> Result<AutonomousWebTransportResponse, AutonomousWebTransportError> {
+            *self.last_request.lock().expect("transport request lock") = Some(request.clone());
+            Ok(self.response.clone())
+        }
+    }
+
+    fn runtime_with_response(
+        config: AutonomousWebConfig,
+        response: AutonomousWebTransportResponse,
+    ) -> (
+        AutonomousWebRuntime,
+        Arc<Mutex<Option<AutonomousWebTransportRequest>>>,
+    ) {
+        let last_request = Arc::new(Mutex::new(None));
+        let transport = Arc::new(StaticTransport {
+            response,
+            last_request: Arc::clone(&last_request),
+        });
+        (
+            AutonomousWebRuntime::with_transport(config, transport),
+            last_request,
+        )
+    }
+
+    #[test]
+    fn search_uses_configured_provider_and_normalizes_results() {
+        let response = AutonomousWebTransportResponse {
+            status: 200,
+            final_url: "https://search.example.test/api?q=Rust&limit=1".into(),
+            content_type: Some("application/json".into()),
+            body: br#"{"results":[{"title":" &lt;Rust&gt; docs ","url":"https://www.rust-lang.org/learn","snippet":"Current &amp; stable"},{"title":"Second","url":"https://example.com/second","snippet":null}]}"#.to_vec(),
+            body_truncated: false,
+        };
+        let config = AutonomousWebConfig {
+            search_provider: Some(
+                AutonomousWebSearchProviderConfig::new("https://search.example.test/api")
+                    .with_bearer_token("test-token"),
+            ),
+            limits: AutonomousWebRuntimeLimits::default(),
+        };
+        let (runtime, last_request) = runtime_with_response(config, response);
+
+        let output = runtime
+            .search(AutonomousWebSearchRequest {
+                query: " Rust web ".into(),
+                result_count: Some(1),
+                timeout_ms: Some(5_000),
+            })
+            .expect("web search output");
+
+        assert_eq!(output.query, " Rust web ");
+        assert!(output.truncated);
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].title, "<Rust> docs");
+        assert_eq!(output.results[0].url, "https://www.rust-lang.org/learn");
+        assert_eq!(
+            output.results[0].snippet.as_deref(),
+            Some("Current & stable")
+        );
+
+        let request = last_request
+            .lock()
+            .expect("transport request lock")
+            .clone()
+            .expect("transport request");
+        let url = Url::parse(&request.url).expect("provider url");
+        let query_pairs = url.query_pairs().collect::<Vec<_>>();
+        assert!(query_pairs
+            .iter()
+            .any(|(key, value)| key == "q" && value == "Rust web"));
+        assert!(query_pairs
+            .iter()
+            .any(|(key, value)| key == "limit" && value == "1"));
+        assert_eq!(request.timeout_ms, 5_000);
+        assert_eq!(
+            request.headers,
+            vec![("Authorization".into(), "Bearer test-token".into())]
+        );
+    }
+
+    #[test]
+    fn search_without_provider_returns_user_fixable_error() {
+        let runtime = AutonomousWebRuntime::new(AutonomousWebConfig::default());
+
+        let error = runtime
+            .search(AutonomousWebSearchRequest {
+                query: "current docs".into(),
+                result_count: None,
+                timeout_ms: None,
+            })
+            .expect_err("missing provider should fail");
+
+        assert_eq!(error.code, "autonomous_web_search_provider_unavailable");
+    }
+
+    #[test]
+    fn fetch_reads_http_text_without_search_provider() {
+        let response = AutonomousWebTransportResponse {
+            status: 200,
+            final_url: "https://example.com/docs".into(),
+            content_type: Some("text/html; charset=utf-8".into()),
+            body: br#"<html><head><title>Example Docs</title></head><body><h1>Alpha</h1><p>Beta &amp; Gamma</p></body></html>"#.to_vec(),
+            body_truncated: false,
+        };
+        let (runtime, last_request) =
+            runtime_with_response(AutonomousWebConfig::default(), response);
+
+        let output = runtime
+            .fetch(AutonomousWebFetchRequest {
+                url: "https://example.com/docs".into(),
+                max_chars: Some(80),
+                timeout_ms: Some(4_000),
+            })
+            .expect("web fetch output");
+
+        assert_eq!(output.final_url, "https://example.com/docs");
+        assert_eq!(output.content_type.as_deref(), Some("text/html"));
+        assert_eq!(output.content_kind, AutonomousWebFetchContentKind::Html);
+        assert_eq!(output.title.as_deref(), Some("Example Docs"));
+        assert!(output.content.contains("Alpha"));
+        assert!(output.content.contains("Beta & Gamma"));
+        assert!(!output.truncated);
+
+        let request = last_request
+            .lock()
+            .expect("transport request lock")
+            .clone()
+            .expect("transport request");
+        assert_eq!(request.url, "https://example.com/docs");
+        assert_eq!(request.timeout_ms, 4_000);
+        assert!(request.headers.is_empty());
+    }
+}

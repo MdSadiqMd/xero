@@ -363,6 +363,150 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		}
 	});
 
+	it("releases manual control without reconnecting a healthy WebRTC stream", async () => {
+		vi.useFakeTimers();
+		const peerConnections = installMockPeerConnection();
+		try {
+			let frameHandler: ((rawFrame: unknown) => void) | null = null;
+			const push = vi.fn();
+			const channel = {
+				on: vi.fn((event: string, handler: (rawFrame: unknown) => void) => {
+					if (event === "frame") frameHandler = handler;
+					return `${event}-ref`;
+				}),
+				off: vi.fn(),
+				push,
+			} as unknown as Channel;
+
+			render(
+				<ComputerUseDesktopViewport
+					channel={channel}
+					computerId="desktop-1"
+					deviceId="web-1"
+					iceServers={[]}
+					isAgentWorking={false}
+					isOnline
+					onPromptSubmit={vi.fn()}
+					previewUrl={null}
+					presentation={{
+						isMobile: false,
+						override: "desktop",
+						rotateDesktop: false,
+					}}
+					sessionId="session-1"
+					streamRunId="run-1"
+					streamToken="stream-token-1"
+				/>,
+			);
+
+			const desktop = screen.getByLabelText("Desktop");
+			const toolbar = within(desktop).getByRole("toolbar", {
+				name: "Desktop stream controls",
+			});
+			fireEvent.click(within(toolbar).getByRole("button", { name: /start/i }));
+
+			await act(async () => {
+				frameHandler?.(
+					relayFrame({
+						schema: "xero.computer_use_stream_offer.v1",
+						streamId: "stream-1",
+						payload: {
+							type: "offer",
+							sdp: "v=0\r\n",
+						},
+						desktop: {
+							stream: {
+								status: "starting",
+								transport: "web_rtc",
+								quality: "balanced",
+							},
+						},
+					}),
+				);
+				await Promise.resolve();
+			});
+
+			act(() => {
+				peerConnections.instances[0]?.emitTrack();
+			});
+			expect(desktop.querySelector("video")).toBeTruthy();
+
+			fireEvent.click(within(toolbar).getByRole("button", { name: /manual/i }));
+			const manualRequest = push.mock.calls
+				.map(
+					([, frame]) =>
+						frame as { kind?: string; payload?: { manualControlId?: string } },
+				)
+				.find((frame) => frame.kind === "computer_use_manual_control_request");
+			const manualControlId = manualRequest?.payload?.manualControlId;
+			expect(manualControlId).toBeTruthy();
+
+			await act(async () => {
+				frameHandler?.(
+					relayFrame({
+						schema: "xero.computer_use_manual_control_request.v1",
+						ok: true,
+						outcome: "executed",
+						manualControlId,
+						streamId: "stream-1",
+					}),
+				);
+				await Promise.resolve();
+			});
+			expect(
+				within(toolbar).getByRole("button", { name: /release/i }),
+			).toBeTruthy();
+
+			push.mockClear();
+			fireEvent.click(
+				within(toolbar).getByRole("button", { name: /release/i }),
+			);
+			await act(async () => {
+				frameHandler?.(
+					relayFrame({
+						schema: "xero.computer_use_manual_control_release.v1",
+						ok: true,
+						outcome: "executed",
+						manualControlId,
+						streamId: "stream-1",
+					}),
+				);
+				await Promise.resolve();
+			});
+			expect(
+				within(toolbar).getByRole("button", { name: /manual/i }),
+			).toBeTruthy();
+
+			await act(async () => {
+				frameHandler?.(
+					relayFrame({
+						schema: "xero.computer_use_stream_status.v1",
+						streamId: "stream-1",
+						desktop: {
+							stream: {
+								status: "live",
+								transport: "web_rtc",
+								quality: "balanced",
+							},
+						},
+					}),
+				);
+				await Promise.resolve();
+			});
+			act(() => {
+				vi.advanceTimersByTime(8_000);
+			});
+
+			expect(streamRequestCalls(push)).toHaveLength(0);
+			expect(peerConnections.instances).toHaveLength(1);
+			expect(peerConnections.instances[0]?.connectionState).toBe("connected");
+			expect(desktop.querySelector("video")).toBeTruthy();
+		} finally {
+			peerConnections.restore();
+			vi.useRealTimers();
+		}
+	});
+
 	it("queues ICE candidates that arrive before the WebRTC offer is applied", async () => {
 		const peerConnections = installMockPeerConnection();
 		try {

@@ -2057,6 +2057,7 @@ export function ComputerUseDesktopViewport({
 	const adaptiveQualityStableSamplesRef = useRef(0);
 	const adaptiveQualityLastChangedAtRef = useRef(0);
 	const liveVideoSeenRef = useRef(false);
+	const hasLiveVideoRef = useRef(false);
 	const fallbackRecoveryLastAttemptAtRef = useRef(0);
 	const lastDesktopStreamRequestAtRef = useRef(0);
 	const lastDesktopVideoFrameAtRef = useRef(0);
@@ -2259,6 +2260,15 @@ export function ComputerUseDesktopViewport({
 		}
 		setFallbackPreviewUrl(null);
 	}, []);
+	const setDesktopHasLiveVideo = useCallback((next: boolean) => {
+		hasLiveVideoRef.current = next;
+		setHasLiveVideo(next);
+	}, []);
+	const desktopStateAfterManualControlEnds =
+		useCallback((): DesktopViewportState => {
+			if (hasLiveVideoRef.current) return "live";
+			return streamIdRef.current ? "degraded" : "waiting";
+		}, []);
 
 	const clearDesktopStreamMedia = useCallback(
 		({
@@ -2287,7 +2297,7 @@ export function ComputerUseDesktopViewport({
 			pendingIceCandidatesRef.current = [];
 			dataChannelFramesRef.current.clear();
 			if (videoRef.current) videoRef.current.srcObject = null;
-			setHasLiveVideo(false);
+			setDesktopHasLiveVideo(false);
 			lastDesktopVideoHealthProbeAtRef.current = 0;
 			if (clearPreview) clearFallbackPreview();
 			if (clearStreamId) {
@@ -2295,7 +2305,7 @@ export function ComputerUseDesktopViewport({
 				setStreamId(null);
 			}
 		},
-		[clearFallbackPreview],
+		[clearFallbackPreview, setDesktopHasLiveVideo],
 	);
 
 	const showDesktopDataChannelFrame = useCallback(
@@ -2312,10 +2322,10 @@ export function ComputerUseDesktopViewport({
 			pendingMediaStreamRef.current = null;
 			if (videoRef.current) videoRef.current.srcObject = null;
 			setFallbackPreviewUrl(objectUrl);
-			setHasLiveVideo(false);
+			setDesktopHasLiveVideo(false);
 			setState((current) => (current === "manual" ? current : "degraded"));
 		},
-		[],
+		[setDesktopHasLiveVideo],
 	);
 	const markDesktopVideoFrame = useCallback(() => {
 		lastDesktopVideoFrameAtRef.current = Date.now();
@@ -2372,7 +2382,7 @@ export function ComputerUseDesktopViewport({
 				pendingIceCandidatesRef.current = [];
 				dataChannelFramesRef.current.clear();
 				if (videoRef.current) videoRef.current.srcObject = null;
-				setHasLiveVideo(false);
+				setDesktopHasLiveVideo(false);
 			}
 			if (peerConnectionRef.current) return peerConnectionRef.current;
 			if (typeof RTCPeerConnection === "undefined") {
@@ -2408,7 +2418,7 @@ export function ComputerUseDesktopViewport({
 				markDesktopVideoFrame();
 				fallbackRecoveryLastAttemptAtRef.current = 0;
 				clearFallbackPreview();
-				setHasLiveVideo(true);
+				setDesktopHasLiveVideo(true);
 				setState((current) =>
 					current === "manual" || manualActive ? "manual" : "live",
 				);
@@ -2450,6 +2460,7 @@ export function ComputerUseDesktopViewport({
 			manualActive,
 			markDesktopVideoFrame,
 			sessionId,
+			setDesktopHasLiveVideo,
 			streamRunId,
 			streamToken,
 		],
@@ -2708,7 +2719,7 @@ export function ComputerUseDesktopViewport({
 				}
 				fallbackPreviewObjectUrlRef.current = objectUrl;
 				setFallbackPreviewUrl(objectUrl);
-				setHasLiveVideo(false);
+				setDesktopHasLiveVideo(false);
 				setState((current) => (current === "manual" ? current : "degraded"));
 			}
 			if (
@@ -2717,10 +2728,14 @@ export function ComputerUseDesktopViewport({
 				state !== "live" &&
 				state !== "manual"
 			) {
-				setState(
+				const webRtcStreamHealthy =
 					nextStreamDetails?.transport === "web_rtc" &&
-						nextStreamDetails.status !== "degraded"
-						? "connecting"
+					nextStreamDetails.status !== "degraded";
+				setState(
+					webRtcStreamHealthy
+						? hasLiveVideoRef.current
+							? "live"
+							: "connecting"
 						: "degraded",
 				);
 			} else if (
@@ -2740,7 +2755,7 @@ export function ComputerUseDesktopViewport({
 					manualControlIdRef.current = null;
 					setManualControlId(null);
 					setManualState("manual_denied");
-					setState(streamIdRef.current ? "degraded" : "waiting");
+					setState(desktopStateAfterManualControlEnds());
 				}
 			} else if (
 				payload.schema === "xero.computer_use_manual_control_heartbeat.v1"
@@ -2752,7 +2767,7 @@ export function ComputerUseDesktopViewport({
 				} else {
 					disarmKeyboardCaptureRef.current?.({ flushText: true });
 					setManualState("manual_reconnecting");
-					setState(streamIdRef.current ? "degraded" : "waiting");
+					setState(desktopStateAfterManualControlEnds());
 				}
 			} else if (
 				payload.schema === "xero.computer_use_manual_control_input.v1"
@@ -2761,7 +2776,7 @@ export function ComputerUseDesktopViewport({
 				if (!computerUseCommandSucceeded(payload)) {
 					disarmKeyboardCaptureRef.current?.({ flushText: true });
 					setManualState("manual_reconnecting");
-					setState(streamIdRef.current ? "degraded" : "waiting");
+					setState(desktopStateAfterManualControlEnds());
 				}
 			} else if (
 				payload.schema === "xero.computer_use_manual_control_release.v1"
@@ -2771,7 +2786,7 @@ export function ComputerUseDesktopViewport({
 				manualControlIdRef.current = null;
 				setManualControlId(null);
 				setManualState("manual_released");
-				setState(streamIdRef.current ? "degraded" : "waiting");
+				setState(desktopStateAfterManualControlEnds());
 			}
 		});
 		return () => {
@@ -2781,9 +2796,11 @@ export function ComputerUseDesktopViewport({
 		applyAdaptiveStreamQuality,
 		channel,
 		clearDesktopStreamMedia,
+		desktopStateAfterManualControlEnds,
 		handleRemoteCommandResult,
 		handleWebRtcSignal,
 		recoverDesktopWebRtcStream,
+		setDesktopHasLiveVideo,
 		state,
 	]);
 
@@ -2820,7 +2837,7 @@ export function ComputerUseDesktopViewport({
 							? "manual_reconnecting"
 							: "manual_denied",
 					);
-					setState(streamIdRef.current ? "degraded" : "waiting");
+					setState(desktopStateAfterManualControlEnds());
 				}
 				if (
 					payload.kind === "computer_use_manual_control_release" &&
@@ -2830,14 +2847,14 @@ export function ComputerUseDesktopViewport({
 					manualControlIdRef.current = null;
 					setManualControlId(null);
 					setManualState("manual_released");
-					setState(streamIdRef.current ? "degraded" : "waiting");
+					setState(desktopStateAfterManualControlEnds());
 				}
 			},
 		);
 		return () => {
 			channel.off("computer_use_command_outcome", ref);
 		};
-	}, [channel]);
+	}, [channel, desktopStateAfterManualControlEnds]);
 
 	useEffect(() => {
 		if (!channel || !deviceId || !manualActive || !manualControlId) return;
@@ -2857,7 +2874,7 @@ export function ComputerUseDesktopViewport({
 					result.outcome === "timed_out"
 				) {
 					setManualState("manual_reconnecting");
-					setState(streamIdRef.current ? "degraded" : "waiting");
+					setState(desktopStateAfterManualControlEnds());
 				}
 			});
 		};
@@ -2868,6 +2885,7 @@ export function ComputerUseDesktopViewport({
 		channel,
 		computerId,
 		deviceId,
+		desktopStateAfterManualControlEnds,
 		manualControlId,
 		manualActive,
 		sessionId,
@@ -2935,10 +2953,10 @@ export function ComputerUseDesktopViewport({
 				setManualControlId(null);
 				setManualState("manual_denied");
 			}
-			setState(streamIdRef.current ? "degraded" : "waiting");
+			setState(desktopStateAfterManualControlEnds());
 		}, timeoutMs);
 		return () => window.clearTimeout(handle);
-	}, [manualState]);
+	}, [desktopStateAfterManualControlEnds, manualState]);
 
 	useEffect(() => {
 		if (!channel || !deviceId || !streamId) return;
@@ -3073,7 +3091,7 @@ export function ComputerUseDesktopViewport({
 			pendingIceCandidatesRef.current = [];
 			dataChannelFramesRef.current.clear();
 			if (videoRef.current) videoRef.current.srcObject = null;
-			setHasLiveVideo(false);
+			setDesktopHasLiveVideo(false);
 			requestComputerUseStream(channel, {
 				computerId,
 				sessionId,
@@ -3094,6 +3112,7 @@ export function ComputerUseDesktopViewport({
 		deviceId,
 		iceServers,
 		sessionId,
+		setDesktopHasLiveVideo,
 		state,
 		streamRunId,
 		streamToken,
@@ -3233,6 +3252,7 @@ export function ComputerUseDesktopViewport({
 				manualControlIdRef.current = null;
 				setManualControlId(null);
 				setManualState("manual_denied");
+				setState(desktopStateAfterManualControlEnds());
 			}
 		});
 	};
@@ -3254,7 +3274,7 @@ export function ComputerUseDesktopViewport({
 				manualControlIdRef.current = null;
 				setManualControlId(null);
 				setManualState("manual_released");
-				setState(streamIdRef.current ? "degraded" : "waiting");
+				setState(desktopStateAfterManualControlEnds());
 			}
 		});
 	};

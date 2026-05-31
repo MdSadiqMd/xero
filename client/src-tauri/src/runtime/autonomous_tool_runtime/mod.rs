@@ -2922,7 +2922,7 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "web",
             "Search the web through the configured backend.",
             &["web", "search", "internet", "docs", "latest"],
-            &["query", "limit"],
+            &["query", "resultCount", "timeoutMs"],
             &["Search current official documentation."],
             "network",
         ),
@@ -2931,7 +2931,7 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             "web",
             "Fetch HTTP or HTTPS text content.",
             &["web", "fetch", "http", "docs", "page"],
-            &["url", "contentKind", "maxBytes"],
+            &["url", "maxChars", "timeoutMs"],
             &["Fetch a documentation page after search."],
             "network",
         ),
@@ -9297,6 +9297,22 @@ mod tests {
                 "planning should block {blocked_tool}"
             );
         }
+    }
+
+    #[test]
+    fn web_catalog_entries_match_request_schema_fields() {
+        let catalog = deferred_tool_catalog(true);
+        let search = catalog
+            .iter()
+            .find(|entry| entry.tool_name == AUTONOMOUS_TOOL_WEB_SEARCH)
+            .expect("web search catalog entry");
+        let fetch = catalog
+            .iter()
+            .find(|entry| entry.tool_name == AUTONOMOUS_TOOL_WEB_FETCH)
+            .expect("web fetch catalog entry");
+
+        assert_eq!(search.schema_fields, &["query", "resultCount", "timeoutMs"]);
+        assert_eq!(fetch.schema_fields, &["url", "maxChars", "timeoutMs"]);
     }
 
     #[test]

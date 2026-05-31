@@ -462,6 +462,8 @@ XERO_SOLANA_RESOURCE_ROOT=/path/to/resources
 XERO_SOLANA_TOOLCHAIN_ROOT=/path/to/toolchain
 ```
 
+Current autonomous web-search status, gaps, and the settings-backed implementation plan are documented in `docs/web-search-functionality-audit.md`.
+
 ---
 
 ## Persistence Model
