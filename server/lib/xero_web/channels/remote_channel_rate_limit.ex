@@ -74,8 +74,11 @@ defmodule XeroWeb.RemoteChannelRateLimit do
   defp computer_use_class("computer_use_manual_control_input", payload)
        when is_map(payload) do
     case payload do
-      %{"payload" => %{"action" => "mouse_move"}} -> "manual_pointer"
-      _ -> "manual_critical"
+      %{"payload" => %{"action" => action}} when action in ["mouse_move", "mouse_drag_move"] ->
+        "manual_pointer"
+
+      _ ->
+        "manual_critical"
     end
   end
 

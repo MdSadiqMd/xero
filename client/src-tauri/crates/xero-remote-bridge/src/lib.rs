@@ -875,7 +875,7 @@ impl Default for DesktopBridgeLoopOptions {
     fn default() -> Self {
         Self {
             heartbeat_interval: Duration::from_secs(30),
-            read_timeout: Duration::from_millis(500),
+            read_timeout: Duration::from_millis(50),
         }
     }
 }
@@ -1964,6 +1964,11 @@ fn outbound_priority_for_payload(payload: &JsonValue) -> OutboundPriority {
         .get("schema")
         .and_then(JsonValue::as_str)
         .unwrap_or_default();
+    if schema == "xero.computer_use_manual_control_input.v1"
+        && manual_pointer_outcome_is_best_effort(&envelope.payload)
+    {
+        return OutboundPriority::CoalescedBestEffort;
+    }
     if schema.starts_with("xero.computer_use_manual_control_")
         || schema == "xero.computer_use_stream_offer.v1"
         || schema == "xero.computer_use_stream_answer.v1"
@@ -1979,6 +1984,24 @@ fn outbound_priority_for_payload(payload: &JsonValue) -> OutboundPriority {
         return OutboundPriority::CoalescedBestEffort;
     }
     OutboundPriority::ReliableIdempotent
+}
+
+fn manual_pointer_outcome_is_best_effort(payload: &JsonValue) -> bool {
+    if payload.get("ok").and_then(JsonValue::as_bool) == Some(false) {
+        return false;
+    }
+    matches!(
+        manual_control_input_action(payload),
+        Some("mouse_move" | "mouse_drag_move")
+    )
+}
+
+fn manual_control_input_action(payload: &JsonValue) -> Option<&str> {
+    payload
+        .get("payload")
+        .and_then(JsonValue::as_object)
+        .and_then(|payload| payload.get("action"))
+        .and_then(JsonValue::as_str)
 }
 
 fn outbound_queue_limit(priority: OutboundPriority) -> usize {
@@ -2017,6 +2040,18 @@ fn outbound_frame_coalesce_key(
         .get("schema")
         .and_then(JsonValue::as_str)
         .unwrap_or_default();
+    if schema == "xero.computer_use_manual_control_input.v1" {
+        let manual_control_id = envelope
+            .payload
+            .get("manualControlId")
+            .or_else(|| envelope.payload.get("manual_control_id"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default();
+        let action = manual_control_input_action(&envelope.payload).unwrap_or_default();
+        return Some(format!(
+            "{session_id}:{schema}:{manual_control_id}:{action}"
+        ));
+    }
     let stream_id = envelope
         .payload
         .get("streamId")
@@ -2743,6 +2778,52 @@ mod tests {
             "xero.computer_use_stream_status.v1"
         );
         assert_eq!(envelope.payload["status"], "live");
+    }
+
+    #[test]
+    fn bridge_outbound_queue_coalesces_successful_pointer_outcomes() {
+        let temp = tempfile_path("bridge-pointer-outcome-coalesced");
+        let identity_store = FileIdentityStore::new(temp.join("identity.json"));
+        identity_store.save(&test_identity()).expect("identity");
+        let bridge = RemoteBridge::new(BridgeConfig::local_default(), identity_store);
+
+        bridge
+            .forward(
+                "session-1",
+                json!({
+                    "schema": "xero.computer_use_manual_control_input.v1",
+                    "ok": true,
+                    "manualControlId": "manual-1",
+                    "payload": {
+                        "action": "mouse_drag_move",
+                        "x": 10,
+                    },
+                }),
+            )
+            .expect("first pointer outcome");
+        bridge
+            .forward(
+                "session-1",
+                json!({
+                    "schema": "xero.computer_use_manual_control_input.v1",
+                    "ok": true,
+                    "manualControlId": "manual-1",
+                    "payload": {
+                        "action": "mouse_drag_move",
+                        "x": 20,
+                    },
+                }),
+            )
+            .expect("second pointer outcome");
+
+        let telemetry = bridge.telemetry_snapshot().expect("telemetry");
+        assert_eq!(telemetry.outbound_queue_depth, 1);
+        assert_eq!(telemetry.coalesced_outbound_count, 1);
+
+        let mut queue = bridge.outbound_queue.lock().expect("outbound lock");
+        let queued = queue.pop_front().expect("queued latest").frame;
+        let envelope = queued_session_frame_envelope(&queued);
+        assert_eq!(envelope.payload["payload"]["x"], 20);
     }
 
     #[test]

@@ -452,6 +452,35 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 		expect(desktop.querySelector(".desktop-click-ripple")).toBeNull();
 	});
 
+	it("sends best-effort hover pointer moves during manual control", async () => {
+		const { desktop, image, push } = await renderManualDesktopViewport();
+		image.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		desktop.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+		push.mockClear();
+
+		fireEvent.pointerMove(desktop, {
+			buttons: 0,
+			clientX: 320,
+			clientY: 180,
+			pointerId: 73,
+		});
+
+		expect(push).toHaveBeenCalledWith(
+			"frame",
+			expect.objectContaining({
+				kind: "computer_use_manual_control_input",
+				priority: "coalesced_best_effort",
+				payload: expect.objectContaining({
+					action: "mouse_move",
+					x: 640,
+					y: 360,
+					sourceWidth: 1280,
+					sourceHeight: 720,
+				}),
+			}),
+		);
+	});
+
 	it("shows a visible manual-control denial and keeps input disabled", async () => {
 		const { desktop, frameHandler, image, manualControlId, push, toolbar } =
 			await renderManualDesktopViewport({ grantManual: false });
@@ -853,12 +882,22 @@ describe("ComputerUseDesktopViewport click feedback", () => {
 			pointerId: 21,
 			pointerType: "touch",
 		});
-		fireEvent.pointerUp(desktop, {
-			clientX: 520,
+		fireEvent.pointerMove(desktop, {
+			clientX: 530,
 			clientY: 180,
 			pointerId: 22,
 			pointerType: "touch",
 		});
+		await waitFor(() => {
+			expect(mediaLayer.style.transform).toContain("scale(2)");
+		});
+		fireEvent.pointerUp(desktop, {
+			clientX: 530,
+			clientY: 180,
+			pointerId: 22,
+			pointerType: "touch",
+		});
+		expect(mediaLayer.style.transform).toContain("scale(2)");
 
 		image.getBoundingClientRect = () => domRect(-320, -180, 1280, 720);
 		push.mockClear();
