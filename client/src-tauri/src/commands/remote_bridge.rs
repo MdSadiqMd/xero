@@ -4,7 +4,10 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::TryRecvError as InboundTryRecvError,
+        mpsc::{
+            Receiver as InboundReceiver, RecvTimeoutError as InboundRecvTimeoutError,
+            TryRecvError as InboundTryRecvError,
+        },
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -92,6 +95,7 @@ const STREAM_FALLBACK_FRAME_MAX_BYTES: usize = 5 * 1024 * 1024;
 const STREAM_FALLBACK_JPEG_QUALITY: u8 = 74;
 const COMMAND_OUTCOME_SCHEMA: &str = "xero.remote_command_outcome.v1";
 const MAX_DEDUPE_COMMAND_IDS: usize = 2048;
+const INBOUND_COMMAND_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 
 type AppRemoteBridge = RemoteBridge<FileIdentityStore>;
 
@@ -565,19 +569,24 @@ impl RemoteBridgeRuntimeState {
         let app = app.clone();
         let state = state.clone();
         let handle = thread::spawn(move || {
+            let mut pending = VecDeque::new();
             while !shutdown.load(Ordering::Relaxed) {
-                match inbound.try_recv() {
-                    Ok(command) => {
-                        if let Err(error) =
-                            handle_inbound_command(&app, &state, Arc::clone(&bridge), command)
-                        {
-                            eprintln!("[remote-bridge] inbound command failed: {error}");
-                        }
-                    }
-                    Err(InboundTryRecvError::Empty) => {
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    Err(InboundTryRecvError::Disconnected) => break,
+                let command = match pending.pop_front() {
+                    Some(command) => Some(command),
+                    None => match inbound.recv_timeout(INBOUND_COMMAND_WAIT_TIMEOUT) {
+                        Ok(command) => Some(command),
+                        Err(InboundRecvTimeoutError::Timeout) => None,
+                        Err(InboundRecvTimeoutError::Disconnected) => break,
+                    },
+                };
+                let Some(command) = command else {
+                    continue;
+                };
+                let command = coalesce_inbound_pointer_command(command, &inbound, &mut pending);
+                if let Err(error) =
+                    handle_inbound_command(&app, &state, Arc::clone(&bridge), command)
+                {
+                    eprintln!("[remote-bridge] inbound command failed: {error}");
                 }
             }
         });
@@ -592,6 +601,47 @@ impl RemoteBridgeRuntimeState {
             }
         }
     }
+}
+
+fn coalesce_inbound_pointer_command(
+    command: InboundCommand,
+    inbound: &InboundReceiver<InboundCommand>,
+    pending: &mut VecDeque<InboundCommand>,
+) -> InboundCommand {
+    let Some(coalesce_key) = inbound_pointer_coalesce_key(&command) else {
+        return command;
+    };
+    let mut latest = command;
+    loop {
+        match inbound.try_recv() {
+            Ok(next) if inbound_pointer_coalesce_key(&next).as_deref() == Some(&coalesce_key) => {
+                latest = next;
+            }
+            Ok(next) => {
+                pending.push_back(next);
+                break;
+            }
+            Err(InboundTryRecvError::Empty) | Err(InboundTryRecvError::Disconnected) => break,
+        }
+    }
+    latest
+}
+
+fn inbound_pointer_coalesce_key(command: &InboundCommand) -> Option<String> {
+    if command.kind != InboundCommandKind::ComputerUseManualControlInput {
+        return None;
+    }
+    let action = payload_string(&command.payload, &["action"])?;
+    if action != "mouse_move" && action != "mouse_drag_move" {
+        return None;
+    }
+    Some(format!(
+        "{}:{}:{}",
+        command.session_id.as_deref().unwrap_or_default(),
+        payload_string(&command.payload, &["manualControlId", "manual_control_id"])
+            .unwrap_or_default(),
+        action,
+    ))
 }
 
 fn set_runtime_event_forwarder(bridge: Arc<AppRemoteBridge>) {
@@ -4743,6 +4793,34 @@ mod tests {
 
         command.kind = InboundCommandKind::ListSessions;
         assert!(!command_is_duplicate(&command));
+    }
+
+    #[test]
+    fn inbound_pointer_coalescing_keeps_latest_contiguous_move() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let first = inbound_command(
+            InboundCommandKind::ComputerUseManualControlInput,
+            json!({"manualControlId": "manual-1", "action": "mouse_move", "x": 10}),
+        );
+        sender
+            .send(inbound_command(
+                InboundCommandKind::ComputerUseManualControlInput,
+                json!({"manualControlId": "manual-1", "action": "mouse_move", "x": 20}),
+            ))
+            .expect("second move");
+        sender
+            .send(inbound_command(
+                InboundCommandKind::ComputerUseManualControlInput,
+                json!({"manualControlId": "manual-1", "action": "type_text", "text": "hi"}),
+            ))
+            .expect("non-pointer input");
+        let mut pending = VecDeque::new();
+
+        let coalesced = coalesce_inbound_pointer_command(first, &receiver, &mut pending);
+
+        assert_eq!(coalesced.payload["x"], 20);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].payload["action"], "type_text");
     }
 
     #[test]

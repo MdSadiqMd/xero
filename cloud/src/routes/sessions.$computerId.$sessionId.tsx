@@ -1188,7 +1188,7 @@ const MANUAL_KEYBOARD_FALLBACK_MS = 24;
 const MANUAL_KEYBOARD_TEXT_CHUNK_CHARS = 512;
 const MANUAL_KEYBOARD_TEXT_MAX_CHARS = 8_000;
 const MANUAL_KEYBOARD_COMPOSITION_DUPLICATE_MS = 80;
-const MANUAL_POINTER_MOVE_INTERVAL_MS = 33;
+const MANUAL_POINTER_MOVE_INTERVAL_MS = 50;
 const DESKTOP_MOBILE_ZOOM_MIN = 1;
 const DESKTOP_MOBILE_ZOOM_MAX = 4;
 const DESKTOP_POINTER_TAP_SLOP_PX = 8;
@@ -3940,6 +3940,14 @@ export function ComputerUseDesktopViewport({
 					beginMobilePinchGesture();
 				} else {
 					mobilePinchGestureRef.current = null;
+					const [remainingPointer] = mobileTouchPointersRef.current.values();
+					if (remainingPointer) {
+						remainingPointer.startClientX = remainingPointer.clientX;
+						remainingPointer.startClientY = remainingPointer.clientY;
+						remainingPointer.startTransform =
+							mobileViewportTransformRef.current;
+						remainingPointer.moved = true;
+					}
 				}
 				return;
 			}
@@ -4060,7 +4068,7 @@ export function ComputerUseDesktopViewport({
 				}
 				return;
 			}
-			if (!manualActive || event.buttons === 0) return;
+			if (!manualActive) return;
 			const now = Date.now();
 			if (
 				now - lastPointerMoveAtRef.current <
@@ -4068,9 +4076,10 @@ export function ComputerUseDesktopViewport({
 			) {
 				return;
 			}
-			lastPointerMoveAtRef.current = now;
 			const point = pointFromPointerEvent(event);
 			if (!point) return;
+			event.preventDefault();
+			lastPointerMoveAtRef.current = now;
 			sendManualInput({
 				action: "mouse_move",
 				x: point.x,

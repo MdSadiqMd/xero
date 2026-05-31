@@ -247,8 +247,44 @@ describe("pushInboundCommand", () => {
 					sourceHeight: 100,
 				},
 			});
+			const staleDragMove = sendComputerUseManualInput(channel, {
+				computerId: "desktop-1",
+				sessionId: "session-1",
+				deviceId: "web-1",
+				manualControlId: "manual-web-1",
+				streamToken: "stream-token-1",
+				input: {
+					action: "mouse_drag_move",
+					x: 30,
+					y: 30,
+					sourceWidth: 100,
+					sourceHeight: 100,
+					button: "left",
+				},
+			});
+			void sendComputerUseManualInput(channel, {
+				computerId: "desktop-1",
+				sessionId: "session-1",
+				deviceId: "web-1",
+				manualControlId: "manual-web-1",
+				streamToken: "stream-token-1",
+				input: {
+					action: "mouse_drag_move",
+					x: 40,
+					y: 40,
+					sourceWidth: 100,
+					sourceHeight: 100,
+					button: "left",
+				},
+			});
 
 			await expect(staleMove).resolves.toEqual(
+				expect.objectContaining({
+					outcome: "stale",
+					reason: "coalesced",
+				}),
+			);
+			await expect(staleDragMove).resolves.toEqual(
 				expect.objectContaining({
 					outcome: "stale",
 					reason: "coalesced",

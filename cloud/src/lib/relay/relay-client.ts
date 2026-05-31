@@ -136,6 +136,10 @@ const RELAY_COMMAND_MAX_IN_FLIGHT = 4;
 const RELAY_COMMAND_MAX_CRITICAL_QUEUE = 256;
 const RELAY_COMMAND_MAX_RELIABLE_QUEUE = 128;
 const RELAY_COMMAND_MAX_COALESCED_QUEUE = 64;
+const MANUAL_POINTER_INPUT_ACTIONS = new Set<ComputerUseManualInputAction>([
+	"mouse_move",
+	"mouse_drag_move",
+]);
 
 interface QueuedRelayCommand {
 	attempt: number;
@@ -418,12 +422,13 @@ function commandCoalesceKey(command: InboundCommand): string | null {
 	const payload = recordPayload(command.payload);
 	if (
 		command.kind === "computer_use_manual_control_input" &&
-		payload?.action === "mouse_move"
+		manualPointerInputAction(payload?.action)
 	) {
 		return [
 			command.kind,
 			command.session_id ?? "",
 			stringValue(payload.manualControlId),
+			stringValue(payload.action),
 		].join(":");
 	}
 	if (command.kind === "computer_use_stream_status") {
@@ -451,6 +456,15 @@ function recordPayload(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string {
 	return typeof value === "string" ? value : "";
+}
+
+function manualPointerInputAction(
+	value: unknown,
+): value is "mouse_move" | "mouse_drag_move" {
+	return (
+		typeof value === "string" &&
+		MANUAL_POINTER_INPUT_ACTIONS.has(value as ComputerUseManualInputAction)
+	);
 }
 
 function commandResult(
