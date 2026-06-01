@@ -297,6 +297,31 @@ describe("TerminalSidebar persistence", () => {
     expect(mocks.adapter.terminalReadTranscript).not.toHaveBeenCalled()
   })
 
+  it("does not wipe persisted tabs when StrictMode cleanup runs before hydration finishes", () => {
+    let resolveRead: (value: unknown) => void = () => undefined
+    mocks.adapter.readProjectUiState.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve
+        }),
+    )
+
+    const { unmount } = render(<TerminalSidebar open projectId="project-a" />)
+
+    unmount()
+    resolveRead({
+      schema: "xero.project_ui_state.v1",
+      projectId: "project-a",
+      key: "terminal.tabs.v1",
+      value: persistedState([basePersistedTab]),
+      storageScope: "os_app_data",
+      uiDeferred: true,
+    })
+
+    expect(mocks.adapter.writeProjectUiState).not.toHaveBeenCalled()
+    expect(mocks.adapter.terminalOpen).not.toHaveBeenCalled()
+  })
+
   it("restores the persisted active tab instead of selecting the last hydrated tab", async () => {
     setupAdapter({
       states: new Map([

@@ -493,6 +493,11 @@ export function TerminalSidebar({
       taskHandlersRef.current.get(terminalId)?.onData?.(data)
       const tab = tabsRef.current.find((entry) => entry.id === terminalId)
       if (tab) {
+        if (!openedTerminalIdsRef.current.has(terminalId)) {
+          const buffered = pendingWriteBuffersRef.current.get(terminalId) ?? ""
+          pendingWriteBuffersRef.current.set(terminalId, buffered + data)
+          return
+        }
         detectBrowserLaunchTargets(tab, data)
         tab.terminal.write(data)
         return
@@ -562,6 +567,11 @@ export function TerminalSidebar({
     if (openedTerminalIdsRef.current.has(tab.id)) return
     tab.terminal.open(node)
     openedTerminalIdsRef.current.add(tab.id)
+    const buffered = pendingWriteBuffersRef.current.get(tab.id)
+    if (buffered) {
+      tab.terminal.write(buffered)
+      pendingWriteBuffersRef.current.delete(tab.id)
+    }
   }, [])
 
   // Keep each xterm mounted once. Switching tabs only changes visibility, then
@@ -730,12 +740,8 @@ export function TerminalSidebar({
           updateTabLabel(response.terminalId, title)
         })
         if (restoredTranscript.length > 0) {
-          terminal.write(restoredTranscript)
-        }
-        const buffered = pendingWriteBuffersRef.current.get(response.terminalId)
-        if (buffered) {
-          terminal.write(buffered)
-          pendingWriteBuffersRef.current.delete(response.terminalId)
+          const buffered = pendingWriteBuffersRef.current.get(response.terminalId) ?? ""
+          pendingWriteBuffersRef.current.set(response.terminalId, restoredTranscript + buffered)
         }
         const initialLabel =
           sanitizeTerminalTabLabel(options?.label ?? "") ??
@@ -802,7 +808,9 @@ export function TerminalSidebar({
     const previousProjectId = previousProjectIdRef.current
     if (previousProjectId && previousProjectId !== projectId) {
       const snapshot = tabsRef.current
-      persistTerminalTabsForProject(previousProjectId, snapshot, activeTabIdRef.current)
+      if (hydratedProjectIdRef.current === previousProjectId) {
+        persistTerminalTabsForProject(previousProjectId, snapshot, activeTabIdRef.current)
+      }
       snapshot
         .filter((tab) => tab.projectId === previousProjectId)
         .forEach((tab) => disposeTerminalTab(tab, { notifyTask: true, clearTranscript: false }))
@@ -969,7 +977,10 @@ export function TerminalSidebar({
   useEffect(() => {
     return () => {
       const snapshot = tabsRef.current
-      persistTerminalTabsForProject(projectIdRef.current, snapshot, activeTabIdRef.current)
+      const currentProjectId = projectIdRef.current
+      if (currentProjectId && hydratedProjectIdRef.current === currentProjectId) {
+        persistTerminalTabsForProject(currentProjectId, snapshot, activeTabIdRef.current)
+      }
       snapshot.forEach((tab) =>
         disposeTerminalTab(tab, { notifyTask: true, clearTranscript: false }),
       )
