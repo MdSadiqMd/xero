@@ -98,15 +98,18 @@ use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use crate::{
     auth::now_timestamp,
     commands::{
-        context_budget, default_runtime_agent_approval_mode, default_runtime_agent_id,
-        ensure_runtime_agent_available, estimate_tokens, evaluate_compaction_policy,
-        redact_session_context_text, resolve_context_limit, runtime_agent_allows_approval_mode,
+        context_budget_with_estimate, default_runtime_agent_approval_mode,
+        default_runtime_agent_id, ensure_runtime_agent_available, estimate_tokens,
+        evaluate_compaction_policy, heuristic_token_estimate, redact_session_context_text,
+        resolve_context_limit_with_provider_preflight, runtime_agent_allows_approval_mode,
         soul_prompt_fragment, AgentToolApplicationStyleDto,
         AgentToolApplicationStyleResolutionSourceDto, BrowserControlPreferenceDto, CommandError,
         CommandErrorClass, CommandResult, ResolvedAgentToolApplicationStyleDto, RuntimeAgentIdDto,
         RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
         RuntimeRunControlStateDto, SessionCompactionPolicyInput, SessionContextBudgetPressureDto,
-        SessionContextPolicyActionDto, SoulSettingsDto,
+        SessionContextEstimateConfidenceDto, SessionContextEstimateDto,
+        SessionContextEstimateSourceDto, SessionContextPolicyActionDto, SessionUsageSourceDto,
+        SoulSettingsDto,
     },
     db::project_store::{
         self, AgentEventRecord, AgentMessageRecord, AgentMessageRole, AgentRunEventKind,

@@ -530,7 +530,7 @@ pub fn backfill_agent_usage_costs(repo_root: &std::path::Path) -> usize {
         run_id,
         provider_id,
         model_id,
-        input_tokens,
+        billable_input_tokens,
         output_tokens,
         cache_read_tokens,
         cache_creation_tokens,
@@ -540,7 +540,7 @@ pub fn backfill_agent_usage_costs(repo_root: &std::path::Path) -> usize {
             &provider_id,
             &model_id,
             UsageForPricing {
-                input_tokens,
+                input_tokens: billable_input_tokens,
                 output_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,

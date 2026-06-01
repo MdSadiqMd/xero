@@ -84,7 +84,11 @@ pub(crate) fn assemble_provider_context_package(
     )?;
     let active_coordination_summary =
         active_coordination_prompt_summary(&active_coordination_context);
-    let context_limit = resolve_context_limit(input.provider_id, input.model_id);
+    let context_limit = resolve_context_limit_with_provider_preflight(
+        input.provider_id,
+        input.model_id,
+        input.provider_preflight,
+    );
     let budget_tokens = context_limit.effective_input_budget_tokens;
     let relevant_paths = prompt_relevant_paths_from_provider_messages(input.messages);
     let runtime_metadata = provider_context_runtime_metadata(&input, &created_at);
@@ -176,6 +180,15 @@ pub(crate) fn assemble_provider_context_package(
     let estimated_tokens = included.iter().fold(0_u64, |total, contributor| {
         total.saturating_add(contributor.estimated_tokens)
     });
+    let context_estimate = SessionContextEstimateDto {
+        tokens: estimated_tokens,
+        source: SessionContextEstimateSourceDto::Heuristic,
+        confidence: SessionContextEstimateConfidenceDto::Low,
+        counted_shape: "context_manifest_contributors".into(),
+        diagnostics: vec![
+            "Context package estimate is the sum of admitted contributor estimates; provider request-shape estimates are used by continuation gates.".into(),
+        ],
+    };
     let active_compaction = project_store::load_active_agent_compaction(
         input.repo_root,
         input.project_id,
@@ -399,6 +412,7 @@ pub(crate) fn assemble_provider_context_package(
     manifest_fields.insert("limitConfidence".into(), json!(context_limit.confidence));
     manifest_fields.insert("limitDiagnostic".into(), json!(context_limit.diagnostic));
     manifest_fields.insert("limitFetchedAt".into(), json!(context_limit.fetched_at));
+    manifest_fields.insert("estimate".into(), json!(context_estimate));
     manifest_fields.insert("providerPreflight".into(), json!(provider_preflight));
     manifest_fields.insert(
         "admittedProviderPreflightHash".into(),

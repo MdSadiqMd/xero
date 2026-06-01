@@ -76,6 +76,7 @@ export const sessionUsageTotalsSchema = z
     providerId: z.string().trim().min(1),
     modelId: z.string().trim().min(1),
     inputTokens: z.number().int().nonnegative(),
+    billableInputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
     estimatedCostMicros: z.number().int().nonnegative(),
@@ -334,6 +335,22 @@ export const sessionContextLimitSourceSchema = z.enum([
   'unknown',
 ])
 export const sessionContextLimitConfidenceSchema = z.enum(['high', 'medium', 'low', 'unknown'])
+export const sessionContextEstimateSourceSchema = z.enum([
+  'provider_count_api',
+  'local_tokenizer',
+  'provider_reported_usage',
+  'heuristic',
+])
+export const sessionContextEstimateConfidenceSchema = z.enum(['high', 'medium', 'low', 'unknown'])
+export const sessionContextEstimateSchema = z
+  .object({
+    tokens: z.number().int().nonnegative(),
+    source: sessionContextEstimateSourceSchema,
+    confidence: sessionContextEstimateConfidenceSchema,
+    countedShape: z.string().trim().min(1),
+    diagnostics: z.array(z.string().trim().min(1)).default([]),
+  })
+  .strict()
 export const sessionContextLimitResolutionSchema = z
   .object({
     providerId: z.string(),
@@ -361,6 +378,7 @@ export const sessionContextBudgetSchema = z
     pressurePercent: z.number().int().nonnegative().nullable().optional(),
     estimatedTokens: z.number().int().nonnegative(),
     estimationSource: sessionUsageSourceSchema,
+    estimate: sessionContextEstimateSchema.optional(),
     pressure: sessionContextBudgetPressureSchema,
     knownProviderBudget: z.boolean(),
     limitSource: sessionContextLimitSourceSchema,
@@ -1245,6 +1263,9 @@ export type SessionContextDispositionDto = z.infer<typeof sessionContextDisposit
 export type SessionContextBudgetPressureDto = z.infer<typeof sessionContextBudgetPressureSchema>
 export type SessionContextLimitSourceDto = z.infer<typeof sessionContextLimitSourceSchema>
 export type SessionContextLimitConfidenceDto = z.infer<typeof sessionContextLimitConfidenceSchema>
+export type SessionContextEstimateSourceDto = z.infer<typeof sessionContextEstimateSourceSchema>
+export type SessionContextEstimateConfidenceDto = z.infer<typeof sessionContextEstimateConfidenceSchema>
+export type SessionContextEstimateDto = z.infer<typeof sessionContextEstimateSchema>
 export type SessionContextLimitResolutionDto = z.infer<typeof sessionContextLimitResolutionSchema>
 export type SessionContextBudgetDto = z.infer<typeof sessionContextBudgetSchema>
 export type SessionContextContributorDto = z.infer<typeof sessionContextContributorSchema>

@@ -150,16 +150,6 @@ pub(crate) fn drive_provider_loop(
             run_id,
             &turn_context_package.manifest,
         )?;
-        fail_closed_if_context_over_budget(
-            repo_root,
-            project_id,
-            run_id,
-            &turn_context_package.manifest,
-        )?;
-        record_tool_registry_snapshot(repo_root, project_id, run_id, turn_index, &tool_registry)?;
-        if let Some(gate) = harness_order_gate.as_mut() {
-            gate.refresh_manifest(repo_root, project_id, run_id, &tool_registry)?;
-        }
         let turn = ProviderTurnRequest {
             system_prompt: turn_context_package.system_prompt,
             messages: messages.clone(),
@@ -167,6 +157,18 @@ pub(crate) fn drive_provider_loop(
             turn_index,
             controls: controls.clone(),
         };
+        let provider_context_estimate = provider.estimate_context_tokens(&turn)?;
+        fail_closed_if_context_over_budget(
+            repo_root,
+            project_id,
+            run_id,
+            &turn_context_package.manifest,
+            &provider_context_estimate,
+        )?;
+        record_tool_registry_snapshot(repo_root, project_id, run_id, turn_index, &tool_registry)?;
+        if let Some(gate) = harness_order_gate.as_mut() {
+            gate.refresh_manifest(repo_root, project_id, run_id, &tool_registry)?;
+        }
         let provider_turn_started_at = now_timestamp();
         project_store::upsert_agent_coordination_presence(
             repo_root,
@@ -676,10 +678,21 @@ fn fail_closed_if_context_over_budget(
     project_id: &str,
     run_id: &str,
     manifest: &project_store::AgentContextManifestRecord,
+    provider_context_estimate: &SessionContextEstimateDto,
 ) -> CommandResult<()> {
-    if manifest.pressure != project_store::AgentContextBudgetPressure::Over {
+    let provider_estimate_over_budget = manifest
+        .budget_tokens
+        .is_some_and(|budget| provider_context_estimate.tokens > budget);
+    if manifest.pressure != project_store::AgentContextBudgetPressure::Over
+        && !provider_estimate_over_budget
+    {
         return Ok(());
     }
+    let estimated_tokens = if provider_estimate_over_budget {
+        provider_context_estimate.tokens
+    } else {
+        manifest.estimated_tokens
+    };
     append_event(
         repo_root,
         project_id,
@@ -690,15 +703,20 @@ fn fail_closed_if_context_over_budget(
             "manifestId": manifest.manifest_id,
             "action": context_policy_action_label(&manifest.policy_action),
             "reasonCode": manifest.policy_reason_code,
-            "estimatedTokens": manifest.estimated_tokens,
+            "estimatedTokens": estimated_tokens,
             "budgetTokens": manifest.budget_tokens,
+            "estimate": provider_context_estimate,
         }),
     )?;
     Err(CommandError::user_fixable(
         "agent_context_budget_exceeded",
         format!(
-            "Xero assembled provider context for run `{run_id}` at {} tokens, which exceeds the known {:?} token input budget. The provider turn was not submitted; compact, hand off, or reduce context before continuing.",
-            manifest.estimated_tokens, manifest.budget_tokens
+            "Xero assembled provider context for run `{run_id}` at {} tokens from {:?}/{:?} ({}) which exceeds the known {:?} token input budget. The provider turn was not submitted; compact, hand off, or reduce context before continuing.",
+            estimated_tokens,
+            provider_context_estimate.source,
+            provider_context_estimate.confidence,
+            provider_context_estimate.counted_shape,
+            manifest.budget_tokens
         ),
     ))
 }
@@ -5681,7 +5699,11 @@ fn merge_provider_usage(total: &mut ProviderUsage, usage: Option<ProviderUsage>)
     let Some(usage) = usage else {
         return;
     };
+    let billable_input_tokens = provider_usage_billable_input_tokens(&usage);
     total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+    total.billable_input_tokens = total
+        .billable_input_tokens
+        .saturating_add(billable_input_tokens);
     total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
     total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
     total.cache_read_tokens = total
@@ -5700,6 +5722,7 @@ fn merge_provider_usage(total: &mut ProviderUsage, usage: Option<ProviderUsage>)
 
 fn provider_usage_has_tokens(usage: &ProviderUsage) -> bool {
     usage.input_tokens > 0
+        || usage.billable_input_tokens > 0
         || usage.output_tokens > 0
         || usage.total_tokens > 0
         || usage.cache_read_tokens > 0
@@ -5707,6 +5730,16 @@ fn provider_usage_has_tokens(usage: &ProviderUsage) -> bool {
         || usage
             .reported_cost_micros
             .is_some_and(|reported_cost| reported_cost > 0)
+}
+
+fn provider_usage_billable_input_tokens(usage: &ProviderUsage) -> u64 {
+    if usage.billable_input_tokens > 0 || usage.input_tokens == 0 {
+        return usage.billable_input_tokens;
+    }
+    usage
+        .input_tokens
+        .saturating_sub(usage.cache_read_tokens)
+        .saturating_sub(usage.cache_creation_tokens)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5778,7 +5811,7 @@ fn provider_usage_cost_micros(provider_id: &str, model_id: &str, usage: &Provide
             provider_id,
             model_id,
             crate::runtime::pricing::UsageForPricing {
-                input_tokens: usage.input_tokens,
+                input_tokens: provider_usage_billable_input_tokens(usage),
                 output_tokens: usage.output_tokens,
                 cache_read_tokens: usage.cache_read_tokens,
                 cache_creation_tokens: usage.cache_creation_tokens,
@@ -5807,6 +5840,7 @@ fn persist_provider_usage(
             provider_id: provider_id.into(),
             model_id: model_id.into(),
             input_tokens: usage.input_tokens,
+            billable_input_tokens: provider_usage_billable_input_tokens(usage),
             output_tokens: usage.output_tokens,
             total_tokens: usage.total_tokens,
             cache_read_tokens: usage.cache_read_tokens,
@@ -8775,6 +8809,7 @@ mod tests {
             &mut total,
             Some(ProviderUsage {
                 input_tokens: 10,
+                billable_input_tokens: 8,
                 total_tokens: 10,
                 reported_cost_micros: Some(25),
                 ..ProviderUsage::default()
@@ -8791,6 +8826,7 @@ mod tests {
         );
 
         assert_eq!(total.input_tokens, 10);
+        assert_eq!(total.billable_input_tokens, 8);
         assert_eq!(total.output_tokens, 5);
         assert_eq!(total.total_tokens, 15);
         assert_eq!(total.reported_cost_micros, Some(100));

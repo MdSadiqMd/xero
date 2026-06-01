@@ -133,6 +133,7 @@ pub struct SessionUsageTotalsDto {
     pub provider_id: String,
     pub model_id: String,
     pub input_tokens: u64,
+    pub billable_input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub estimated_cost_micros: u64,
@@ -450,6 +451,35 @@ pub enum SessionContextLimitConfidenceDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionContextEstimateSourceDto {
+    ProviderCountApi,
+    LocalTokenizer,
+    ProviderReportedUsage,
+    Heuristic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionContextEstimateConfidenceDto {
+    High,
+    Medium,
+    Low,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextEstimateDto {
+    pub tokens: u64,
+    pub source: SessionContextEstimateSourceDto,
+    pub confidence: SessionContextEstimateConfidenceDto,
+    pub counted_shape: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionContextLimitResolutionDto {
     pub provider_id: String,
@@ -489,6 +519,8 @@ pub struct SessionContextBudgetDto {
     pub pressure_percent: Option<u64>,
     pub estimated_tokens: u64,
     pub estimation_source: SessionUsageSourceDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<SessionContextEstimateDto>,
     pub pressure: SessionContextBudgetPressureDto,
     pub known_provider_budget: bool,
     pub limit_source: SessionContextLimitSourceDto,
@@ -956,6 +988,7 @@ pub fn usage_totals_from_agent_usage(record: &AgentUsageRecord) -> SessionUsageT
         provider_id: record.provider_id.clone(),
         model_id: record.model_id.clone(),
         input_tokens: record.input_tokens,
+        billable_input_tokens: record.billable_input_tokens,
         output_tokens: record.output_tokens,
         total_tokens: record.total_tokens,
         estimated_cost_micros: record.estimated_cost_micros,
@@ -1788,6 +1821,7 @@ pub fn context_budget(
         estimated_tokens,
         legacy_context_limit_resolution(budget_tokens),
         SessionUsageSourceDto::Estimated,
+        None,
     )
 }
 
@@ -1796,13 +1830,22 @@ pub fn context_budget_with_source(
     limit: SessionContextLimitResolutionDto,
     estimation_source: SessionUsageSourceDto,
 ) -> SessionContextBudgetDto {
-    context_budget_from_resolution(estimated_tokens, limit, estimation_source)
+    context_budget_from_resolution(estimated_tokens, limit, estimation_source, None)
+}
+
+pub fn context_budget_with_estimate(
+    estimate: SessionContextEstimateDto,
+    limit: SessionContextLimitResolutionDto,
+    estimation_source: SessionUsageSourceDto,
+) -> SessionContextBudgetDto {
+    context_budget_from_resolution(estimate.tokens, limit, estimation_source, Some(estimate))
 }
 
 fn context_budget_from_resolution(
     estimated_tokens: u64,
     limit: SessionContextLimitResolutionDto,
     estimation_source: SessionUsageSourceDto,
+    estimate: Option<SessionContextEstimateDto>,
 ) -> SessionContextBudgetDto {
     let effective_budget = limit.effective_input_budget_tokens;
     let pressure_percent = effective_budget.filter(|budget| *budget > 0).map(|budget| {
@@ -1824,6 +1867,7 @@ fn context_budget_from_resolution(
         pressure_percent,
         estimated_tokens,
         estimation_source,
+        estimate,
         pressure,
         known_provider_budget: effective_budget.is_some(),
         limit_source: limit.source,
@@ -1837,6 +1881,14 @@ pub fn resolve_context_limit(
     provider_id: &str,
     model_id: &str,
 ) -> SessionContextLimitResolutionDto {
+    resolve_context_limit_with_provider_preflight(provider_id, model_id, None)
+}
+
+pub fn resolve_context_limit_with_provider_preflight(
+    provider_id: &str,
+    model_id: &str,
+    provider_preflight: Option<&xero_agent_core::ProviderPreflightSnapshot>,
+) -> SessionContextLimitResolutionDto {
     let provider = provider_id.trim().to_ascii_lowercase();
     let model = model_id.trim().to_ascii_lowercase();
     if provider.is_empty()
@@ -1845,6 +1897,12 @@ pub fn resolve_context_limit(
         || model == "unavailable"
     {
         return unknown_context_limit_resolution(provider_id, model_id);
+    }
+
+    if let Some(limit) =
+        preflight_context_limit_resolution(provider_id, model_id, provider_preflight)
+    {
+        return limit;
     }
 
     if let Some((window, max_output_tokens)) = built_in_context_limits(&provider, &model) {
@@ -1879,6 +1937,77 @@ pub fn resolve_context_limit(
 
 pub fn provider_context_budget_tokens(provider_id: &str, model_id: &str) -> Option<u64> {
     resolve_context_limit(provider_id, model_id).context_window_tokens
+}
+
+fn preflight_context_limit_resolution(
+    provider_id: &str,
+    model_id: &str,
+    provider_preflight: Option<&xero_agent_core::ProviderPreflightSnapshot>,
+) -> Option<SessionContextLimitResolutionDto> {
+    let snapshot = provider_preflight?;
+    if !provider_model_matches_preflight(provider_id, model_id, snapshot) {
+        return None;
+    }
+    let limit = &snapshot.capabilities.capabilities.context_limits;
+    let context_window_tokens = limit.context_window_tokens.filter(|tokens| *tokens > 0)?;
+    let max_output_tokens = limit
+        .max_output_tokens
+        .filter(|tokens| *tokens > 0)
+        .unwrap_or(DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS);
+    let mut resolved = context_limit_resolution_with_output(
+        provider_id,
+        model_id,
+        context_window_tokens,
+        max_output_tokens,
+        context_limit_source_from_provider_label(&limit.source),
+        context_limit_confidence_from_provider_label(&limit.confidence),
+        format!(
+            "Xero used provider preflight/catalog context limits for `{provider_id}/{model_id}`."
+        ),
+    );
+    resolved.fetched_at = snapshot
+        .capabilities
+        .cache
+        .fetched_at
+        .clone()
+        .or_else(|| Some(snapshot.checked_at.clone()));
+    Some(resolved)
+}
+
+fn provider_model_matches_preflight(
+    provider_id: &str,
+    model_id: &str,
+    snapshot: &xero_agent_core::ProviderPreflightSnapshot,
+) -> bool {
+    provider_id
+        .trim()
+        .eq_ignore_ascii_case(snapshot.provider_id.trim())
+        && model_id
+            .trim()
+            .eq_ignore_ascii_case(snapshot.model_id.trim())
+}
+
+fn context_limit_source_from_provider_label(label: &str) -> SessionContextLimitSourceDto {
+    match label.trim().to_ascii_lowercase().as_str() {
+        "live_catalog" | "provider_catalog" | "live_probe" | "cached_probe" => {
+            SessionContextLimitSourceDto::LiveCatalog
+        }
+        "app_profile" | "profile" => SessionContextLimitSourceDto::AppProfile,
+        "built_in_registry" | "built_in" | "static" | "static_manual" | "manual" => {
+            SessionContextLimitSourceDto::BuiltInRegistry
+        }
+        "heuristic" => SessionContextLimitSourceDto::Heuristic,
+        _ => SessionContextLimitSourceDto::Unknown,
+    }
+}
+
+fn context_limit_confidence_from_provider_label(label: &str) -> SessionContextLimitConfidenceDto {
+    match label.trim().to_ascii_lowercase().as_str() {
+        "high" => SessionContextLimitConfidenceDto::High,
+        "medium" => SessionContextLimitConfidenceDto::Medium,
+        "low" => SessionContextLimitConfidenceDto::Low,
+        _ => SessionContextLimitConfidenceDto::Unknown,
+    }
 }
 
 fn legacy_context_limit_resolution(budget_tokens: Option<u64>) -> SessionContextLimitResolutionDto {
@@ -2889,6 +3018,7 @@ fn aggregate_usage_totals(runs: &[RunTranscriptSummaryDto]) -> Option<SessionUsa
         provider_id: first.provider_id.clone(),
         model_id: "mixed".into(),
         input_tokens: 0,
+        billable_input_tokens: 0,
         output_tokens: 0,
         total_tokens: 0,
         estimated_cost_micros: 0,
@@ -2897,6 +3027,9 @@ fn aggregate_usage_totals(runs: &[RunTranscriptSummaryDto]) -> Option<SessionUsa
     };
     for usage in runs.iter().filter_map(|run| run.usage_totals.as_ref()) {
         aggregate.input_tokens = aggregate.input_tokens.saturating_add(usage.input_tokens);
+        aggregate.billable_input_tokens = aggregate
+            .billable_input_tokens
+            .saturating_add(usage.billable_input_tokens);
         aggregate.output_tokens = aggregate.output_tokens.saturating_add(usage.output_tokens);
         aggregate.total_tokens = aggregate.total_tokens.saturating_add(usage.total_tokens);
         aggregate.estimated_cost_micros = aggregate
@@ -2998,8 +3131,28 @@ fn memory_label(memory: &SessionMemoryRecordDto) -> String {
 }
 
 pub fn estimate_tokens(value: &str) -> u64 {
+    heuristic_token_estimate(value, "text").tokens
+}
+
+pub fn heuristic_token_estimate(
+    value: &str,
+    counted_shape: impl Into<String>,
+) -> SessionContextEstimateDto {
     let chars = value.chars().count() as u64;
-    chars.saturating_add(3) / 4
+    let tokens = if chars == 0 {
+        0
+    } else {
+        chars.saturating_add(2) / 3
+    };
+    SessionContextEstimateDto {
+        tokens,
+        source: SessionContextEstimateSourceDto::Heuristic,
+        confidence: SessionContextEstimateConfidenceDto::Low,
+        counted_shape: counted_shape.into(),
+        diagnostics: vec![
+            "Fallback estimate uses a conservative character ratio because provider/model-specific counting was unavailable.".into(),
+        ],
+    }
 }
 
 fn ensure_secret_free_json<T: Serialize>(value: &T) -> Result<(), String> {
@@ -3048,5 +3201,79 @@ fn find_serialized_secret_marker(value: &str) -> Option<&'static str> {
         Some("secret marker")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xero_agent_core::{
+        provider_capability_catalog, provider_preflight_snapshot, ProviderCapabilityCatalogInput,
+        ProviderPreflightInput, ProviderPreflightRequiredFeatures, ProviderPreflightSource,
+    };
+
+    #[test]
+    fn context_limit_prefers_preflight_catalog_limit_over_static_heuristic() {
+        let preflight = provider_preflight_snapshot(ProviderPreflightInput {
+            profile_id: "anthropic".into(),
+            provider_id: "anthropic".into(),
+            model_id: "claude-sonnet-live".into(),
+            source: ProviderPreflightSource::LiveCatalog,
+            checked_at: "2026-06-01T00:00:00Z".into(),
+            age_seconds: Some(5),
+            ttl_seconds: Some(300),
+            required_features: ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+            capabilities: provider_capability_catalog(ProviderCapabilityCatalogInput {
+                provider_id: "anthropic".into(),
+                model_id: "claude-sonnet-live".into(),
+                catalog_source: "live_catalog".into(),
+                fetched_at: Some("2026-06-01T00:00:00Z".into()),
+                last_success_at: Some("2026-06-01T00:00:00Z".into()),
+                cache_age_seconds: Some(5),
+                cache_ttl_seconds: Some(300),
+                credential_proof: Some("test".into()),
+                context_window_tokens: Some(400_000),
+                max_output_tokens: Some(16_384),
+                context_limit_source: Some("provider_catalog".into()),
+                context_limit_confidence: Some("high".into()),
+                thinking_supported: true,
+                thinking_efforts: vec!["medium".into()],
+                thinking_default_effort: Some("medium".into()),
+            }),
+            credential_ready: Some(true),
+            endpoint_reachable: Some(true),
+            model_available: Some(true),
+            streaming_route_available: Some(true),
+            tool_schema_accepted: Some(true),
+            reasoning_controls_accepted: Some(true),
+            attachments_accepted: Some(false),
+            context_limit_known: Some(true),
+            provider_error: None,
+        });
+
+        let resolved = resolve_context_limit_with_provider_preflight(
+            "anthropic",
+            "claude-sonnet-live",
+            Some(&preflight),
+        );
+
+        assert_eq!(resolved.context_window_tokens, Some(400_000));
+        assert_eq!(resolved.max_output_tokens, Some(16_384));
+        assert_eq!(resolved.source, SessionContextLimitSourceDto::LiveCatalog);
+        assert_eq!(resolved.confidence, SessionContextLimitConfidenceDto::High);
+        assert_eq!(resolved.fetched_at.as_deref(), Some("2026-06-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn heuristic_token_estimate_is_low_confidence_and_conservative() {
+        let estimate = heuristic_token_estimate("abcdefghijkl", "test_text");
+
+        assert_eq!(estimate.tokens, 4);
+        assert_eq!(estimate.source, SessionContextEstimateSourceDto::Heuristic);
+        assert_eq!(
+            estimate.confidence,
+            SessionContextEstimateConfidenceDto::Low
+        );
+        assert_eq!(estimate.counted_shape, "test_text");
     }
 }

@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use rusqlite_migration::{Migrations, M};
 
-pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 38;
+pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 39;
 
 pub fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
@@ -45,6 +45,7 @@ pub fn migrations() -> &'static Migrations<'static> {
             M::up(MIGRATION_029_AGENT_RESERVATION_OBSERVED_HASH_SQL),
             M::up(MIGRATION_030_AGENT_MAILBOX_INBOX_CHECKS_SQL),
             M::up(MIGRATION_031_AGENT_MAILBOX_SCOPED_INBOX_CHECKS_SQL),
+            M::up(MIGRATION_032_AGENT_USAGE_BILLABLE_INPUT_SQL),
         ])
     });
 
@@ -52,6 +53,16 @@ pub fn migrations() -> &'static Migrations<'static> {
 }
 
 const NOOP_SCHEMA_VERSION_MARKER_SQL: &str = "";
+
+const MIGRATION_032_AGENT_USAGE_BILLABLE_INPUT_SQL: &str = r#"
+    ALTER TABLE agent_usage
+        ADD COLUMN billable_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (billable_input_tokens >= 0);
+
+    UPDATE agent_usage
+    SET billable_input_tokens = input_tokens
+    WHERE billable_input_tokens = 0
+      AND input_tokens > 0;
+"#;
 
 const MIGRATION_031_AGENT_MAILBOX_SCOPED_INBOX_CHECKS_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS agent_mailbox_inbox_checks_v2 (
@@ -3351,6 +3362,12 @@ mod tests {
                 "agent_sessions should include `{column}`"
             );
         }
+
+        let usage_columns = table_columns(&connection, "agent_usage");
+        assert!(
+            usage_columns.contains(&"billable_input_tokens".to_string()),
+            "agent_usage should include `billable_input_tokens`"
+        );
     }
 
     #[test]

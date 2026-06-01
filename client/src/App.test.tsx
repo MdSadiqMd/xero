@@ -1247,6 +1247,7 @@ function createAdapter(options?: {
       totals: {
         runCount: 0,
         inputTokens: 0,
+        billableInputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
         cacheReadTokens: 0,
@@ -3739,6 +3740,7 @@ describe('XeroApp current UI', () => {
         totals: {
           runCount: 2,
           inputTokens: 1,
+          billableInputTokens: 1,
           outputTokens: 1,
           totalTokens: 2,
           cacheReadTokens: 0,
@@ -3751,6 +3753,7 @@ describe('XeroApp current UI', () => {
             modelId: 'claude-sonnet-4-6',
             runCount: 1,
             inputTokens: 600_000,
+            billableInputTokens: 600_000,
             outputTokens: 300_000,
             totalTokens: 900_000,
             cacheReadTokens: 0,
@@ -3762,6 +3765,7 @@ describe('XeroApp current UI', () => {
             modelId: 'gpt-5.1',
             runCount: 1,
             inputTokens: 100_000,
+            billableInputTokens: 100_000,
             outputTokens: 50_500,
             totalTokens: 150_500,
             cacheReadTokens: 0,

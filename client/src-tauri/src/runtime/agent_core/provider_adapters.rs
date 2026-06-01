@@ -1,7 +1,8 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
@@ -12,6 +13,7 @@ use reqwest::header::{
 };
 use serde::Deserialize;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use url::Url;
 
@@ -21,7 +23,11 @@ use super::{
     ProviderTurnOutcome, ProviderTurnRequest, ProviderUsage,
 };
 use crate::{
-    commands::{CommandError, CommandResult, ProviderModelThinkingEffortDto},
+    commands::{
+        heuristic_token_estimate, CommandError, CommandResult, ProviderModelThinkingEffortDto,
+        SessionContextEstimateConfidenceDto, SessionContextEstimateDto,
+        SessionContextEstimateSourceDto,
+    },
     runtime::{
         is_supported_xai_text_model_id,
         process_tree::{
@@ -227,6 +233,24 @@ impl ProviderAdapter for OpenAiCodexResponsesAdapter {
         })?;
         parse_openai_responses_sse(self.provider_id(), response, emit)
     }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let body = openai_codex_responses_request_body(
+            self.provider_id(),
+            &self.config.model_id,
+            request,
+            self.config.session_id.as_deref(),
+        )?;
+        estimate_provider_wire_context_tokens(
+            self.provider_id(),
+            &self.config.model_id,
+            "openai_codex_responses_wire_request",
+            body,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -270,6 +294,20 @@ impl ProviderAdapter for OpenAiResponsesAdapter {
                 .json(&body)
         })?;
         parse_openai_responses_sse(self.provider_id(), response, emit)
+    }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let body =
+            openai_responses_request_body(self.provider_id(), &self.config.model_id, request)?;
+        estimate_provider_wire_context_tokens(
+            self.provider_id(),
+            &self.config.model_id,
+            "openai_responses_wire_request",
+            body,
+        )
     }
 }
 
@@ -322,6 +360,19 @@ impl ProviderAdapter for XaiResponsesAdapter {
                 .json(&body)
         })?;
         parse_openai_responses_sse(self.provider_id(), response, emit)
+    }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let body = xai_responses_request_body(self.provider_id(), &self.config.model_id, request)?;
+        estimate_provider_wire_context_tokens(
+            self.provider_id(),
+            &self.config.model_id,
+            "xai_responses_wire_request",
+            body,
+        )
     }
 }
 
@@ -377,6 +428,19 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
         })?;
         parse_openai_chat_sse(self.provider_id(), response, emit)
     }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let body = openai_chat_request_body(self.provider_id(), &self.config.model_id, request)?;
+        estimate_provider_wire_context_tokens(
+            self.provider_id(),
+            &self.config.model_id,
+            "openai_chat_completions_wire_request",
+            body,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -426,6 +490,13 @@ impl ProviderAdapter for AnthropicAdapter {
                 .json(&body)
         })?;
         parse_anthropic_sse(self.provider_id(), response, emit)
+    }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        estimate_anthropic_context_tokens(&self.config, &self.client, request)
     }
 }
 
@@ -536,6 +607,19 @@ impl ProviderAdapter for BedrockCliAdapter {
         })?;
         parse_anthropic_json_response(BEDROCK_PROVIDER_ID, &response_text, emit)
     }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let body = anthropic_request_body(None, BEDROCK_ANTHROPIC_VERSION, request, false)?;
+        estimate_provider_wire_context_tokens(
+            BEDROCK_PROVIDER_ID,
+            &self.config.model_id,
+            "bedrock_anthropic_wire_request",
+            body,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -584,6 +668,19 @@ impl ProviderAdapter for VertexAnthropicAdapter {
             )
         })?;
         parse_anthropic_json_response(VERTEX_PROVIDER_ID, &text, emit)
+    }
+
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let body = anthropic_request_body(None, VERTEX_ANTHROPIC_VERSION, request, false)?;
+        estimate_provider_wire_context_tokens(
+            VERTEX_PROVIDER_ID,
+            &self.config.model_id,
+            "vertex_anthropic_wire_request",
+            body,
+        )
     }
 }
 
@@ -643,6 +740,10 @@ fn openai_codex_responses_url(base_url: &str) -> CommandResult<Url> {
 
 fn anthropic_messages_url(base_url: &str) -> CommandResult<Url> {
     provider_url(base_url, "v1/messages", None)
+}
+
+fn anthropic_count_tokens_url(base_url: &str) -> CommandResult<Url> {
+    provider_url(base_url, "v1/messages/count_tokens", None)
 }
 
 fn openai_compatible_chat_url(base_url: &str, api_version: Option<&str>) -> CommandResult<Url> {
@@ -762,6 +863,70 @@ fn provider_supports_openai_stream_options(provider_id: &str) -> bool {
             | GITHUB_MODELS_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
     )
+}
+
+fn estimate_provider_wire_context_tokens(
+    provider_id: &str,
+    model_id: &str,
+    counted_shape: &'static str,
+    body: JsonValue,
+) -> CommandResult<SessionContextEstimateDto> {
+    let serialized = serde_json::to_string(&body).map_err(|error| {
+        CommandError::system_fault(
+            "agent_context_provider_wire_estimate_serialize_failed",
+            format!(
+                "Xero could not serialize the `{counted_shape}` provider request body for `{provider_id}/{model_id}`: {error}"
+            ),
+        )
+    })?;
+    let mut estimate = heuristic_token_estimate(&serialized, counted_shape);
+    estimate.diagnostics = vec![format!(
+        "Estimated tokens from the provider-specific wire request body for `{provider_id}/{model_id}`; tokenizer fallback remains conservative."
+    )];
+    Ok(estimate)
+}
+
+fn provider_count_cache() -> &'static Mutex<HashMap<String, SessionContextEstimateDto>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, SessionContextEstimateDto>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn provider_count_cache_key(
+    provider_id: &str,
+    model_id: &str,
+    counted_shape: &str,
+    body: &JsonValue,
+) -> CommandResult<String> {
+    let serialized = serde_json::to_string(body).map_err(|error| {
+        CommandError::system_fault(
+            "agent_context_provider_count_cache_key_failed",
+            format!(
+                "Xero could not serialize the `{counted_shape}` count request for `{provider_id}/{model_id}`: {error}"
+            ),
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(provider_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(model_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(counted_shape.as_bytes());
+    hasher.update([0]);
+    hasher.update(serialized.as_bytes());
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn cached_provider_count_estimate(cache_key: &str) -> Option<SessionContextEstimateDto> {
+    provider_count_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(cache_key).cloned())
+}
+
+fn store_provider_count_estimate(cache_key: String, estimate: SessionContextEstimateDto) {
+    if let Ok(mut cache) = provider_count_cache().lock() {
+        cache.insert(cache_key, estimate);
+    }
 }
 
 fn openai_chat_messages(
@@ -1354,6 +1519,131 @@ fn anthropic_request_body(
     Ok(JsonValue::Object(body))
 }
 
+fn anthropic_count_tokens_body(
+    model_id: &str,
+    anthropic_version: &str,
+    request: &ProviderTurnRequest,
+) -> CommandResult<JsonValue> {
+    let mut body = anthropic_request_body(Some(model_id), anthropic_version, request, false)?;
+    if let JsonValue::Object(object) = &mut body {
+        object.remove("stream");
+        object.remove("max_tokens");
+    }
+    Ok(body)
+}
+
+fn estimate_anthropic_context_tokens(
+    config: &AnthropicProviderConfig,
+    client: &Client,
+    request: &ProviderTurnRequest,
+) -> CommandResult<SessionContextEstimateDto> {
+    let counted_shape = "anthropic_messages_count_tokens";
+    let count_body =
+        anthropic_count_tokens_body(&config.model_id, &config.anthropic_version, request)?;
+    let fallback_body = count_body.clone();
+    let cache_key = provider_count_cache_key(
+        &config.provider_id,
+        &config.model_id,
+        counted_shape,
+        &count_body,
+    )?;
+    if let Some(estimate) = cached_provider_count_estimate(&cache_key) {
+        return Ok(estimate);
+    }
+
+    let url = anthropic_count_tokens_url(&config.base_url)?;
+    let response = send_provider_json_request(&config.provider_id, || {
+        client
+            .post(url.clone())
+            .header("x-api-key", &config.api_key)
+            .header("anthropic-version", &config.anthropic_version)
+            .json(&count_body)
+    });
+    let estimate = match response {
+        Ok(response) => {
+            let text = response.text().map_err(|error| {
+                CommandError::retryable(
+                    "anthropic_count_tokens_response_read_failed",
+                    format!(
+                        "Xero could not read the Anthropic token-count response for `{}`: {error}",
+                        config.model_id
+                    ),
+                )
+            });
+            match text.and_then(|text| {
+                serde_json::from_str::<JsonValue>(&text).map_err(|error| {
+                    CommandError::retryable(
+                        "anthropic_count_tokens_response_decode_failed",
+                        format!(
+                            "Xero could not decode the Anthropic token-count response for `{}`: {error}",
+                            config.model_id
+                        ),
+                    )
+                })
+            }) {
+                Ok(value) => {
+                    if let Some(tokens) = value
+                        .get("input_tokens")
+                        .and_then(JsonValue::as_u64)
+                        .filter(|tokens| *tokens > 0)
+                    {
+                        SessionContextEstimateDto {
+                            tokens,
+                            source: SessionContextEstimateSourceDto::ProviderCountApi,
+                            confidence: SessionContextEstimateConfidenceDto::High,
+                            counted_shape: counted_shape.into(),
+                            diagnostics: vec![format!(
+                                "Counted with Anthropic `messages/count_tokens` for `{}`.",
+                                config.model_id
+                            )],
+                        }
+                    } else {
+                        let mut fallback = estimate_provider_wire_context_tokens(
+                            &config.provider_id,
+                            &config.model_id,
+                            "anthropic_messages_wire_request",
+                            fallback_body.clone(),
+                        )?;
+                        fallback.diagnostics.push(
+                            "Anthropic token-count response did not include `input_tokens`; fell back to local wire-shape estimate."
+                                .into(),
+                        );
+                        fallback
+                    }
+                }
+                Err(error) => {
+                    let mut fallback = estimate_provider_wire_context_tokens(
+                        &config.provider_id,
+                        &config.model_id,
+                        "anthropic_messages_wire_request",
+                        fallback_body.clone(),
+                    )?;
+                    fallback.diagnostics.push(format!(
+                        "Anthropic token-count API response was unavailable: {}",
+                        error.message
+                    ));
+                    fallback
+                }
+            }
+        }
+        Err(error) => {
+            let mut fallback = estimate_provider_wire_context_tokens(
+                &config.provider_id,
+                &config.model_id,
+                "anthropic_messages_wire_request",
+                fallback_body,
+            )?;
+            fallback.diagnostics.push(format!(
+                "Anthropic token-count API was unavailable: {}",
+                error.message
+            ));
+            fallback
+        }
+    };
+    store_provider_count_estimate(cache_key, estimate.clone());
+    Ok(estimate)
+}
+
 fn anthropic_messages(request: &ProviderTurnRequest) -> CommandResult<Vec<JsonValue>> {
     let mut messages = Vec::new();
     for message in &request.messages {
@@ -1931,15 +2221,13 @@ fn openai_provider_usage(
         .saturating_sub(cache_read_tokens)
         .saturating_sub(cache_creation_tokens);
     ProviderUsage {
-        input_tokens: billable_input_tokens,
+        input_tokens,
+        billable_input_tokens,
         output_tokens,
         total_tokens: if total_tokens > 0 {
             total_tokens
         } else {
-            billable_input_tokens
-                .saturating_add(output_tokens)
-                .saturating_add(cache_read_tokens)
-                .saturating_add(cache_creation_tokens)
+            input_tokens.saturating_add(output_tokens)
         },
         cache_read_tokens,
         cache_creation_tokens,
@@ -2124,11 +2412,12 @@ fn parse_anthropic_sse(
             _ => {}
         }
     }
-    usage.total_tokens = usage
+    usage.billable_input_tokens = usage.input_tokens;
+    usage.input_tokens = usage
         .input_tokens
-        .saturating_add(usage.output_tokens)
         .saturating_add(usage.cache_read_tokens)
         .saturating_add(usage.cache_creation_tokens);
+    usage.total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
     let usage = (usage.total_tokens > 0).then_some(usage);
     if let Some(usage) = usage.as_ref() {
         emit(ProviderStreamEvent::Usage(usage.clone()))?;
@@ -2212,7 +2501,10 @@ fn parse_anthropic_json_response(
             .and_then(JsonValue::as_u64)
             .unwrap_or_default();
         ProviderUsage {
-            input_tokens,
+            input_tokens: input_tokens
+                .saturating_add(cache_read_tokens)
+                .saturating_add(cache_creation_tokens),
+            billable_input_tokens: input_tokens,
             output_tokens,
             total_tokens: input_tokens
                 .saturating_add(output_tokens)
@@ -2761,6 +3053,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_context_estimate_uses_adapter_wire_request_shape() {
+        let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleProviderConfig {
+            provider_id: OPENROUTER_PROVIDER_ID.into(),
+            model_id: "openai/gpt-4.1-mini".into(),
+            base_url: "https://openrouter.ai/api/v1".into(),
+            api_key: Some("test-key".into()),
+            api_version: None,
+            timeout_ms: 1_000,
+        })
+        .expect("adapter");
+
+        let estimate = adapter
+            .estimate_context_tokens(&test_request())
+            .expect("estimate");
+
+        assert!(estimate.tokens > 0);
+        assert_eq!(estimate.source, SessionContextEstimateSourceDto::Heuristic);
+        assert_eq!(
+            estimate.confidence,
+            SessionContextEstimateConfidenceDto::Low
+        );
+        assert_eq!(
+            estimate.counted_shape,
+            "openai_chat_completions_wire_request"
+        );
+    }
+
+    #[test]
     fn deepseek_body_uses_thinking_effort_and_replays_reasoning_content() {
         let mut request = test_request();
         request.controls.active.thinking_effort = Some(ProviderModelThinkingEffortDto::XHigh);
@@ -2847,7 +3167,8 @@ mod tests {
     fn openai_usage_maps_cached_input_to_cache_read_bucket() {
         let usage = openai_provider_usage(1_000, 200, 1_200, 300, 0, None);
 
-        assert_eq!(usage.input_tokens, 700);
+        assert_eq!(usage.input_tokens, 1_000);
+        assert_eq!(usage.billable_input_tokens, 700);
         assert_eq!(usage.output_tokens, 200);
         assert_eq!(usage.cache_read_tokens, 300);
         assert_eq!(usage.total_tokens, 1_200);
@@ -2858,7 +3179,8 @@ mod tests {
             "output_tokens": 200,
             "input_tokens_details": { "cached_tokens": 300 }
         }));
-        assert_eq!(response_usage.input_tokens, 700);
+        assert_eq!(response_usage.input_tokens, 1_000);
+        assert_eq!(response_usage.billable_input_tokens, 700);
         assert_eq!(response_usage.cache_read_tokens, 300);
         assert_eq!(response_usage.total_tokens, 1_200);
     }
@@ -2886,7 +3208,8 @@ mod tests {
             openai_reported_cost_micros(OPENROUTER_PROVIDER_ID, &usage),
         );
 
-        assert_eq!(mapped.input_tokens, 600);
+        assert_eq!(mapped.input_tokens, 1_000);
+        assert_eq!(mapped.billable_input_tokens, 600);
         assert_eq!(mapped.cache_read_tokens, 300);
         assert_eq!(mapped.cache_creation_tokens, 100);
         assert_eq!(mapped.total_tokens, 1_200);

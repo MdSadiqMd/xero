@@ -988,6 +988,7 @@ function makeRunTranscript(): RunTranscriptDto {
       providerId,
       modelId,
       inputTokens: 100,
+      billableInputTokens: 100,
       outputTokens: 50,
       totalTokens: 150,
       estimatedCostMicros: 10,

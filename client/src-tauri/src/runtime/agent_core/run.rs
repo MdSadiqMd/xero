@@ -741,7 +741,7 @@ pub fn prepare_owned_agent_continuation_for_drive(
     {
         return Ok(prepared);
     }
-    ensure_context_budget_allows_continuation(request, &before)?;
+    ensure_context_budget_allows_continuation(request, provider.as_ref(), &before)?;
 
     if request.answer_pending_actions {
         project_store::answer_pending_agent_action_requests(
@@ -866,15 +866,24 @@ pub fn prepare_owned_agent_continuation_for_drive(
 
 fn ensure_context_budget_allows_continuation(
     request: &ContinueOwnedAgentRunRequest,
+    provider: &dyn ProviderAdapter,
     snapshot: &AgentRunSnapshotRecord,
 ) -> CommandResult<()> {
-    let context_limit = resolve_context_limit(&snapshot.run.provider_id, &snapshot.run.model_id);
+    let context_limit = resolve_context_limit_with_provider_preflight(
+        &snapshot.run.provider_id,
+        &snapshot.run.model_id,
+        request.provider_preflight.as_ref(),
+    );
     let Some(budget_tokens) = context_limit.effective_input_budget_tokens else {
         return Ok(());
     };
 
-    let estimate = estimate_continuation_context_tokens(request, snapshot)?;
-    let budget = context_budget(estimate.estimated_tokens, Some(budget_tokens));
+    let estimate = estimate_continuation_context_tokens(request, provider, snapshot)?;
+    let budget = context_budget_with_estimate(
+        estimate.estimate.clone(),
+        context_limit,
+        SessionUsageSourceDto::Estimated,
+    );
     if budget.pressure != SessionContextBudgetPressureDto::Over {
         return Ok(());
     }
@@ -911,13 +920,13 @@ fn maybe_auto_compact_before_continuation(
     if active_compaction.is_some() {
         return Ok(());
     }
-    let estimate = estimate_continuation_context_tokens(request, snapshot)?;
+    let estimate = estimate_continuation_context_tokens(request, provider, snapshot)?;
     let decision = evaluate_compaction_policy(SessionCompactionPolicyInput {
         manual_requested: false,
         auto_enabled: true,
         provider_supports_compaction: true,
         active_compaction_present: false,
-        estimated_tokens: estimate.estimated_tokens,
+        estimated_tokens: estimate.estimate.tokens,
         budget_tokens: estimate.budget_tokens,
         threshold_percent: preference.threshold_percent,
     });
@@ -944,8 +953,9 @@ fn maybe_auto_compact_before_continuation(
             "outcome": "passed",
             "compactionId": compaction.compaction_id,
             "reasonCode": decision.reason_code,
-            "estimatedTokens": estimate.estimated_tokens,
+            "estimatedTokens": estimate.estimate.tokens,
             "budgetTokens": estimate.budget_tokens,
+            "estimate": estimate.estimate,
         }),
     )?;
     Ok(())
@@ -956,7 +966,7 @@ fn maybe_handoff_before_continuation(
     provider: &dyn ProviderAdapter,
     snapshot: &AgentRunSnapshotRecord,
 ) -> CommandResult<Option<PreparedOwnedAgentContinuation>> {
-    let estimate = estimate_continuation_context_tokens(request, snapshot)?;
+    let estimate = estimate_continuation_context_tokens(request, provider, snapshot)?;
     let settings = project_store::load_agent_context_policy_settings(
         &request.repo_root,
         &snapshot.run.project_id,
@@ -970,7 +980,7 @@ fn maybe_handoff_before_continuation(
     let decision =
         project_store::evaluate_agent_context_policy(project_store::AgentContextPolicyInput {
             runtime_agent_id: snapshot.run.runtime_agent_id,
-            estimated_tokens: estimate.estimated_tokens,
+            estimated_tokens: estimate.estimate.tokens,
             budget_tokens: estimate.budget_tokens,
             provider_supports_compaction: true,
             active_compaction_present: active_compaction.is_some(),
@@ -988,8 +998,9 @@ fn maybe_handoff_before_continuation(
                 "kind": "context_handoff_preflight",
                 "action": "blocked",
                 "reasonCode": decision.reason_code,
-                "estimatedTokens": estimate.estimated_tokens,
+                "estimatedTokens": estimate.estimate.tokens,
                 "budgetTokens": estimate.budget_tokens,
+                "estimate": estimate.estimate,
             }),
         )?;
         return Err(CommandError::user_fixable(
@@ -1027,8 +1038,9 @@ fn maybe_handoff_before_continuation(
             "kind": "context_handoff_preflight",
             "action": "handoff_now",
             "reasonCode": decision.reason_code,
-            "estimatedTokens": estimate.estimated_tokens,
+            "estimatedTokens": estimate.estimate.tokens,
             "budgetTokens": estimate.budget_tokens,
+            "estimate": estimate.estimate,
             "targetRuntimeAgentId": snapshot.run.runtime_agent_id.as_str(),
         }),
     )?;
@@ -1533,16 +1545,21 @@ fn prepare_handoff_continuation(
 }
 
 struct ContinuationContextEstimate {
-    estimated_tokens: u64,
+    estimate: SessionContextEstimateDto,
     budget_tokens: Option<u64>,
 }
 
 fn estimate_continuation_context_tokens(
     request: &ContinueOwnedAgentRunRequest,
+    provider: &dyn ProviderAdapter,
     snapshot: &AgentRunSnapshotRecord,
 ) -> CommandResult<ContinuationContextEstimate> {
-    let budget_tokens = resolve_context_limit(&snapshot.run.provider_id, &snapshot.run.model_id)
-        .effective_input_budget_tokens;
+    let budget_tokens = resolve_context_limit_with_provider_preflight(
+        &snapshot.run.provider_id,
+        &snapshot.run.model_id,
+        request.provider_preflight.as_ref(),
+    )
+    .effective_input_budget_tokens;
     let definition_snapshot =
         load_agent_definition_snapshot_for_run(&request.repo_root, &snapshot.run)?;
     let (default_approval_mode, allowed_approval_modes) =
@@ -1593,41 +1610,21 @@ fn estimate_continuation_context_tokens(
         None,
         attached_skill_contexts,
     )?;
-    let provider_messages = provider_messages_from_snapshot(&request.repo_root, snapshot)?;
-    let message_tokens = provider_messages.iter().try_fold(0_u64, |total, message| {
-        let serialized = serde_json::to_string(message).map_err(|error| {
-            CommandError::system_fault(
-                "agent_context_message_serialize_failed",
-                format!(
-                    "Xero could not estimate context size for run `{}`: {error}",
-                    snapshot.run.run_id
-                ),
-            )
-        })?;
-        Ok(total.saturating_add(estimate_tokens(&serialized)))
-    })?;
-    let tool_descriptor_tokens =
-        tool_registry
-            .descriptors()
-            .iter()
-            .try_fold(0_u64, |total, descriptor| {
-                let serialized = serde_json::to_string(descriptor).map_err(|error| {
-                    CommandError::system_fault(
-                        "agent_context_tool_descriptor_serialize_failed",
-                        format!(
-                            "Xero could not estimate tool context size for run `{}`: {error}",
-                            snapshot.run.run_id
-                        ),
-                    )
-                })?;
-                Ok(total.saturating_add(estimate_tokens(&serialized)))
-            })?;
-    let estimated_tokens = estimate_tokens(&system_prompt)
-        .saturating_add(message_tokens)
-        .saturating_add(tool_descriptor_tokens)
-        .saturating_add(estimate_tokens(&request.prompt));
+    let mut provider_messages = provider_messages_from_snapshot(&request.repo_root, snapshot)?;
+    provider_messages.push(ProviderMessage::User {
+        content: request.prompt.clone(),
+        attachments: request.attachments.clone(),
+    });
+    let turn = ProviderTurnRequest {
+        system_prompt,
+        messages: provider_messages,
+        tools: tool_registry.descriptors().to_vec(),
+        turn_index: snapshot.messages.len(),
+        controls,
+    };
+    let estimate = provider.estimate_context_tokens(&turn)?;
     Ok(ContinuationContextEstimate {
-        estimated_tokens,
+        estimate,
         budget_tokens,
     })
 }

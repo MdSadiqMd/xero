@@ -1513,6 +1513,34 @@ pub trait ProviderAdapter {
         emit: &mut dyn FnMut(ProviderStreamEvent) -> CommandResult<()>,
     ) -> CommandResult<ProviderTurnOutcome>;
 
+    fn estimate_context_tokens(
+        &self,
+        request: &ProviderTurnRequest,
+    ) -> CommandResult<SessionContextEstimateDto> {
+        let internal_shape = json!({
+            "providerId": self.provider_id(),
+            "modelId": self.model_id(),
+            "systemPrompt": request.system_prompt,
+            "messages": request.messages,
+            "tools": request.tools,
+            "turnIndex": request.turn_index,
+        });
+        let serialized = serde_json::to_string(&internal_shape).map_err(|error| {
+            CommandError::system_fault(
+                "agent_context_estimate_serialize_failed",
+                format!(
+                    "Xero could not serialize the internal provider turn shape for `{}/{}`: {error}",
+                    self.provider_id(),
+                    self.model_id()
+                ),
+            )
+        })?;
+        Ok(heuristic_token_estimate(
+            &serialized,
+            "internal_provider_turn_request",
+        ))
+    }
+
     fn compact_transcript(
         &self,
         request: &ProviderCompactionRequest,
@@ -1650,7 +1678,11 @@ pub enum ProviderMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderUsage {
+    /// Raw input tokens occupying provider context for the request.
     pub input_tokens: u64,
+    /// Input tokens charged at the provider's normal input rate.
+    #[serde(default)]
+    pub billable_input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
     #[serde(default)]
@@ -1898,6 +1930,9 @@ impl ProviderAdapter for FakeProviderAdapter {
             summary,
             usage: Some(ProviderUsage {
                 input_tokens: request
+                    .max_summary_tokens
+                    .min(estimate_tokens(&request.transcript)),
+                billable_input_tokens: request
                     .max_summary_tokens
                     .min(estimate_tokens(&request.transcript)),
                 output_tokens: estimate_tokens(&sanitized),
