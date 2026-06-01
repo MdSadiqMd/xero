@@ -388,12 +388,35 @@ function normalizePersistedInputBuffer(value: string | null | undefined): string
 
 function trimRestoredTranscriptInput(transcript: string, inputBuffer: string | null | undefined): string {
   const normalizedInput = normalizePersistedInputBuffer(inputBuffer)
-  if (!normalizedInput) return transcript
-  const tailStart = Math.max(0, transcript.length - MAX_PERSISTED_INPUT_BUFFER_LENGTH * 2)
-  const tail = transcript.slice(tailStart)
-  const inputIndex = tail.lastIndexOf(normalizedInput)
-  if (inputIndex === -1) return transcript
-  return transcript.slice(0, tailStart + inputIndex)
+  if (normalizedInput) {
+    const tailStart = Math.max(0, transcript.length - MAX_PERSISTED_INPUT_BUFFER_LENGTH * 2)
+    const tail = transcript.slice(tailStart)
+    const inputIndex = tail.lastIndexOf(normalizedInput)
+    if (inputIndex !== -1) return transcript.slice(0, tailStart + inputIndex)
+  }
+  return trimRestoredTranscriptPromptTail(transcript)
+}
+
+function trimRestoredTranscriptPromptTail(transcript: string): string {
+  const lineStart = Math.max(
+    transcript.lastIndexOf("\n"),
+    transcript.lastIndexOf("\r"),
+  ) + 1
+  const line = transcript.slice(lineStart)
+  if (line.length === 0 || line.length > 2048) return transcript
+  const promptMarkers = [" % ", " $ ", " # ", " > "]
+  let promptEnd = -1
+  for (const marker of promptMarkers) {
+    const markerIndex = line.lastIndexOf(marker)
+    if (markerIndex !== -1) {
+      promptEnd = Math.max(promptEnd, markerIndex + marker.length)
+    }
+  }
+  if (promptEnd === -1 && /^[%#$>] .+/.test(line)) {
+    promptEnd = 2
+  }
+  if (promptEnd === -1 || promptEnd >= line.length) return transcript
+  return transcript.slice(0, lineStart + promptEnd)
 }
 
 function terminalCommandSourceLabel(source: TerminalSpawnSource | undefined): string | null {

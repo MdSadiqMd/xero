@@ -377,6 +377,25 @@ describe("TerminalSidebar persistence", () => {
     expect(mocks.terminals[0].writes.join("")).toBe("sn0w@host project % ")
   })
 
+  it("drops unsent prompt input even when the latest input buffer was not persisted", async () => {
+    setupAdapter({
+      states: new Map([["project-a", persistedState([basePersistedTab])]]),
+      transcripts: new Map([
+        [
+          "client-web",
+          "/Users/sn0w/.zshrc:4: no such file or directory: /Users/sn0w/.mesh/env\r\n%\r\nsn0w@host project % clearpnpm run build",
+        ],
+      ]),
+    })
+
+    render(<TerminalSidebar open projectId="project-a" />)
+
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+    expect(mocks.terminals[0].writes.join("")).toBe(
+      "/Users/sn0w/.zshrc:4: no such file or directory: /Users/sn0w/.mesh/env\r\n%\r\nsn0w@host project % ",
+    )
+  })
+
   it("persists the current unsubmitted input buffer with the tab descriptor", async () => {
     const { unmount } = render(<TerminalSidebar open projectId="project-a" />)
     await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
