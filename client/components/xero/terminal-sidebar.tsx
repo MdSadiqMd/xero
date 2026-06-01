@@ -62,6 +62,7 @@ const TERMINAL_TABS_STATE_SCHEMA = "xero.terminal.tabs.v1"
 const TERMINAL_SUGGESTION_SETTINGS_KEY = "xero.terminal.suggestions.settings.v1"
 const MAX_PERSISTED_TERMINAL_TABS = 24
 const MAX_PERSISTED_COMMAND_LENGTH = 20_000
+const MAX_PERSISTED_INPUT_BUFFER_LENGTH = 4096
 const TERMINAL_SUGGESTION_DEBOUNCE_MS = 110
 
 /**
@@ -160,6 +161,7 @@ interface PersistedTerminalTab {
   labelLocked: boolean
   browserSupported: boolean | null
   cwd: string | null
+  inputBuffer?: string | null
   command: PersistedTerminalCommand | null
 }
 
@@ -192,6 +194,7 @@ interface InternalTerminalSpawnOptions extends TerminalSpawnOptions {
   labelLocked?: boolean
   restoredCommand?: PersistedTerminalCommand | null
   restoredCwd?: string | null
+  restoredInputBuffer?: string | null
 }
 
 interface TerminalSidebarProps {
@@ -238,6 +241,7 @@ const persistedTerminalTabSchema = z
     labelLocked: z.boolean(),
     browserSupported: z.boolean().nullable(),
     cwd: z.string().trim().min(1).max(4096).nullable(),
+    inputBuffer: z.string().max(MAX_PERSISTED_INPUT_BUFFER_LENGTH).nullable().optional(),
     command: persistedTerminalCommandSchema.nullable(),
   })
   .strict()
@@ -376,6 +380,20 @@ function persistTerminalSuggestionSettings(settings: TerminalSuggestionSettings)
   }
 }
 
+function normalizePersistedInputBuffer(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (value.includes("\r") || value.includes("\n")) return null
+  return value.slice(0, MAX_PERSISTED_INPUT_BUFFER_LENGTH)
+}
+
+function trimRestoredTranscriptInput(transcript: string, inputBuffer: string | null | undefined): string {
+  const normalizedInput = normalizePersistedInputBuffer(inputBuffer)
+  if (!normalizedInput) return transcript
+  return transcript.endsWith(normalizedInput)
+    ? transcript.slice(0, -normalizedInput.length)
+    : transcript
+}
+
 function terminalCommandSourceLabel(source: TerminalSpawnSource | undefined): string | null {
   if (!source) return null
   if (source.kind === "start-target") return source.targetName ?? null
@@ -442,6 +460,7 @@ function parsePersistedTerminalTabsState(value: unknown): LoadedTerminalTabsStat
 function serializeTerminalTabs(
   tabs: TerminalTab[],
   activeTabId: string | null,
+  inputBufferForTab: (terminalId: string) => string | null = () => null,
 ): PersistedTerminalTabsState {
   const persistedTabs = tabs
     .filter((tab) => tab.projectId.trim().length > 0)
@@ -452,6 +471,7 @@ function serializeTerminalTabs(
       labelLocked: tab.labelLocked === true,
       browserSupported: tab.browserSupported ?? null,
       cwd: tab.cwd,
+      inputBuffer: normalizePersistedInputBuffer(inputBufferForTab(tab.id)),
       command: tab.command,
     }))
   const activeClientId =
@@ -859,7 +879,11 @@ export function TerminalSidebar({
     ) => {
       if (!targetProjectId || !defaultAdapter.writeProjectUiState) return
       const projectTabs = snapshot.filter((tab) => tab.projectId === targetProjectId)
-      const value = serializeTerminalTabs(projectTabs, snapshotActiveTabId)
+      const value = serializeTerminalTabs(
+        projectTabs,
+        snapshotActiveTabId,
+        (terminalId) => inputTrackersRef.current.get(terminalId)?.snapshot().buffer ?? null,
+      )
       void defaultAdapter.writeProjectUiState({
         projectId: targetProjectId,
         key: TERMINAL_TABS_UI_STATE_KEY,
@@ -940,7 +964,11 @@ export function TerminalSidebar({
             ? await defaultAdapter.terminalReadTranscript({
                 projectId: targetProjectId,
                 clientTerminalId: clientId,
-              }).then((response) => response.content).catch(() => "")
+              })
+                .then((response) =>
+                  trimRestoredTranscriptInput(response.content, options?.restoredInputBuffer),
+                )
+                .catch(() => "")
             : ""
         const response = await defaultAdapter.terminalOpen?.({
           projectId: targetProjectId,
@@ -1137,6 +1165,7 @@ export function TerminalSidebar({
             browserSupported: persistedTab.browserSupported ?? undefined,
             restoredCommand: persistedTab.command,
             restoredCwd: persistedTab.cwd,
+            restoredInputBuffer: persistedTab.inputBuffer,
           })
           if (terminalId) restoredIds.set(persistedTab.clientId, terminalId)
         }

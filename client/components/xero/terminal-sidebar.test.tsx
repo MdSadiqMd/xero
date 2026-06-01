@@ -125,6 +125,7 @@ const basePersistedTab = {
   labelLocked: true,
   browserSupported: true,
   cwd: "/repo/project-a",
+  inputBuffer: null as string | null,
   command: {
     text: "pnpm dev",
     sourceKind: "start-target",
@@ -352,6 +353,46 @@ describe("TerminalSidebar persistence", () => {
 
     emitTerminalData("pty-1", "new command output\r\n")
     expect(mocks.terminals[0].writes.join("")).toContain("new command output")
+  })
+
+  it("does not replay an unsent editable line from a restored transcript", async () => {
+    setupAdapter({
+      states: new Map([
+        [
+          "project-a",
+          persistedState([
+            {
+              ...basePersistedTab,
+              inputBuffer: "clear",
+            },
+          ]),
+        ],
+      ]),
+      transcripts: new Map([["client-web", "sn0w@host project % clear"]]),
+    })
+
+    render(<TerminalSidebar open projectId="project-a" />)
+
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+    expect(mocks.terminals[0].writes.join("")).toBe("sn0w@host project % ")
+  })
+
+  it("persists the current unsubmitted input buffer with the tab descriptor", async () => {
+    const { unmount } = render(<TerminalSidebar open projectId="project-a" />)
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+
+    mocks.terminals[0].dataHandler?.("clear")
+    unmount()
+
+    await waitFor(() => {
+      const values = mocks.adapter.writeProjectUiState.mock.calls.map(([request]) => request.value)
+      expect(
+        values.some((value) =>
+          Array.isArray(value.tabs) &&
+          value.tabs.some((tab: { inputBuffer?: string | null }) => tab.inputBuffer === "clear"),
+        ),
+      ).toBe(true)
+    })
   })
 
   it("does not wipe persisted tabs when StrictMode cleanup runs before hydration finishes", () => {
