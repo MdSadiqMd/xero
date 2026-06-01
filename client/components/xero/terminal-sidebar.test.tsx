@@ -13,7 +13,8 @@ const mocks = vi.hoisted(() => {
       focus: () => void
       dispose: () => void
       loadAddon: () => void
-      attachCustomKeyEventHandler: () => void
+      attachCustomKeyEventHandler: (handler: (event: KeyboardEvent) => boolean) => void
+      customKeyHandler?: (event: KeyboardEvent) => boolean
       onData: (handler: (data: string) => void) => void
       dataHandler?: (data: string) => void
       onResize: (handler: (size: { cols: number; rows: number }) => void) => void
@@ -30,6 +31,9 @@ const mocks = vi.hoisted(() => {
       terminalClose: vi.fn(),
       terminalReadTranscript: vi.fn(),
       terminalClearTranscript: vi.fn(),
+      terminalSuggest: vi.fn(),
+      terminalRecordCommand: vi.fn(),
+      terminalIgnoreSuggestion: vi.fn(),
     },
   }
 })
@@ -77,7 +81,10 @@ vi.mock("@xterm/xterm", () => ({
     focus() {}
     dispose() {}
     loadAddon() {}
-    attachCustomKeyEventHandler() {}
+    customKeyHandler?: (event: KeyboardEvent) => boolean
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+      this.customKeyHandler = handler
+    }
     onData(handler: (data: string) => void) {
       this.dataHandler = handler
     }
@@ -171,6 +178,14 @@ function setupAdapter({
   mocks.adapter.terminalResize.mockResolvedValue(undefined)
   mocks.adapter.terminalClose.mockResolvedValue(undefined)
   mocks.adapter.terminalClearTranscript.mockResolvedValue(undefined)
+  mocks.adapter.terminalSuggest.mockResolvedValue({
+    requestId: 1,
+    candidates: [],
+    deterministicExhausted: true,
+    aiAttempted: false,
+  })
+  mocks.adapter.terminalRecordCommand.mockResolvedValue(undefined)
+  mocks.adapter.terminalIgnoreSuggestion.mockResolvedValue(undefined)
 }
 
 function emitTerminalData(terminalId: string, data: string) {
@@ -184,6 +199,7 @@ describe("TerminalSidebar persistence", () => {
     mocks.listeners.clear()
     mocks.terminals.length = 0
     Object.values(mocks.adapter).forEach((mock) => mock.mockReset())
+    window.localStorage.clear()
     setupAdapter()
   })
 
@@ -413,5 +429,86 @@ describe("TerminalSidebar persistence", () => {
     fireEvent.click(apiTab!)
 
     await waitFor(() => expect(apiTab).toHaveClass("text-foreground"))
+  })
+
+  it("renders ghost suggestions without writing them until accepted", async () => {
+    mocks.adapter.terminalSuggest.mockImplementation(async (request) => ({
+      requestId: request.requestId,
+      candidates: [
+        {
+          replacement: " status",
+          display: "git status",
+          description: "Show working tree status",
+          source: "command",
+          confidence: 0.9,
+          replacementRange: { start: 3, end: 3 },
+        },
+      ],
+      deterministicExhausted: false,
+      aiAttempted: false,
+    }))
+
+    render(<TerminalSidebar open projectId="project-a" />)
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+
+    mocks.terminals[0].dataHandler?.("git")
+    await new Promise((resolve) => window.setTimeout(resolve, 150))
+
+    expect(await screen.findByText(/status/)).toBeVisible()
+    expect(mocks.adapter.terminalWrite).toHaveBeenCalledWith("pty-1", "git")
+    expect(mocks.adapter.terminalWrite).not.toHaveBeenCalledWith("pty-1", " status")
+
+    mocks.terminals[0].customKeyHandler?.(
+      new KeyboardEvent("keydown", { key: "ArrowRight" }),
+    )
+
+    expect(mocks.adapter.terminalWrite).toHaveBeenCalledWith("pty-1", " status")
+  })
+
+  it("records submitted commands and dismisses bad suggestions through app-data", async () => {
+    mocks.adapter.terminalSuggest.mockImplementation(async (request) => ({
+      requestId: request.requestId,
+      candidates: [
+        {
+          replacement: " diff",
+          display: "git diff",
+          description: "Review changes",
+          source: "history",
+          confidence: 0.9,
+          replacementRange: { start: 3, end: 3 },
+        },
+      ],
+      deterministicExhausted: false,
+      aiAttempted: false,
+    }))
+
+    render(<TerminalSidebar open projectId="project-a" />)
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+
+    mocks.terminals[0].dataHandler?.("git")
+    await new Promise((resolve) => window.setTimeout(resolve, 150))
+    expect(await screen.findByText(/diff/)).toBeVisible()
+
+    mocks.terminals[0].customKeyHandler?.(
+      new KeyboardEvent("keydown", { key: "Escape" }),
+    )
+    await waitFor(() =>
+      expect(mocks.adapter.terminalIgnoreSuggestion).toHaveBeenCalledWith({
+        projectId: "project-a",
+        display: "git diff",
+      }),
+    )
+
+    mocks.terminals[0].dataHandler?.(" status")
+    mocks.terminals[0].dataHandler?.("\r")
+
+    await waitFor(() =>
+      expect(mocks.adapter.terminalRecordCommand).toHaveBeenCalledWith({
+        projectId: "project-a",
+        command: "git status",
+        cwd: "/repo/project-a",
+        shell: "/bin/zsh",
+      }),
+    )
   })
 })

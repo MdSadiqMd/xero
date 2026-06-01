@@ -643,6 +643,9 @@ const COMMANDS = {
   terminalClose: 'terminal_close',
   terminalReadTranscript: 'terminal_read_transcript',
   terminalClearTranscript: 'terminal_clear_transcript',
+  terminalSuggest: 'terminal_suggest',
+  terminalRecordCommand: 'terminal_record_command',
+  terminalIgnoreSuggestion: 'terminal_ignore_suggestion',
   getProjectSnapshot: 'get_project_snapshot',
   getProjectUsageSummary: 'get_project_usage_summary',
   getRepositoryStatus: 'get_repository_status',
@@ -906,6 +909,26 @@ const terminalTranscriptResponseSchema = z.object({
 })
 export type TerminalTranscriptResponseDto = z.infer<typeof terminalTranscriptResponseSchema>
 
+const terminalSuggestionCandidateSchema = z.object({
+  replacement: z.string(),
+  display: z.string(),
+  description: z.string().nullable().optional(),
+  source: z.enum(["history", "shell_history", "path", "command", "next_command", "ai"]),
+  confidence: z.number(),
+  replacementRange: z.object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+  }),
+})
+const terminalSuggestResponseSchema = z.object({
+  requestId: z.number().int().nonnegative(),
+  candidates: z.array(terminalSuggestionCandidateSchema),
+  deterministicExhausted: z.boolean(),
+  aiAttempted: z.boolean(),
+})
+export type TerminalSuggestionCandidateDto = z.infer<typeof terminalSuggestionCandidateSchema>
+export type TerminalSuggestResponseDto = z.infer<typeof terminalSuggestResponseSchema>
+
 const suggestedStartTargetSchema = z.object({
   name: z.string(),
   command: z.string(),
@@ -949,6 +972,43 @@ export interface UpdateProjectStartTargetsRequestDto {
   targets: StartTargetInputDto[]
 }
 
+type ProviderModelThinkingEffortValue =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'x_high'
+
+export interface TerminalSuggestRequestDto {
+  projectId: string
+  terminalId?: string | null
+  buffer: string
+  cursor: number
+  cwd?: string | null
+  shell?: string | null
+  recentBlockContext?: string | null
+  requestId: number
+  enableAi?: boolean
+  providerId?: string | null
+  modelId?: string | null
+  providerProfileId?: string | null
+  runtimeAgentId?: RuntimeAgentIdDto | null
+  thinkingEffort?: ProviderModelThinkingEffortValue | null
+}
+
+export interface TerminalRecordCommandRequestDto {
+  projectId: string
+  command: string
+  cwd?: string | null
+  shell?: string | null
+}
+
+export interface TerminalIgnoreSuggestionRequestDto {
+  projectId: string
+  display: string
+}
+
 export interface OpenTerminalRequestDto {
   projectId?: string | null
   clientTerminalId?: string | null
@@ -968,14 +1028,7 @@ export interface SuggestProjectStartTargetsRequestDto {
   providerId?: string | null
   providerProfileId?: string | null
   runtimeAgentId?: RuntimeAgentIdDto | null
-  thinkingEffort?:
-    | 'none'
-    | 'minimal'
-    | 'low'
-    | 'medium'
-    | 'high'
-    | 'x_high'
-    | null
+  thinkingEffort?: ProviderModelThinkingEffortValue | null
 }
 
 const commandErrorSchema = z.object({
@@ -1172,6 +1225,9 @@ export interface XeroDesktopAdapter {
     request: TerminalTranscriptRequestDto,
   ): Promise<TerminalTranscriptResponseDto>
   terminalClearTranscript?(request: TerminalTranscriptRequestDto): Promise<void>
+  terminalSuggest?(request: TerminalSuggestRequestDto): Promise<TerminalSuggestResponseDto>
+  terminalRecordCommand?(request: TerminalRecordCommandRequestDto): Promise<void>
+  terminalIgnoreSuggestion?(request: TerminalIgnoreSuggestionRequestDto): Promise<void>
   getProjectUsageSummary(projectId: string): Promise<ProjectUsageSummaryDto>
   getRepositoryStatus(projectId: string): Promise<RepositoryStatusResponseDto>
   getRepositoryDiff(projectId: string, scope: RepositoryDiffScope): Promise<RepositoryDiffResponseDto>
@@ -2484,6 +2540,47 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
       request: {
         projectId: request.projectId,
         clientTerminalId: request.clientTerminalId,
+      },
+    })
+  },
+
+  terminalSuggest(request) {
+    return invokeTyped(COMMANDS.terminalSuggest, terminalSuggestResponseSchema, {
+      request: {
+        projectId: request.projectId,
+        terminalId: request.terminalId ?? null,
+        buffer: request.buffer,
+        cursor: request.cursor,
+        cwd: request.cwd ?? null,
+        shell: request.shell ?? null,
+        recentBlockContext: request.recentBlockContext ?? null,
+        requestId: request.requestId,
+        enableAi: request.enableAi === true,
+        providerId: request.providerId ?? null,
+        modelId: request.modelId ?? null,
+        providerProfileId: request.providerProfileId ?? null,
+        runtimeAgentId: request.runtimeAgentId ?? null,
+        thinkingEffort: request.thinkingEffort ?? null,
+      },
+    })
+  },
+
+  async terminalRecordCommand(request) {
+    await invokeRaw(COMMANDS.terminalRecordCommand, {
+      request: {
+        projectId: request.projectId,
+        command: request.command,
+        cwd: request.cwd ?? null,
+        shell: request.shell ?? null,
+      },
+    })
+  },
+
+  async terminalIgnoreSuggestion(request) {
+    await invokeRaw(COMMANDS.terminalIgnoreSuggestion, {
+      request: {
+        projectId: request.projectId,
+        display: request.display,
       },
     })
   },

@@ -6,8 +6,20 @@ import { isTauri } from "@tauri-apps/api/core"
 import { Terminal as XTerm, type ITheme as IXTermTheme } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
-import { Plus, X } from "lucide-react"
+import { Plus, Settings2, X } from "lucide-react"
 import { z } from "zod"
+import { Button } from "@/components/ui/button"
+import {
+  Command,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { useSidebarOpenMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import { createSafeTauriUnlisten } from "@/src/lib/tauri-events"
@@ -15,6 +27,7 @@ import { XeroDesktopAdapter as defaultAdapter } from "@/src/lib/xero-desktop"
 import type {
   TerminalDataEventPayload,
   TerminalExitEventPayload,
+  TerminalSuggestionCandidateDto,
   TerminalTitleEventPayload,
 } from "@/src/lib/xero-desktop"
 import { useTheme } from "@/src/features/theme/theme-provider"
@@ -30,6 +43,14 @@ import type {
   ThemeDefinition,
 } from "@xero/ui/theme"
 import type { EditorTerminalTaskExit } from "./execution-view/editor-tasks"
+import {
+  StaleTerminalSuggestionGate,
+  TerminalInputTracker,
+  acceptedSuggestionWrite,
+  isProbablySecretCommand,
+  shouldShowCandidate,
+  type TerminalSuggestionSnapshot,
+} from "./terminal-suggestions"
 
 import "@xterm/xterm/css/xterm.css"
 
@@ -43,8 +64,10 @@ const TERMINAL_SHIFT_ENTER_SEQUENCE = "\x1b[13;2u"
 const MAX_TAB_LABEL_LENGTH = 48
 const TERMINAL_TABS_UI_STATE_KEY = "terminal.tabs.v1"
 const TERMINAL_TABS_STATE_SCHEMA = "xero.terminal.tabs.v1"
+const TERMINAL_SUGGESTION_SETTINGS_KEY = "xero.terminal.suggestions.settings.v1"
 const MAX_PERSISTED_TERMINAL_TABS = 24
 const MAX_PERSISTED_COMMAND_LENGTH = 20_000
+const TERMINAL_SUGGESTION_DEBOUNCE_MS = 110
 
 /**
  * Build an xterm theme from the active Xero theme. ANSI slots draw from the
@@ -157,6 +180,19 @@ interface LoadedTerminalTabsState {
   malformed: boolean
 }
 
+interface TerminalSuggestionSettings {
+  enabled: boolean
+  aiEnabled: boolean
+  tabAccepts: boolean
+}
+
+interface TerminalSuggestionState {
+  terminalId: string
+  snapshot: TerminalSuggestionSnapshot
+  candidates: TerminalSuggestionCandidateDto[]
+  selectedIndex: number
+}
+
 interface InternalTerminalSpawnOptions extends TerminalSpawnOptions {
   clientId?: string
   labelLocked?: boolean
@@ -183,6 +219,7 @@ interface TerminalTab {
   labelLocked?: boolean
   browserSupported?: boolean | null
   cwd: string | null
+  shell: string
   command: PersistedTerminalCommand | null
   running: boolean
   terminal: XTerm
@@ -300,6 +337,31 @@ function createTerminalClientId(): string {
   return `term-tab-${randomId.replace(/[^A-Za-z0-9_-]/g, "-")}`
 }
 
+function loadTerminalSuggestionSettings(): TerminalSuggestionSettings {
+  if (typeof window === "undefined") {
+    return { enabled: true, aiEnabled: false, tabAccepts: false }
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(TERMINAL_SUGGESTION_SETTINGS_KEY) ?? "null")
+    return {
+      enabled: parsed?.enabled !== false,
+      aiEnabled: parsed?.aiEnabled === true,
+      tabAccepts: parsed?.tabAccepts === true,
+    }
+  } catch {
+    return { enabled: true, aiEnabled: false, tabAccepts: false }
+  }
+}
+
+function persistTerminalSuggestionSettings(settings: TerminalSuggestionSettings): void {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(TERMINAL_SUGGESTION_SETTINGS_KEY, JSON.stringify(settings))
+  } catch {
+    // Best effort; suggestions still work with in-memory settings.
+  }
+}
+
 function terminalCommandSourceLabel(source: TerminalSpawnSource | undefined): string | null {
   if (!source) return null
   if (source.kind === "start-target") return source.targetName ?? null
@@ -402,6 +464,10 @@ export function TerminalSidebar({
   const [tabs, setTabs] = useState<TerminalTab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [hydratedProjectId, setHydratedProjectId] = useState<string | null>(null)
+  const [suggestionSettings, setSuggestionSettings] = useState<TerminalSuggestionSettings>(
+    loadTerminalSuggestionSettings,
+  )
+  const [suggestionState, setSuggestionState] = useState<TerminalSuggestionState | null>(null)
   const motionOpen = useSidebarOpenMotion(open)
   const targetWidth = motionOpen ? width : 0
   const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
@@ -436,6 +502,22 @@ export function TerminalSidebar({
   const hydrationGenerationRef = useRef(0)
   const hydratedProjectIdRef = useRef<string | null>(null)
   const previousProjectIdRef = useRef<string | null>(projectId)
+  const inputTrackersRef = useRef<Map<string, TerminalInputTracker>>(new Map())
+  const suggestionGateRef = useRef(new StaleTerminalSuggestionGate())
+  const suggestionDebounceRef = useRef<number | null>(null)
+  const suggestionStateRef = useRef<TerminalSuggestionState | null>(null)
+  const suggestionSettingsRef = useRef(suggestionSettings)
+
+  suggestionStateRef.current = suggestionState
+  suggestionSettingsRef.current = suggestionSettings
+
+  useEffect(() => {
+    persistTerminalSuggestionSettings(suggestionSettings)
+    if (!suggestionSettings.enabled) {
+      suggestionGateRef.current.invalidate()
+      setSuggestionState(null)
+    }
+  }, [suggestionSettings])
 
   const handleTerminalLink = useCallback((uri: string) => {
     if (isBrowserSupportedDevServerUrl(uri)) {
@@ -458,6 +540,101 @@ export function TerminalSidebar({
       if (target) onBrowserLaunchTargetDetectedRef.current?.(target)
     }
   }, [])
+
+  const trackerForTerminal = useCallback((terminalId: string) => {
+    const existing = inputTrackersRef.current.get(terminalId)
+    if (existing) return existing
+    const tracker = new TerminalInputTracker()
+    inputTrackersRef.current.set(terminalId, tracker)
+    return tracker
+  }, [])
+
+  const clearSuggestion = useCallback(() => {
+    suggestionGateRef.current.invalidate()
+    if (suggestionDebounceRef.current !== null) {
+      window.clearTimeout(suggestionDebounceRef.current)
+      suggestionDebounceRef.current = null
+    }
+    setSuggestionState(null)
+  }, [])
+
+  const scheduleSuggestions = useCallback(
+    (tab: TerminalTab, snapshot: TerminalSuggestionSnapshot) => {
+      if (!suggestionSettingsRef.current.enabled || !defaultAdapter.terminalSuggest) {
+        clearSuggestion()
+        return
+      }
+      if (snapshot.suppressed || !tab.running) {
+        clearSuggestion()
+        return
+      }
+      if (suggestionDebounceRef.current !== null) {
+        window.clearTimeout(suggestionDebounceRef.current)
+      }
+      const requestId = suggestionGateRef.current.next()
+      suggestionDebounceRef.current = window.setTimeout(() => {
+        suggestionDebounceRef.current = null
+        void defaultAdapter.terminalSuggest?.({
+          projectId: tab.projectId,
+          terminalId: tab.id,
+          buffer: snapshot.buffer,
+          cursor: snapshot.cursor,
+          cwd: tab.cwd,
+          shell: tab.shell,
+          recentBlockContext: null,
+          requestId,
+          enableAi: suggestionSettingsRef.current.aiEnabled,
+        }).then((response) => {
+          if (!suggestionGateRef.current.isCurrent(response.requestId)) return
+          const candidates = response.candidates.filter((candidate) =>
+            shouldShowCandidate(snapshot, candidate),
+          )
+          setSuggestionState(
+            candidates.length > 0
+              ? { terminalId: tab.id, snapshot, candidates, selectedIndex: 0 }
+              : null,
+          )
+        }).catch(() => {
+          if (suggestionGateRef.current.isCurrent(requestId)) {
+            setSuggestionState(null)
+          }
+        })
+      }, TERMINAL_SUGGESTION_DEBOUNCE_MS)
+    },
+    [clearSuggestion],
+  )
+
+  const recordTerminalCommand = useCallback((tab: TerminalTab, command: string) => {
+    if (!command || isProbablySecretCommand(command)) return
+    void defaultAdapter.terminalRecordCommand?.({
+      projectId: tab.projectId,
+      command,
+      cwd: tab.cwd,
+      shell: tab.shell,
+    }).catch(() => undefined)
+  }, [])
+
+  const ignoreSuggestion = useCallback((tab: TerminalTab, candidate: TerminalSuggestionCandidateDto) => {
+    void defaultAdapter.terminalIgnoreSuggestion?.({
+      projectId: tab.projectId,
+      display: candidate.display,
+    }).catch(() => undefined)
+  }, [])
+
+  const acceptSuggestion = useCallback(
+    (tab: TerminalTab, candidate: TerminalSuggestionCandidateDto, mode: "full" | "word") => {
+      const write = acceptedSuggestionWrite(candidate, mode)
+      if (!write) return
+      const tracker = trackerForTerminal(tab.id)
+      const result = tracker.applyInput(write)
+      suppressingLiveOutputIdsRef.current.delete(tab.id)
+      void defaultAdapter.terminalWrite?.(tab.id, write)
+      const snapshot = result.snapshot
+      setSuggestionState(null)
+      scheduleSuggestions(tab, snapshot)
+    },
+    [scheduleSuggestions, trackerForTerminal],
+  )
 
   const activeProjectTabs = useMemo(
     () => tabs.filter((tab) => tab.projectId === projectId),
@@ -495,6 +672,10 @@ export function TerminalSidebar({
       taskHandlersRef.current.get(terminalId)?.onData?.(data)
       const tab = tabsRef.current.find((entry) => entry.id === terminalId)
       if (tab) {
+        const snapshot = trackerForTerminal(terminalId).observeOutput(data)
+        if (suggestionStateRef.current?.terminalId === terminalId && snapshot.suppressed) {
+          clearSuggestion()
+        }
         if (!openedTerminalIdsRef.current.has(terminalId)) {
           const buffered = pendingWriteBuffersRef.current.get(terminalId) ?? ""
           pendingWriteBuffersRef.current.set(terminalId, buffered + data)
@@ -560,7 +741,7 @@ export function TerminalSidebar({
       cancelled = true
       unlisteners.forEach((fn) => fn())
     }
-  }, [updateTabLabel])
+  }, [clearSuggestion, trackerForTerminal, updateTabLabel])
 
   const registerTerminalHost = useCallback((tab: TerminalTab, node: HTMLDivElement | null) => {
     if (!node) {
@@ -683,7 +864,11 @@ export function TerminalSidebar({
       terminalHostsRef.current.delete(tab.id)
       openedTerminalIdsRef.current.delete(tab.id)
       pendingWriteBuffersRef.current.delete(tab.id)
+      inputTrackersRef.current.delete(tab.id)
       suppressingLiveOutputIdsRef.current.delete(tab.id)
+      if (suggestionStateRef.current?.terminalId === tab.id) {
+        clearSuggestion()
+      }
       try { tab.terminal.dispose() } catch { /* swallow */ }
       if (options.notifyTask !== false) {
         taskHandlersRef.current.get(tab.id)?.onExit?.({ terminalId: tab.id, exitCode: null })
@@ -697,7 +882,7 @@ export function TerminalSidebar({
         }).catch(() => undefined)
       }
     },
-    [],
+    [clearSuggestion],
   )
 
   const spawnTab = useCallback(
@@ -731,6 +916,47 @@ export function TerminalSidebar({
         }
         const { terminal, fit } = createXTerm(xtermThemeRef.current, handleTerminalLink)
         terminal.attachCustomKeyEventHandler((event) => {
+          const visibleSuggestion = suggestionStateRef.current
+          const currentCandidate =
+            visibleSuggestion?.terminalId === response.terminalId
+              ? visibleSuggestion.candidates[visibleSuggestion.selectedIndex]
+              : null
+          if (currentCandidate) {
+            const currentTab = tabsRef.current.find((entry) => entry.id === response.terminalId)
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault()
+              event.stopPropagation()
+              setSuggestionState((current) => {
+                if (!current || current.terminalId !== response.terminalId) return current
+                const delta = event.key === "ArrowDown" ? 1 : -1
+                const selectedIndex =
+                  (current.selectedIndex + delta + current.candidates.length) %
+                  current.candidates.length
+                return { ...current, selectedIndex }
+              })
+              return false
+            }
+            const acceptsFull =
+              (event.key === "ArrowRight" && !event.altKey && !event.metaKey && !event.shiftKey) ||
+              (event.key.toLowerCase() === "f" && event.ctrlKey && !event.altKey && !event.metaKey) ||
+              (event.key === "Tab" && suggestionSettingsRef.current.tabAccepts)
+            const acceptsWord =
+              event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowRight" || event.key.toLowerCase() === "f")
+            if (event.key === "Escape") {
+              event.preventDefault()
+              event.stopPropagation()
+              if (currentTab) ignoreSuggestion(currentTab, currentCandidate)
+              clearSuggestion()
+              return false
+            }
+            if (currentTab && (acceptsFull || acceptsWord)) {
+              event.preventDefault()
+              event.stopPropagation()
+              acceptSuggestion(currentTab, currentCandidate, acceptsWord ? "word" : "full")
+              return false
+            }
+          }
+
           if (!isPlainShiftEnter(event)) return true
 
           event.preventDefault()
@@ -744,6 +970,18 @@ export function TerminalSidebar({
         })
         terminal.onData((data) => {
           suppressingLiveOutputIdsRef.current.delete(response.terminalId)
+          const tracked = trackerForTerminal(response.terminalId).applyInput(data)
+          const currentTab = tabsRef.current.find((entry) => entry.id === response.terminalId)
+          if (tracked.kind === "submit") {
+            clearSuggestion()
+            if (currentTab && tracked.command) {
+              recordTerminalCommand(currentTab, tracked.command)
+            }
+          } else if (tracked.kind === "reset") {
+            clearSuggestion()
+          } else if (currentTab) {
+            scheduleSuggestions(currentTab, tracked.snapshot)
+          }
           void defaultAdapter.terminalWrite?.(response.terminalId, data)
         })
         terminal.onResize(({ cols: c, rows: r }) => {
@@ -768,6 +1006,7 @@ export function TerminalSidebar({
           labelLocked: options?.labelLocked ?? !!options?.label,
           browserSupported: options?.browserSupported ?? null,
           cwd: options?.restoredCwd ?? response.cwd ?? null,
+          shell: response.shell,
           command: options?.restoredCommand ?? buildPersistedTerminalCommand(command, options),
           running: true,
           terminal,
@@ -800,7 +1039,16 @@ export function TerminalSidebar({
         return null
       }
     },
-    [handleTerminalLink, updateTabLabel],
+    [
+      acceptSuggestion,
+      clearSuggestion,
+      handleTerminalLink,
+      ignoreSuggestion,
+      recordTerminalCommand,
+      scheduleSuggestions,
+      trackerForTerminal,
+      updateTabLabel,
+    ],
   )
 
   const ensureTerminalTab = useCallback(() => {
@@ -987,6 +1235,24 @@ export function TerminalSidebar({
     [],
   )
 
+  const visibleSuggestion =
+    activeTab && suggestionState?.terminalId === activeTab.id
+      ? suggestionState
+      : null
+  const visibleCandidate = visibleSuggestion?.candidates[visibleSuggestion.selectedIndex] ?? null
+  const suggestionCellWidth = TERMINAL_FONT_SIZE * 0.62
+  const suggestionLeft =
+    visibleSuggestion && activeTab
+      ? 12 + Math.min(visibleSuggestion.snapshot.cursor, Math.max(activeTab.terminal.cols - 8, 1)) * suggestionCellWidth
+      : 12
+
+  const updateSuggestionSetting = useCallback(
+    (key: keyof TerminalSuggestionSettings, value: boolean) => {
+      setSuggestionSettings((current) => ({ ...current, [key]: value }))
+    },
+    [],
+  )
+
   // Cleanup on unmount: dispose xterm instances + kill PTYs.
   useEffect(() => {
     return () => {
@@ -1077,6 +1343,47 @@ export function TerminalSidebar({
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  aria-label="Terminal suggestion settings"
+                  className="h-6 w-6 shrink-0 text-muted-foreground"
+                  size="icon"
+                  title="Terminal suggestion settings"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 p-3">
+                <div className="space-y-3">
+                  <label className="flex items-center justify-between gap-3 text-[12px]">
+                    <span>Command suggestions</span>
+                    <Switch
+                      checked={suggestionSettings.enabled}
+                      onCheckedChange={(checked) => updateSuggestionSetting("enabled", checked)}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 text-[12px]">
+                    <span>AI suggestions</span>
+                    <Switch
+                      checked={suggestionSettings.aiEnabled}
+                      disabled={!suggestionSettings.enabled}
+                      onCheckedChange={(checked) => updateSuggestionSetting("aiEnabled", checked)}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 text-[12px]">
+                    <span>Accept with Tab</span>
+                    <Switch
+                      checked={suggestionSettings.tabAccepts}
+                      disabled={!suggestionSettings.enabled}
+                      onCheckedChange={(checked) => updateSuggestionSetting("tabAccepts", checked)}
+                    />
+                  </label>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
@@ -1113,6 +1420,43 @@ export function TerminalSidebar({
               )}
             />
           ))}
+          {visibleCandidate ? (
+            <div
+              className="pointer-events-none absolute z-20 max-w-[calc(100%-24px)]"
+              style={{ left: suggestionLeft, bottom: 18 }}
+            >
+              <div
+                aria-hidden="true"
+                className="truncate font-mono text-[13px] leading-none text-muted-foreground/55"
+              >
+                {visibleCandidate.replacement}
+              </div>
+              {visibleSuggestion && visibleSuggestion.candidates.length > 1 ? (
+                <Command className="pointer-events-auto mt-2 w-72 overflow-hidden rounded-md border border-border/80 bg-popover shadow-lg">
+                  <CommandList className="max-h-44">
+                    {visibleSuggestion.candidates.slice(0, 5).map((candidate, index) => (
+                      <CommandItem
+                        key={`${candidate.source}-${candidate.display}`}
+                        className={cn(
+                          "flex cursor-pointer items-center justify-between gap-3 px-2 py-1.5 font-mono text-[12px]",
+                          index === visibleSuggestion.selectedIndex && "bg-accent text-accent-foreground",
+                        )}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          if (activeTab) acceptSuggestion(activeTab, candidate, "full")
+                        }}
+                      >
+                        <span className="min-w-0 truncate">{candidate.display}</span>
+                        <span className="shrink-0 font-sans text-[10px] uppercase text-muted-foreground">
+                          {candidate.source.replace("_", " ")}
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandList>
+                </Command>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         {activeProjectTabs.length === 0 ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 top-9 flex items-center justify-center text-[12px] text-muted-foreground">

@@ -20,7 +20,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
@@ -67,6 +67,10 @@ const TERMINAL_TITLE_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const MAX_TERMINAL_BUFFER_BYTES: usize = 256 * 1024;
 const DEFAULT_TERMINAL_READ_BYTES: usize = 64 * 1024;
 const MAX_TERMINAL_READ_BYTES: usize = 512 * 1024;
+const TERMINAL_SUGGESTION_HISTORY_LIMIT: usize = 400;
+const TERMINAL_SUGGESTION_MAX_COMMAND_CHARS: usize = 1_000;
+const TERMINAL_SUGGESTION_MAX_BUFFER_CHARS: usize = 4_096;
+const TERMINAL_SUGGESTION_MAX_CANDIDATES: usize = 8;
 
 const SUGGEST_SYSTEM_PROMPT: &str = "You suggest the shell commands a developer would run to start this project locally. Return a JSON array of {\"name\": \"...\", \"command\": \"...\", \"browserSupported\": true/false} objects and nothing else. No markdown fences, no prose, no explanation.\n\nSet `browserSupported` to true only for commands that start a user-facing web app or dev server that should open in a browser, such as Vite, Next.js, Remix, Astro, SvelteKit, Nuxt, Storybook, Rails/Phoenix/Django/Laravel web servers, or a package named web/client/app/site/docs. Set it to false for backend APIs, workers, CLIs, database services, Tauri/native/mobile dev commands, test runners, codegen, queues, and generic orchestrators unless the command itself clearly launches a browser-served web UI.\n\nIMPORTANT — root orchestrator detection: if the root `package.json` (or `Makefile`/`Procfile`/`mprocs.yaml`/`turbo.json` task) defines a script that fans out to multiple services in one command (via `concurrently`, `npm-run-all`, `turbo run dev`, `nx run-many`, `pnpm -r run`, `make -j`, `mprocs`, `overmind`, `foreman`, `honcho`, etc.), include it as the FIRST target named `all` (or `dev` if that matches the script name). This is the single-command \"run everything\" entry the user reaches for most often.\n\nIn addition to (not instead of) the orchestrator, for monorepos (pnpm/yarn/npm workspaces, Turborepo, Nx, Lerna, Rush, Cargo workspaces, Go workspaces) propose one target per runnable service or app so users can launch them individually. Name each per-service target after the package (e.g. `web`, `api`, `worker`) and inline a `cd <relative-path> && <cmd>` so each command runs from the project root.\n\nFor single-app projects, return one target named `start`.\n\nEach `name` must be short, lowercase, unique, and filename-safe. Each `command` must be a single line of shell.";
 
@@ -233,6 +237,90 @@ pub struct TerminalSummaryDto {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalListResponseDto {
     pub terminals: Vec<TerminalSummaryDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalSuggestRequestDto {
+    pub project_id: String,
+    #[serde(default)]
+    pub terminal_id: Option<String>,
+    pub buffer: String,
+    pub cursor: usize,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub shell: Option<String>,
+    #[serde(default)]
+    pub recent_block_context: Option<String>,
+    pub request_id: u64,
+    #[serde(default)]
+    pub enable_ai: bool,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub provider_profile_id: Option<String>,
+    #[serde(default)]
+    pub runtime_agent_id: Option<RuntimeAgentIdDto>,
+    #[serde(default)]
+    pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalRecordCommandRequestDto {
+    pub project_id: String,
+    pub command: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalIgnoreSuggestionRequestDto {
+    pub project_id: String,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSuggestionReplacementRangeDto {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSuggestionCandidateDto {
+    pub replacement: String,
+    pub display: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: String,
+    pub confidence: f32,
+    pub replacement_range: TerminalSuggestionReplacementRangeDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSuggestResponseDto {
+    pub request_id: u64,
+    pub candidates: Vec<TerminalSuggestionCandidateDto>,
+    pub deterministic_exhausted: bool,
+    pub ai_attempted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalHistoryEntry {
+    command: String,
+    cwd: Option<String>,
+    shell: Option<String>,
+    used_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1170,6 +1258,62 @@ pub fn terminal_clear_transcript<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn terminal_suggest<R: Runtime + 'static>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: TerminalSuggestRequestDto,
+) -> CommandResult<TerminalSuggestResponseDto> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || terminal_suggest_blocking(app, state, request))
+        .await
+        .map_err(|error| {
+            CommandError::system_fault(
+                "terminal_suggest_task_failed",
+                format!("Xero could not finish terminal suggestion lookup: {error}"),
+            )
+        })?
+}
+
+#[tauri::command]
+pub fn terminal_record_command<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: TerminalRecordCommandRequestDto,
+) -> CommandResult<()> {
+    let project_id = require_non_empty(&request.project_id, "projectId")?.to_owned();
+    let command = normalize_history_command(&request.command)
+        .ok_or_else(|| CommandError::invalid_request("command"))?;
+    let repo_root = resolve_imported_repo_root(&app, state.inner(), &project_id)?;
+    append_terminal_history(
+        &repo_root,
+        TerminalHistoryEntry {
+            command,
+            cwd: request
+                .cwd
+                .and_then(|value| normalize_short_text(&value, 4096)),
+            shell: request
+                .shell
+                .and_then(|value| normalize_short_text(&value, 256)),
+            used_at: now_timestamp(),
+        },
+    )
+}
+
+#[tauri::command]
+pub fn terminal_ignore_suggestion<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: TerminalIgnoreSuggestionRequestDto,
+) -> CommandResult<()> {
+    let project_id = require_non_empty(&request.project_id, "projectId")?.to_owned();
+    let display = normalize_history_command(&request.display)
+        .ok_or_else(|| CommandError::invalid_request("display"))?;
+    let repo_root = resolve_imported_repo_root(&app, state.inner(), &project_id)?;
+    append_ignored_terminal_suggestion(&repo_root, &display)
+}
+
+#[tauri::command]
 pub fn terminal_write<R: Runtime>(
     _app: AppHandle<R>,
     _state: State<'_, DesktopState>,
@@ -1438,6 +1582,730 @@ fn random_target_id() -> String {
     rand::thread_rng().fill_bytes(&mut bytes);
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     format!("tgt-{hex}")
+}
+
+fn terminal_suggest_blocking<R: Runtime + 'static>(
+    app: AppHandle<R>,
+    state: DesktopState,
+    request: TerminalSuggestRequestDto,
+) -> CommandResult<TerminalSuggestResponseDto> {
+    let project_id = require_non_empty(&request.project_id, "projectId")?.to_owned();
+    let buffer = validate_suggestion_buffer(&request.buffer)?;
+    let cursor = validate_suggestion_cursor(&buffer, request.cursor)?;
+    let request_id = request.request_id;
+    let repo_root = resolve_imported_repo_root(&app, &state, &project_id)?;
+    let cwd = request
+        .cwd
+        .as_deref()
+        .and_then(|value| normalize_existing_cwd(value, &repo_root))
+        .unwrap_or_else(|| repo_root.clone());
+    let ignored = read_ignored_terminal_suggestions(&repo_root);
+
+    let mut candidates = Vec::new();
+    collect_history_suggestions(&mut candidates, &repo_root, &buffer, cursor, &ignored);
+    collect_shell_history_suggestions(&mut candidates, &buffer, cursor, &ignored);
+    collect_path_suggestions(&mut candidates, &cwd, &buffer, cursor, &ignored);
+    collect_static_command_suggestions(&mut candidates, &repo_root, &buffer, cursor, &ignored);
+    rank_terminal_candidates(&mut candidates);
+
+    let deterministic_exhausted = candidates.is_empty();
+    let mut ai_attempted = false;
+    if deterministic_exhausted && request.enable_ai {
+        ai_attempted = true;
+        if let Some(candidate) =
+            suggest_terminal_ai_fallback(app, state, request, &repo_root, &buffer, cursor)
+                .ok()
+                .flatten()
+        {
+            if !ignored.contains(&candidate.display) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    candidates.truncate(TERMINAL_SUGGESTION_MAX_CANDIDATES);
+    Ok(TerminalSuggestResponseDto {
+        request_id,
+        candidates,
+        deterministic_exhausted,
+        ai_attempted,
+    })
+}
+
+fn validate_suggestion_buffer(value: &str) -> CommandResult<String> {
+    if value.chars().count() > TERMINAL_SUGGESTION_MAX_BUFFER_CHARS
+        || value.contains('\n')
+        || value.contains('\r')
+    {
+        return Err(CommandError::invalid_request("buffer"));
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_suggestion_cursor(buffer: &str, cursor: usize) -> CommandResult<usize> {
+    if cursor > buffer.chars().count() {
+        return Err(CommandError::invalid_request("cursor"));
+    }
+    Ok(cursor)
+}
+
+fn normalize_short_text(value: &str, max_chars: usize) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(max_chars).collect())
+}
+
+fn normalize_history_command(value: &str) -> Option<String> {
+    let command = value.replace(['\r', '\n'], " ");
+    let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if command.is_empty()
+        || command.chars().count() > TERMINAL_SUGGESTION_MAX_COMMAND_CHARS
+        || is_secret_like_command(&command)
+    {
+        return None;
+    }
+    Some(command)
+}
+
+fn normalize_existing_cwd(value: &str, repo_root: &Path) -> Option<PathBuf> {
+    let path = PathBuf::from(value.trim());
+    if path.is_dir() {
+        return Some(path);
+    }
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(repo_root.to_path_buf())
+    }
+}
+
+fn terminal_suggestion_dir(repo_root: &Path) -> PathBuf {
+    project_app_data_dir_for_repo(repo_root).join("terminal-suggestions")
+}
+
+fn terminal_history_path(repo_root: &Path) -> PathBuf {
+    terminal_suggestion_dir(repo_root).join("history.jsonl")
+}
+
+fn terminal_ignored_path(repo_root: &Path) -> PathBuf {
+    terminal_suggestion_dir(repo_root).join("ignored.jsonl")
+}
+
+fn append_terminal_history(repo_root: &Path, entry: TerminalHistoryEntry) -> CommandResult<()> {
+    let path = terminal_history_path(repo_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::retryable(
+                "terminal_history_dir_failed",
+                format!("Xero could not create terminal history app-data storage: {error}"),
+            )
+        })?;
+    }
+    let encoded = serde_json::to_string(&entry).map_err(|error| {
+        CommandError::system_fault(
+            "terminal_history_encode_failed",
+            format!("Xero could not encode terminal history: {error}"),
+        )
+    })?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| {
+            CommandError::retryable(
+                "terminal_history_open_failed",
+                format!("Xero could not open terminal history app-data storage: {error}"),
+            )
+        })?;
+    writeln!(file, "{encoded}").map_err(|error| {
+        CommandError::retryable(
+            "terminal_history_write_failed",
+            format!("Xero could not write terminal history: {error}"),
+        )
+    })?;
+    prune_terminal_history(&path)
+}
+
+fn prune_terminal_history(path: &Path) -> CommandResult<()> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(CommandError::retryable(
+                "terminal_history_prune_read_failed",
+                format!("Xero could not read terminal history for pruning: {error}"),
+            ))
+        }
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= TERMINAL_SUGGESTION_HISTORY_LIMIT {
+        return Ok(());
+    }
+    let kept = lines[lines.len() - TERMINAL_SUGGESTION_HISTORY_LIMIT..].join("\n") + "\n";
+    fs::write(path, kept).map_err(|error| {
+        CommandError::retryable(
+            "terminal_history_prune_write_failed",
+            format!("Xero could not prune terminal history: {error}"),
+        )
+    })
+}
+
+fn read_terminal_history(repo_root: &Path) -> Vec<TerminalHistoryEntry> {
+    let path = terminal_history_path(repo_root);
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<TerminalHistoryEntry>(&line).ok())
+        .filter(|entry| normalize_history_command(&entry.command).is_some())
+        .collect()
+}
+
+fn append_ignored_terminal_suggestion(repo_root: &Path, display: &str) -> CommandResult<()> {
+    let path = terminal_ignored_path(repo_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::retryable(
+                "terminal_ignore_dir_failed",
+                format!("Xero could not create terminal suggestion ignore storage: {error}"),
+            )
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| {
+            CommandError::retryable(
+                "terminal_ignore_open_failed",
+                format!("Xero could not open terminal suggestion ignore storage: {error}"),
+            )
+        })?;
+    writeln!(file, "{}", serde_json::json!({ "display": display })).map_err(|error| {
+        CommandError::retryable(
+            "terminal_ignore_write_failed",
+            format!("Xero could not write terminal suggestion ignore storage: {error}"),
+        )
+    })
+}
+
+fn read_ignored_terminal_suggestions(repo_root: &Path) -> std::collections::HashSet<String> {
+    let path = terminal_ignored_path(repo_root);
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .filter_map(|value| {
+            value
+                .get("display")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn collect_history_suggestions(
+    candidates: &mut Vec<TerminalSuggestionCandidateDto>,
+    repo_root: &Path,
+    buffer: &str,
+    cursor: usize,
+    ignored: &std::collections::HashSet<String>,
+) {
+    let prefix = buffer[..byte_index_for_char(buffer, cursor)].trim_start();
+    let mut seen = std::collections::HashSet::new();
+    let mut history = read_terminal_history(repo_root);
+    history.reverse();
+    for entry in history {
+        let Some(command) = normalize_history_command(&entry.command) else {
+            continue;
+        };
+        if ignored.contains(&command) || !seen.insert(command.clone()) {
+            continue;
+        }
+        if prefix.is_empty() || command.starts_with(prefix) {
+            let replacement = command
+                .strip_prefix(prefix)
+                .unwrap_or(command.as_str())
+                .to_owned();
+            if replacement.is_empty() {
+                continue;
+            }
+            candidates.push(make_terminal_candidate(
+                replacement,
+                command,
+                Some("Recent command".into()),
+                if prefix.is_empty() {
+                    "next_command"
+                } else {
+                    "history"
+                },
+                if prefix.is_empty() { 0.74 } else { 0.92 },
+                cursor,
+            ));
+        }
+    }
+}
+
+fn collect_shell_history_suggestions(
+    candidates: &mut Vec<TerminalSuggestionCandidateDto>,
+    buffer: &str,
+    cursor: usize,
+    ignored: &std::collections::HashSet<String>,
+) {
+    let prefix = buffer[..byte_index_for_char(buffer, cursor)].trim_start();
+    if prefix.is_empty() {
+        return;
+    }
+    let mut seen = candidates
+        .iter()
+        .map(|candidate| candidate.display.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for command in read_shell_history_candidates().into_iter().rev().take(300) {
+        let Some(command) = normalize_history_command(&command) else {
+            continue;
+        };
+        if ignored.contains(&command)
+            || !seen.insert(command.clone())
+            || !command.starts_with(prefix)
+        {
+            continue;
+        }
+        let replacement = command
+            .strip_prefix(prefix)
+            .unwrap_or(command.as_str())
+            .to_owned();
+        if replacement.is_empty() {
+            continue;
+        }
+        candidates.push(make_terminal_candidate(
+            replacement,
+            command,
+            Some("Shell history".into()),
+            "shell_history",
+            0.82,
+            cursor,
+        ));
+    }
+}
+
+fn read_shell_history_candidates() -> Vec<String> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for path in [
+        home.join(".zsh_history"),
+        home.join(".bash_history"),
+        home.join(".local/share/fish/fish_history"),
+    ] {
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines().rev().take(300) {
+            let command = if let Some((_, command)) = line.rsplit_once(';') {
+                command
+            } else if let Some(command) = line.trim_start().strip_prefix("- cmd: ") {
+                command
+            } else {
+                line
+            };
+            if !command.trim().is_empty() {
+                commands.push(command.trim().to_owned());
+            }
+        }
+    }
+    commands
+}
+
+fn collect_path_suggestions(
+    candidates: &mut Vec<TerminalSuggestionCandidateDto>,
+    cwd: &Path,
+    buffer: &str,
+    cursor: usize,
+    ignored: &std::collections::HashSet<String>,
+) {
+    let (token_start, token) = token_before_cursor(buffer, cursor);
+    if token.is_empty() {
+        return;
+    }
+    let command = buffer.split_whitespace().next().unwrap_or("");
+    let path_context = token.contains('/')
+        || token.starts_with('.')
+        || matches!(
+            command,
+            "cd" | "ls"
+                | "cat"
+                | "less"
+                | "tail"
+                | "head"
+                | "open"
+                | "code"
+                | "vim"
+                | "nvim"
+                | "rm"
+                | "cp"
+                | "mv"
+        );
+    if !path_context {
+        return;
+    }
+    let (base_dir, name_prefix, display_prefix) = path_completion_base(cwd, token);
+    let Ok(entries) = fs::read_dir(&base_dir) else {
+        return;
+    };
+    for entry in entries.flatten().take(200) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && !name_prefix.starts_with('.') {
+            continue;
+        }
+        if !name.starts_with(&name_prefix) {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+        let completed = format!("{display_prefix}{name}{}", if is_dir { "/" } else { "" });
+        let replacement = completed
+            .strip_prefix(token)
+            .unwrap_or(completed.as_str())
+            .to_owned();
+        if replacement.is_empty() {
+            continue;
+        }
+        let display = replace_char_range(buffer, token_start, cursor, &completed);
+        if ignored.contains(&display) {
+            continue;
+        }
+        candidates.push(make_terminal_candidate(
+            replacement,
+            display,
+            Some(if is_dir {
+                "Directory".into()
+            } else {
+                "File".into()
+            }),
+            "path",
+            0.88,
+            cursor,
+        ));
+    }
+}
+
+fn path_completion_base(cwd: &Path, token: &str) -> (PathBuf, String, String) {
+    let expanded = if let Some(rest) = token.strip_prefix("~/") {
+        dirs::home_dir()
+            .unwrap_or_else(|| cwd.to_path_buf())
+            .join(rest)
+    } else if token == "~" {
+        dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf())
+    } else {
+        let path = PathBuf::from(token);
+        if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        }
+    };
+    let base = if token.ends_with('/') {
+        expanded.clone()
+    } else {
+        expanded.parent().unwrap_or(cwd).to_path_buf()
+    };
+    let prefix = if token.ends_with('/') {
+        String::new()
+    } else {
+        expanded
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let display_prefix = token
+        .rsplit_once('/')
+        .map(|(parent, _)| format!("{parent}/"))
+        .unwrap_or_default();
+    (base, prefix, display_prefix)
+}
+
+fn collect_static_command_suggestions(
+    candidates: &mut Vec<TerminalSuggestionCandidateDto>,
+    repo_root: &Path,
+    buffer: &str,
+    cursor: usize,
+    ignored: &std::collections::HashSet<String>,
+) {
+    let prefix = buffer[..byte_index_for_char(buffer, cursor)].trim_start();
+    let mut commands = vec![
+        ("git status", "Show working tree status", 0.80),
+        ("git diff", "Review unstaged changes", 0.72),
+        ("git pull", "Pull current branch", 0.70),
+        ("git push", "Push current branch", 0.70),
+        ("git checkout -b ", "Create a branch", 0.64),
+        ("pnpm install", "Install dependencies", 0.76),
+        ("pnpm dev", "Run dev script", 0.78),
+        ("pnpm test", "Run tests", 0.74),
+        ("npm install", "Install dependencies", 0.68),
+        ("npm run dev", "Run dev script", 0.70),
+        ("cargo test", "Run Rust tests", 0.74),
+        ("cargo check", "Check Rust project", 0.72),
+        ("cargo fmt", "Format Rust project", 0.70),
+        ("ls -la", "List files", 0.62),
+    ];
+    let package_scripts = package_json_scripts(repo_root);
+    for script in package_scripts.iter() {
+        commands.push((script.as_str(), "Package script", 0.81));
+    }
+    for (command, description, confidence) in commands {
+        if ignored.contains(command) || !command.starts_with(prefix) {
+            continue;
+        }
+        let replacement = command.strip_prefix(prefix).unwrap_or(command).to_owned();
+        if replacement.is_empty() {
+            continue;
+        }
+        candidates.push(make_terminal_candidate(
+            replacement,
+            command.to_owned(),
+            Some(description.to_owned()),
+            "command",
+            confidence,
+            cursor,
+        ));
+    }
+}
+
+fn package_json_scripts(repo_root: &Path) -> Vec<String> {
+    let text = match fs::read_to_string(repo_root.join("package.json")) {
+        Ok(text) => text,
+        Err(_) => return Vec::new(),
+    };
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let Some(scripts) = value.get("scripts").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    scripts
+        .keys()
+        .filter(|name| {
+            matches!(
+                name.as_str(),
+                "dev" | "test" | "build" | "lint" | "typecheck" | "check" | "preview"
+            )
+        })
+        .map(|name| {
+            if name == "dev" || name == "test" {
+                format!("pnpm {name}")
+            } else {
+                format!("pnpm run {name}")
+            }
+        })
+        .collect()
+}
+
+fn suggest_terminal_ai_fallback<R: Runtime + 'static>(
+    app: AppHandle<R>,
+    state: DesktopState,
+    request: TerminalSuggestRequestDto,
+    repo_root: &Path,
+    buffer: &str,
+    cursor: usize,
+) -> CommandResult<Option<TerminalSuggestionCandidateDto>> {
+    let runtime_agent_id = request
+        .runtime_agent_id
+        .unwrap_or_else(default_runtime_agent_id);
+    let provider_profile_id = if let Some(provider_profile_id) = request
+        .provider_profile_id
+        .clone()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    {
+        Some(provider_profile_id)
+    } else {
+        resolve_requested_provider_profile_id(&app, &state, request.provider_id.as_deref())?
+    };
+    let controls = RuntimeRunControlInputDto {
+        runtime_agent_id: runtime_agent_id.clone(),
+        agent_definition_id: None,
+        provider_profile_id,
+        model_id: request.model_id.unwrap_or_default(),
+        thinking_effort: request.thinking_effort,
+        approval_mode: RuntimeRunApprovalModeDto::Yolo,
+        plan_mode_required: false,
+        auto_compact_enabled: false,
+    };
+    let provider_config = resolve_owned_agent_provider_config(&app, &state, Some(&controls))?;
+    let provider = create_provider_adapter(provider_config)?;
+    let provider_model_id = provider.model_id().to_owned();
+    let prompt = format!(
+        "Project root: {}\nCwd: {}\nTyped command prefix: {:?}\nRecent context: {}\n\nReturn one shell command completion as JSON: {{\"command\":\"...\",\"description\":\"...\"}}. The command must be a single line and must not contain secrets.",
+        repo_root.display(),
+        request.cwd.unwrap_or_default(),
+        buffer,
+        request.recent_block_context.unwrap_or_default().chars().take(600).collect::<String>(),
+    );
+    let turn = ProviderTurnRequest {
+        system_prompt: "You suggest one safe next shell command for a developer terminal. Return only compact JSON and never include secrets, markdown, or prose.".into(),
+        messages: vec![ProviderMessage::User {
+            content: prompt,
+            attachments: Vec::new(),
+        }],
+        tools: Vec::new(),
+        turn_index: 0,
+        controls: RuntimeRunControlStateDto {
+            active: RuntimeRunActiveControlSnapshotDto {
+                runtime_agent_id,
+                agent_definition_id: None,
+                agent_definition_version: None,
+                provider_profile_id: controls.provider_profile_id.clone(),
+                model_id: provider_model_id,
+                thinking_effort: controls.thinking_effort.clone(),
+                approval_mode: RuntimeRunApprovalModeDto::Yolo,
+                plan_mode_required: false,
+                auto_compact_enabled: false,
+                revision: 1,
+                applied_at: now_timestamp(),
+            },
+            pending: None,
+        },
+    };
+    let mut emit = |_event: ProviderStreamEvent| Ok(());
+    let message = match provider.stream_turn(&turn, &mut emit)? {
+        ProviderTurnOutcome::Complete { message, .. } => message,
+        ProviderTurnOutcome::ToolCalls { .. } => return Ok(None),
+    };
+    let value: serde_json::Value = match serde_json::from_str(message.trim()) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let Some(command) = value
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .and_then(normalize_history_command)
+    else {
+        return Ok(None);
+    };
+    let prefix = buffer[..byte_index_for_char(buffer, cursor)].trim_start();
+    if !prefix.is_empty() && !command.starts_with(prefix) {
+        return Ok(None);
+    }
+    let replacement = command
+        .strip_prefix(prefix)
+        .unwrap_or(command.as_str())
+        .to_owned();
+    if replacement.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(make_terminal_candidate(
+        replacement,
+        command,
+        value
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| value.chars().take(120).collect()),
+        "ai",
+        0.58,
+        cursor,
+    )))
+}
+
+fn rank_terminal_candidates(candidates: &mut Vec<TerminalSuggestionCandidateDto>) {
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|candidate| {
+        !candidate.replacement.is_empty()
+            && !is_secret_like_command(&candidate.display)
+            && seen.insert(candidate.display.clone())
+    });
+    candidates.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.display.len().cmp(&b.display.len()))
+    });
+}
+
+fn make_terminal_candidate(
+    replacement: String,
+    display: String,
+    description: Option<String>,
+    source: &str,
+    confidence: f32,
+    cursor: usize,
+) -> TerminalSuggestionCandidateDto {
+    TerminalSuggestionCandidateDto {
+        replacement,
+        display,
+        description,
+        source: source.to_owned(),
+        confidence,
+        replacement_range: TerminalSuggestionReplacementRangeDto {
+            start: cursor,
+            end: cursor,
+        },
+    }
+}
+
+fn token_before_cursor(buffer: &str, cursor: usize) -> (usize, &str) {
+    let end = byte_index_for_char(buffer, cursor);
+    let before = &buffer[..end];
+    let start_byte = before
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(index, ch)| index + ch.len_utf8())
+        .unwrap_or(0);
+    let start_char = before[..start_byte].chars().count();
+    (start_char, &buffer[start_byte..end])
+}
+
+fn replace_char_range(buffer: &str, start: usize, end: usize, replacement: &str) -> String {
+    let start_byte = byte_index_for_char(buffer, start);
+    let end_byte = byte_index_for_char(buffer, end);
+    format!(
+        "{}{}{}",
+        &buffer[..start_byte],
+        replacement,
+        &buffer[end_byte..]
+    )
+}
+
+fn byte_index_for_char(value: &str, char_index: usize) -> usize {
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len())
+}
+
+fn is_secret_like_command(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    if [
+        "password",
+        "passwd",
+        "passphrase",
+        "secret",
+        "token",
+        "apikey",
+        "api_key",
+        "access_key",
+        "private_key",
+        "authorization",
+        "bearer",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        return true;
+    }
+    lower.contains("export ")
+        && (lower.contains("key=") || lower.contains("token=") || lower.contains("secret="))
 }
 
 fn validate_client_terminal_id(value: &str) -> CommandResult<String> {
@@ -1774,6 +2642,80 @@ mod tests {
             .path
             .starts_with(project_app_data_dir_for_repo(repo.path())));
         assert!(validate_client_terminal_id("../escape").is_err());
+    }
+
+    #[test]
+    fn terminal_history_round_trips_under_project_app_data_and_redacts_secrets() {
+        let repo = tempfile::tempdir().expect("repo");
+        append_terminal_history(
+            repo.path(),
+            TerminalHistoryEntry {
+                command: "git status".into(),
+                cwd: Some(repo.path().to_string_lossy().into_owned()),
+                shell: Some("/bin/zsh".into()),
+                used_at: "2026-06-01T12:00:00Z".into(),
+            },
+        )
+        .expect("append history");
+
+        assert!(terminal_history_path(repo.path())
+            .starts_with(project_app_data_dir_for_repo(repo.path())));
+        assert!(normalize_history_command("export OPENAI_API_KEY=sk-test").is_none());
+        assert_eq!(read_terminal_history(repo.path())[0].command, "git status");
+    }
+
+    #[test]
+    fn terminal_suggestions_use_history_ranges_and_ignored_entries() {
+        let repo = tempfile::tempdir().expect("repo");
+        append_terminal_history(
+            repo.path(),
+            TerminalHistoryEntry {
+                command: "git status --short".into(),
+                cwd: None,
+                shell: None,
+                used_at: "2026-06-01T12:00:00Z".into(),
+            },
+        )
+        .expect("append history");
+        append_terminal_history(
+            repo.path(),
+            TerminalHistoryEntry {
+                command: "git diff".into(),
+                cwd: None,
+                shell: None,
+                used_at: "2026-06-01T12:01:00Z".into(),
+            },
+        )
+        .expect("append history");
+        let mut ignored = std::collections::HashSet::new();
+        ignored.insert("git diff".to_owned());
+        let mut candidates = Vec::new();
+
+        collect_history_suggestions(&mut candidates, repo.path(), "git", 3, &ignored);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "git status --short");
+        assert_eq!(candidates[0].replacement, " status --short");
+        assert_eq!(candidates[0].replacement_range.start, 3);
+        assert_eq!(candidates[0].replacement_range.end, 3);
+    }
+
+    #[test]
+    fn terminal_path_suggestions_complete_from_cwd() {
+        let repo = tempfile::tempdir().expect("repo");
+        fs::write(
+            repo.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .expect("write fixture");
+        let ignored = std::collections::HashSet::new();
+        let mut candidates = Vec::new();
+
+        collect_path_suggestions(&mut candidates, repo.path(), "cat Car", 7, &ignored);
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate.display == "cat Cargo.toml" && candidate.replacement == "go.toml"
+        }));
     }
 
     #[test]
