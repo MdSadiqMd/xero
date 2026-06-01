@@ -1436,19 +1436,56 @@ export function TerminalSidebar({
                   <Settings2 className="h-3.5 w-3.5" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="end" className="w-64 p-3">
+              <PopoverContent align="end" className="w-80 p-3">
                 <div className="space-y-3">
-                  <label className="flex items-center justify-between gap-3 text-[12px]">
-                    <span>Command suggestions</span>
+                  <div className="border-b border-border/70 pb-2">
+                    <div className="text-[12px] font-medium text-foreground">
+                      Inline terminal suggestions
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                      Suggestions appear as dim text after the cursor and never run until accepted.
+                    </div>
+                  </div>
+
+                  <label className="flex items-start justify-between gap-4 rounded-md px-1 py-1.5">
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-[12px] font-medium text-foreground">
+                        Command suggestions
+                        <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                          Local
+                        </span>
+                      </span>
+                      <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
+                        Uses recent terminal commands, shell history, project files, and package scripts.
+                      </span>
+                    </span>
                     <Switch
                       checked={suggestionSettings.enabled}
+                      className="mt-0.5"
                       onCheckedChange={(checked) => updateSuggestionSetting("enabled", checked)}
                     />
                   </label>
-                  <label className="flex items-center justify-between gap-3 text-[12px]">
-                    <span>AI suggestions</span>
+
+                  <label
+                    className={cn(
+                      "flex items-start justify-between gap-4 rounded-md px-1 py-1.5",
+                      !suggestionSettings.enabled && "opacity-60",
+                    )}
+                  >
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-[12px] font-medium text-foreground">
+                        AI suggestions
+                        <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                          Fallback
+                        </span>
+                      </span>
+                      <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
+                        Only asks the configured model when local sources have no useful match.
+                      </span>
+                    </span>
                     <Switch
                       checked={suggestionSettings.aiEnabled}
+                      className="mt-0.5"
                       disabled={!suggestionSettings.enabled}
                       onCheckedChange={(checked) => updateSuggestionSetting("aiEnabled", checked)}
                     />

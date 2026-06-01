@@ -414,6 +414,21 @@ describe("TerminalSidebar persistence", () => {
     })
   })
 
+  it("explains local and AI terminal suggestion modes in settings", async () => {
+    render(<TerminalSidebar open projectId="project-a" />)
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal suggestion settings" }))
+
+    expect(await screen.findByText("Inline terminal suggestions")).toBeVisible()
+    expect(screen.getByText("Command suggestions")).toBeVisible()
+    expect(screen.getByText("Local")).toBeVisible()
+    expect(screen.getByText(/recent terminal commands, shell history, project files, and package scripts/i)).toBeVisible()
+    expect(screen.getByText("AI suggestions")).toBeVisible()
+    expect(screen.getByText("Fallback")).toBeVisible()
+    expect(screen.getByText(/configured model when local sources have no useful match/i)).toBeVisible()
+  })
+
   it("does not wipe persisted tabs when StrictMode cleanup runs before hydration finishes", () => {
     let resolveRead: (value: unknown) => void = () => undefined
     mocks.adapter.readProjectUiState.mockImplementation(
