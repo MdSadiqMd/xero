@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => {
       dataHandler?: (data: string) => void
       onResize: (handler: (size: { cols: number; rows: number }) => void) => void
       onTitleChange: (handler: (title: string) => void) => void
+      buffer: { active: { cursorX: number; cursorY: number } }
+      _core: { _renderService: { dimensions: { css: { cell: { width: number; height: number } } } } }
       cols: number
       rows: number
     }>,
@@ -65,6 +67,12 @@ vi.mock("@xterm/xterm", () => ({
     writes: string[] = []
     options: Record<string, unknown> = {}
     dataHandler?: (data: string) => void
+    buffer = { active: { cursorX: 12, cursorY: 2 } }
+    _core = {
+      _renderService: {
+        dimensions: { css: { cell: { width: 9, height: 18 } } },
+      },
+    }
     cols = 120
     rows = 32
 
@@ -458,9 +466,11 @@ describe("TerminalSidebar persistence", () => {
     expect(mocks.adapter.terminalWrite).toHaveBeenCalledWith("pty-1", "git")
     expect(mocks.adapter.terminalWrite).not.toHaveBeenCalledWith("pty-1", " status")
 
-    mocks.terminals[0].customKeyHandler?.(
-      new KeyboardEvent("keydown", { key: "ArrowRight" }),
-    )
+    const inlineSuggestion = await screen.findByTestId("terminal-inline-suggestion")
+    expect(inlineSuggestion).toHaveStyle({ left: "120px", top: "48px" })
+    expect(screen.queryByRole("option")).not.toBeInTheDocument()
+
+    mocks.terminals[0].customKeyHandler?.(new KeyboardEvent("keydown", { key: "Tab" }))
 
     expect(mocks.adapter.terminalWrite).toHaveBeenCalledWith("pty-1", " status")
   })

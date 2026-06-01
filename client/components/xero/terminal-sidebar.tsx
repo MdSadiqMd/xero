@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { listen } from "@tauri-apps/api/event"
 import { isTauri } from "@tauri-apps/api/core"
 import { Terminal as XTerm, type ITheme as IXTermTheme } from "@xterm/xterm"
@@ -9,11 +9,6 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Plus, Settings2, X } from "lucide-react"
 import { z } from "zod"
 import { Button } from "@/components/ui/button"
-import {
-  Command,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
 import {
   Popover,
   PopoverContent,
@@ -183,7 +178,6 @@ interface LoadedTerminalTabsState {
 interface TerminalSuggestionSettings {
   enabled: boolean
   aiEnabled: boolean
-  tabAccepts: boolean
 }
 
 interface TerminalSuggestionState {
@@ -255,6 +249,27 @@ const persistedTerminalTabsStateSchema = z
     activeTabId: z.string().trim().min(1).max(128).nullable(),
   })
   .strict()
+
+interface XTermWithCursorMetrics {
+  buffer?: {
+    active?: {
+      cursorX?: number
+      cursorY?: number
+    }
+  }
+  _core?: {
+    _renderService?: {
+      dimensions?: {
+        css?: {
+          cell?: {
+            width?: number
+            height?: number
+          }
+        }
+      }
+    }
+  }
+}
 
 function viewportDefaultWidth(): number {
   if (typeof window === "undefined") return 560
@@ -339,17 +354,16 @@ function createTerminalClientId(): string {
 
 function loadTerminalSuggestionSettings(): TerminalSuggestionSettings {
   if (typeof window === "undefined") {
-    return { enabled: true, aiEnabled: false, tabAccepts: false }
+    return { enabled: true, aiEnabled: false }
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(TERMINAL_SUGGESTION_SETTINGS_KEY) ?? "null")
     return {
       enabled: parsed?.enabled !== false,
       aiEnabled: parsed?.aiEnabled === true,
-      tabAccepts: parsed?.tabAccepts === true,
     }
   } catch {
-    return { enabled: true, aiEnabled: false, tabAccepts: false }
+    return { enabled: true, aiEnabled: false }
   }
 }
 
@@ -634,6 +648,32 @@ export function TerminalSidebar({
       scheduleSuggestions(tab, snapshot)
     },
     [scheduleSuggestions, trackerForTerminal],
+  )
+
+  const terminalCursorOverlayStyle = useCallback(
+    (tab: TerminalTab, snapshot: TerminalSuggestionSnapshot): CSSProperties => {
+      const terminal = tab.terminal as unknown as XTermWithCursorMetrics
+      const cellWidth =
+        terminal._core?._renderService?.dimensions?.css?.cell?.width ??
+        TERMINAL_FONT_SIZE * 0.62
+      const cellHeight =
+        terminal._core?._renderService?.dimensions?.css?.cell?.height ??
+        TERMINAL_FONT_SIZE * 1.35
+      const cursorX =
+        typeof terminal.buffer?.active?.cursorX === "number"
+          ? terminal.buffer.active.cursorX
+          : snapshot.cursor
+      const cursorY =
+        typeof terminal.buffer?.active?.cursorY === "number"
+          ? terminal.buffer.active.cursorY
+          : 0
+      return {
+        left: 12 + cursorX * cellWidth,
+        top: 12 + cursorY * cellHeight,
+        lineHeight: `${cellHeight}px`,
+      }
+    },
+    [],
   )
 
   const activeProjectTabs = useMemo(
@@ -923,23 +963,10 @@ export function TerminalSidebar({
               : null
           if (currentCandidate) {
             const currentTab = tabsRef.current.find((entry) => entry.id === response.terminalId)
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault()
-              event.stopPropagation()
-              setSuggestionState((current) => {
-                if (!current || current.terminalId !== response.terminalId) return current
-                const delta = event.key === "ArrowDown" ? 1 : -1
-                const selectedIndex =
-                  (current.selectedIndex + delta + current.candidates.length) %
-                  current.candidates.length
-                return { ...current, selectedIndex }
-              })
-              return false
-            }
             const acceptsFull =
+              event.key === "Tab" ||
               (event.key === "ArrowRight" && !event.altKey && !event.metaKey && !event.shiftKey) ||
-              (event.key.toLowerCase() === "f" && event.ctrlKey && !event.altKey && !event.metaKey) ||
-              (event.key === "Tab" && suggestionSettingsRef.current.tabAccepts)
+              (event.key.toLowerCase() === "f" && event.ctrlKey && !event.altKey && !event.metaKey)
             const acceptsWord =
               event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowRight" || event.key.toLowerCase() === "f")
             if (event.key === "Escape") {
@@ -1240,11 +1267,10 @@ export function TerminalSidebar({
       ? suggestionState
       : null
   const visibleCandidate = visibleSuggestion?.candidates[visibleSuggestion.selectedIndex] ?? null
-  const suggestionCellWidth = TERMINAL_FONT_SIZE * 0.62
-  const suggestionLeft =
+  const visibleSuggestionStyle =
     visibleSuggestion && activeTab
-      ? 12 + Math.min(visibleSuggestion.snapshot.cursor, Math.max(activeTab.terminal.cols - 8, 1)) * suggestionCellWidth
-      : 12
+      ? terminalCursorOverlayStyle(activeTab, visibleSuggestion.snapshot)
+      : undefined
 
   const updateSuggestionSetting = useCallback(
     (key: keyof TerminalSuggestionSettings, value: boolean) => {
@@ -1373,14 +1399,6 @@ export function TerminalSidebar({
                       onCheckedChange={(checked) => updateSuggestionSetting("aiEnabled", checked)}
                     />
                   </label>
-                  <label className="flex items-center justify-between gap-3 text-[12px]">
-                    <span>Accept with Tab</span>
-                    <Switch
-                      checked={suggestionSettings.tabAccepts}
-                      disabled={!suggestionSettings.enabled}
-                      onCheckedChange={(checked) => updateSuggestionSetting("tabAccepts", checked)}
-                    />
-                  </label>
                 </div>
               </PopoverContent>
             </Popover>
@@ -1423,38 +1441,15 @@ export function TerminalSidebar({
           {visibleCandidate ? (
             <div
               className="pointer-events-none absolute z-20 max-w-[calc(100%-24px)]"
-              style={{ left: suggestionLeft, bottom: 18 }}
+              data-testid="terminal-inline-suggestion"
+              style={visibleSuggestionStyle}
             >
               <div
                 aria-hidden="true"
-                className="truncate font-mono text-[13px] leading-none text-muted-foreground/55"
+                className="truncate font-mono text-[13px] text-muted-foreground/55"
               >
                 {visibleCandidate.replacement}
               </div>
-              {visibleSuggestion && visibleSuggestion.candidates.length > 1 ? (
-                <Command className="pointer-events-auto mt-2 w-72 overflow-hidden rounded-md border border-border/80 bg-popover shadow-lg">
-                  <CommandList className="max-h-44">
-                    {visibleSuggestion.candidates.slice(0, 5).map((candidate, index) => (
-                      <CommandItem
-                        key={`${candidate.source}-${candidate.display}`}
-                        className={cn(
-                          "flex cursor-pointer items-center justify-between gap-3 px-2 py-1.5 font-mono text-[12px]",
-                          index === visibleSuggestion.selectedIndex && "bg-accent text-accent-foreground",
-                        )}
-                        onMouseDown={(event) => {
-                          event.preventDefault()
-                          if (activeTab) acceptSuggestion(activeTab, candidate, "full")
-                        }}
-                      >
-                        <span className="min-w-0 truncate">{candidate.display}</span>
-                        <span className="shrink-0 font-sans text-[10px] uppercase text-muted-foreground">
-                          {candidate.source.replace("_", " ")}
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandList>
-                </Command>
-              ) : null}
             </div>
           ) : null}
         </div>
