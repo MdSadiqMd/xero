@@ -428,6 +428,7 @@ export function TerminalSidebar({
   const terminalHostsRef = useRef<Map<string, HTMLDivElement>>(new Map())
   const openedTerminalIdsRef = useRef<Set<string>>(new Set())
   const pendingWriteBuffersRef = useRef<Map<string, string>>(new Map())
+  const suppressingLiveOutputIdsRef = useRef<Set<string>>(new Set())
   const closingTerminalIdsRef = useRef<Set<string>>(new Set())
   const taskHandlersRef = useRef<Map<string, Pick<TerminalSpawnOptions, "onData" | "onExit">>>(new Map())
   const autoOpeningTerminalRef = useRef(false)
@@ -490,6 +491,7 @@ export function TerminalSidebar({
     void listen<TerminalDataEventPayload>("terminal:data", (event) => {
       const { terminalId, data } = event.payload
       if (closingTerminalIdsRef.current.has(terminalId)) return
+      if (suppressingLiveOutputIdsRef.current.has(terminalId)) return
       taskHandlersRef.current.get(terminalId)?.onData?.(data)
       const tab = tabsRef.current.find((entry) => entry.id === terminalId)
       if (tab) {
@@ -517,8 +519,10 @@ export function TerminalSidebar({
       const { terminalId, exitCode } = event.payload
       if (closingTerminalIdsRef.current.has(terminalId)) {
         closingTerminalIdsRef.current.delete(terminalId)
+        suppressingLiveOutputIdsRef.current.delete(terminalId)
         return
       }
+      suppressingLiveOutputIdsRef.current.delete(terminalId)
       const tab = tabsRef.current.find((entry) => entry.id === terminalId)
       const code = exitCode ?? null
       taskHandlersRef.current.get(terminalId)?.onExit?.({ terminalId, exitCode: code })
@@ -679,6 +683,7 @@ export function TerminalSidebar({
       terminalHostsRef.current.delete(tab.id)
       openedTerminalIdsRef.current.delete(tab.id)
       pendingWriteBuffersRef.current.delete(tab.id)
+      suppressingLiveOutputIdsRef.current.delete(tab.id)
       try { tab.terminal.dispose() } catch { /* swallow */ }
       if (options.notifyTask !== false) {
         taskHandlersRef.current.get(tab.id)?.onExit?.({ terminalId: tab.id, exitCode: null })
@@ -704,8 +709,9 @@ export function TerminalSidebar({
       const rows = 32
       try {
         const clientId = options?.clientId ?? createTerminalClientId()
+        const isRestoredTab = Boolean(options?.clientId)
         const restoredTranscript =
-          options?.clientId && defaultAdapter.terminalReadTranscript
+          isRestoredTab && defaultAdapter.terminalReadTranscript
             ? await defaultAdapter.terminalReadTranscript({
                 projectId: targetProjectId,
                 clientTerminalId: clientId,
@@ -716,14 +722,20 @@ export function TerminalSidebar({
           clientTerminalId: clientId,
           cols,
           rows,
+          suppressTranscriptUntilInput: isRestoredTab,
         })
         if (!response) return null
+        if (isRestoredTab) {
+          suppressingLiveOutputIdsRef.current.add(response.terminalId)
+          pendingWriteBuffersRef.current.delete(response.terminalId)
+        }
         const { terminal, fit } = createXTerm(xtermThemeRef.current, handleTerminalLink)
         terminal.attachCustomKeyEventHandler((event) => {
           if (!isPlainShiftEnter(event)) return true
 
           event.preventDefault()
           event.stopPropagation()
+          suppressingLiveOutputIdsRef.current.delete(response.terminalId)
           void defaultAdapter.terminalWrite?.(
             response.terminalId,
             TERMINAL_SHIFT_ENTER_SEQUENCE,
@@ -731,6 +743,7 @@ export function TerminalSidebar({
           return false
         })
         terminal.onData((data) => {
+          suppressingLiveOutputIdsRef.current.delete(response.terminalId)
           void defaultAdapter.terminalWrite?.(response.terminalId, data)
         })
         terminal.onResize(({ cols: c, rows: r }) => {
@@ -774,6 +787,7 @@ export function TerminalSidebar({
           window.setTimeout(() => {
             const write = buildTerminalCommandWrite(command, options)
             if (!write) return
+            suppressingLiveOutputIdsRef.current.delete(response.terminalId)
             void defaultAdapter.terminalWrite?.(
               response.terminalId,
               write,

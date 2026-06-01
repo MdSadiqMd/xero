@@ -954,6 +954,7 @@ export interface OpenTerminalRequestDto {
   clientTerminalId?: string | null
   cols?: number
   rows?: number
+  suppressTranscriptUntilInput?: boolean
 }
 
 export interface TerminalTranscriptRequestDto {
@@ -2448,6 +2449,7 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
         clientTerminalId: request.clientTerminalId ?? null,
         cols: request.cols ?? null,
         rows: request.rows ?? null,
+        suppressTranscriptUntilInput: request.suppressTranscriptUntilInput === true,
       },
     })
   },

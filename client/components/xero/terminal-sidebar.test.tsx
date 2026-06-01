@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
       loadAddon: () => void
       attachCustomKeyEventHandler: () => void
       onData: (handler: (data: string) => void) => void
+      dataHandler?: (data: string) => void
       onResize: (handler: (size: { cols: number; rows: number }) => void) => void
       onTitleChange: (handler: (title: string) => void) => void
       cols: number
@@ -59,6 +60,7 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class MockTerminal {
     writes: string[] = []
     options: Record<string, unknown> = {}
+    dataHandler?: (data: string) => void
     cols = 120
     rows = 32
 
@@ -76,7 +78,9 @@ vi.mock("@xterm/xterm", () => ({
     dispose() {}
     loadAddon() {}
     attachCustomKeyEventHandler() {}
-    onData() {}
+    onData(handler: (data: string) => void) {
+      this.dataHandler = handler
+    }
     onResize() {}
     onTitleChange() {}
   },
@@ -169,6 +173,12 @@ function setupAdapter({
   mocks.adapter.terminalClearTranscript.mockResolvedValue(undefined)
 }
 
+function emitTerminalData(terminalId: string, data: string) {
+  for (const listener of mocks.listeners.get("terminal:data") ?? []) {
+    listener({ payload: { terminalId, data } })
+  }
+}
+
 describe("TerminalSidebar persistence", () => {
   beforeEach(() => {
     mocks.listeners.clear()
@@ -200,6 +210,7 @@ describe("TerminalSidebar persistence", () => {
       clientTerminalId: "client-web",
       cols: 120,
       rows: 32,
+      suppressTranscriptUntilInput: true,
     })
     expect(mocks.terminals[0].writes.join("")).toContain("old output")
     expect(mocks.adapter.terminalWrite).not.toHaveBeenCalledWith(
@@ -249,6 +260,7 @@ describe("TerminalSidebar persistence", () => {
       clientTerminalId: "client-api",
       cols: 120,
       rows: 32,
+      suppressTranscriptUntilInput: true,
     })
   })
 
@@ -295,6 +307,27 @@ describe("TerminalSidebar persistence", () => {
     )
     await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
     expect(mocks.adapter.terminalReadTranscript).not.toHaveBeenCalled()
+  })
+
+  it("suppresses restored shell startup output until user input", async () => {
+    setupAdapter({
+      states: new Map([["project-a", persistedState([basePersistedTab])]]),
+      transcripts: new Map([["client-web", "old prompt\r\nold output\r\n"]]),
+    })
+
+    render(<TerminalSidebar open projectId="project-a" />)
+
+    await waitFor(() => expect(mocks.listeners.get("terminal:data")?.length).toBeGreaterThan(0))
+    await waitFor(() => expect(mocks.adapter.terminalOpen).toHaveBeenCalledTimes(1))
+    emitTerminalData("pty-1", "duplicate startup\r\n")
+    expect(mocks.terminals[0].writes.join("")).toContain("old output")
+    expect(mocks.terminals[0].writes.join("")).not.toContain("duplicate startup")
+
+    mocks.terminals[0].dataHandler?.("git status\r")
+    expect(mocks.adapter.terminalWrite).toHaveBeenCalledWith("pty-1", "git status\r")
+
+    emitTerminalData("pty-1", "new command output\r\n")
+    expect(mocks.terminals[0].writes.join("")).toContain("new command output")
   })
 
   it("does not wipe persisted tabs when StrictMode cleanup runs before hydration finishes", () => {

@@ -143,6 +143,8 @@ pub struct OpenTerminalRequestDto {
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+    #[serde(default)]
+    pub suppress_transcript_until_input: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -313,6 +315,8 @@ struct TerminalHandle {
     title: Mutex<Option<String>>,
     next_sequence: AtomicU64,
     output: Mutex<TerminalOutputBuffer>,
+    transcript_target: Option<TerminalTranscriptTarget>,
+    transcript_enabled: AtomicBool,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     process: TerminalProcessHandle,
@@ -942,6 +946,7 @@ fn terminal_open_blocking<R: Runtime + 'static>(
         rows,
         TerminalEventSink::tauri(app),
         transcript_target,
+        !request.suppress_transcript_until_input,
     )
 }
 
@@ -956,6 +961,7 @@ pub fn terminal_open_for_cwd(
         rows.unwrap_or(32).max(1),
         TerminalEventSink::none(),
         None,
+        true,
     )
 }
 
@@ -965,6 +971,7 @@ fn terminal_open_in_cwd(
     rows: u16,
     sink: TerminalEventSink,
     transcript_target: Option<TerminalTranscriptTarget>,
+    transcript_enabled: bool,
 ) -> CommandResult<OpenTerminalResponseDto> {
     let shell = detect_user_shell();
     let pty_system = NativePtySystem::default();
@@ -1030,6 +1037,8 @@ fn terminal_open_in_cwd(
         title: Mutex::new(Some(shell_title)),
         next_sequence: AtomicU64::new(0),
         output: Mutex::new(TerminalOutputBuffer::new()),
+        transcript_target: transcript_target.clone(),
+        transcript_enabled: AtomicBool::new(transcript_enabled),
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
         process: TerminalProcessHandle {
@@ -1054,7 +1063,6 @@ fn terminal_open_in_cwd(
     let terminal_id_reader = terminal_id.clone();
     let handle_for_reader = Arc::clone(&handle);
     let sink_for_reader = sink.clone();
-    let transcript_target_for_reader = transcript_target.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -1062,8 +1070,10 @@ fn terminal_open_in_cwd(
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-                    if let Some(target) = transcript_target_for_reader.as_ref() {
-                        let _ = append_terminal_transcript(target, &chunk);
+                    if handle_for_reader.transcript_enabled.load(Ordering::Relaxed) {
+                        if let Some(target) = handle_for_reader.transcript_target.as_ref() {
+                            let _ = append_terminal_transcript(target, &chunk);
+                        }
                     }
                     let sequence = handle_for_reader
                         .next_sequence
@@ -1179,6 +1189,9 @@ pub fn terminal_write_direct(request: TerminalWriteRequestDto) -> CommandResult<
             "This terminal has already exited.",
         ));
     };
+    if handle.transcript_target.is_some() {
+        handle.transcript_enabled.store(true, Ordering::Relaxed);
+    }
     let mut writer = handle.writer.lock().map_err(|_| {
         CommandError::system_fault(
             "terminal_writer_poisoned",
