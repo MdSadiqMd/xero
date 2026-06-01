@@ -4069,7 +4069,11 @@ fn builtin_definition_snapshot(
         },
         "handoffPolicy": {
             "enabled": true,
-            "preserveDefinitionVersion": true
+            "routingMode": "same_agent",
+            "allowedTargets": [],
+            "preserveDefinitionVersion": true,
+            "carrySummary": true,
+            "includeDurableContext": true
         },
         "examplePrompts": [
             "Summarize relevant project context.",
@@ -4184,7 +4188,11 @@ fn custom_observe_only_definition_snapshot() -> JsonValue {
         },
         "handoffPolicy": {
             "enabled": true,
-            "preserveDefinitionVersion": true
+            "routingMode": "same_agent",
+            "allowedTargets": [],
+            "preserveDefinitionVersion": true,
+            "carrySummary": true,
+            "includeDurableContext": true
         },
         "safetyLimits": ["Never edit files.", "Do not invent release claims.", "Escalate missing context."],
         "examplePrompts": [
@@ -4298,7 +4306,11 @@ fn custom_engineering_definition_snapshot(version: u32, marker: &str) -> JsonVal
         },
         "handoffPolicy": {
             "enabled": true,
-            "preserveDefinitionVersion": true
+            "routingMode": "same_agent",
+            "allowedTargets": [],
+            "preserveDefinitionVersion": true,
+            "carrySummary": true,
+            "includeDurableContext": true
         },
         "safetyLimits": ["No browser, MCP, skill, subagent, or destructive delete access.", "Run scoped verification after edits.", "Pause if stale worktree state conflicts."],
         "examplePrompts": [
@@ -4412,7 +4424,11 @@ fn custom_debugging_definition_snapshot() -> JsonValue {
         },
         "handoffPolicy": {
             "enabled": true,
-            "preserveDefinitionVersion": true
+            "routingMode": "same_agent",
+            "allowedTargets": [],
+            "preserveDefinitionVersion": true,
+            "carrySummary": true,
+            "includeDurableContext": true
         },
         "safetyLimits": ["No browser, MCP, skill, subagent, or destructive delete access.", "Do not claim root cause without evidence.", "Do not finish after edits without verification evidence."],
         "examplePrompts": [

@@ -3010,8 +3010,6 @@ const BASELINE_SCHEMA_SQL: &str = r#"
         CHECK (target_runtime_agent_id <> ''),
         CHECK (target_agent_definition_id <> ''),
         CHECK (target_agent_definition_version > 0),
-        CHECK (source_agent_definition_id = target_agent_definition_id),
-        CHECK (source_agent_definition_version = target_agent_definition_version),
         CHECK (provider_id <> ''),
         CHECK (model_id <> ''),
         CHECK (length(source_context_hash) = 64),

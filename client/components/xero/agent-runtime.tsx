@@ -78,6 +78,7 @@ import {
   type AgentContextMeterStatus,
 } from './agent-runtime/agent-context-meter'
 import {
+  buildComposerAgentSelectionKey,
   getComposerApprovalOptions,
   getComposerModelGroups,
   getComposerModelOption,
@@ -130,6 +131,7 @@ import {
 import { SetupEmptyState } from './agent-runtime/setup-empty-state'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictation'
+import { parseRoutingMarker } from './agent-runtime/routing-suggestion-marker'
 
 export type AgentRuntimeDesktopAdapter = SpeechDictationAdapter &
   Partial<
@@ -823,34 +825,6 @@ function createTurnRoutingContext(): TurnRoutingContext {
   }
 }
 
-const ROUTING_MARKER_REGEX =
-  /<xero-routing-suggestion\s+([^/>]*?)\/>/i
-
-interface ParsedRoutingMarker {
-  targetAgentId: 'plan' | 'engineer' | 'debug'
-  reason: string
-  summary: string
-  rawMarker: string
-}
-
-function parseRoutingMarker(text: string): ParsedRoutingMarker | null {
-  const match = text.match(ROUTING_MARKER_REGEX)
-  if (!match) return null
-  const attrs = match[1]
-  const target = /target\s*=\s*"([^"]*)"/i.exec(attrs)?.[1]?.toLowerCase().trim()
-  if (target !== 'plan' && target !== 'engineer' && target !== 'debug') {
-    return null
-  }
-  const reason = /reason\s*=\s*"([^"]*)"/i.exec(attrs)?.[1]?.trim() ?? ''
-  const summary = /summary\s*=\s*"([^"]*)"/i.exec(attrs)?.[1]?.trim() ?? ''
-  return {
-    targetAgentId: target,
-    reason,
-    summary,
-    rawMarker: match[0],
-  }
-}
-
 function maybeAttachRoutingSuggestion(
   context: TurnRoutingContext,
   messageTurn: Extract<ConversationTurn, { kind: 'message' }>,
@@ -871,11 +845,17 @@ function maybeAttachRoutingSuggestion(
     id: routingTurnId,
     kind: 'routing_suggestion',
     sequence: messageTurn.sequence + 0.5,
+    targetKind: parsed.targetKind,
     targetAgentId: parsed.targetAgentId,
+    targetAgentDefinitionId: parsed.targetAgentDefinitionId,
+    targetAgentDefinitionVersion: parsed.targetAgentDefinitionVersion,
+    targetLabel: parsed.targetLabel,
     reason: parsed.reason,
     summary: parsed.summary,
     isResolved: false,
     acceptedTarget: null,
+    acceptedTargetAgentDefinitionId: null,
+    acceptedTargetLabel: null,
   }
 
   if (existingIndex >= 0) {
@@ -883,6 +863,8 @@ function maybeAttachRoutingSuggestion(
     if (existing.kind === 'routing_suggestion') {
       next.isResolved = existing.isResolved
       next.acceptedTarget = existing.acceptedTarget
+      next.acceptedTargetAgentDefinitionId = existing.acceptedTargetAgentDefinitionId
+      next.acceptedTargetLabel = existing.acceptedTargetLabel
     }
     context.turns[existingIndex] = next
     return
@@ -2555,32 +2537,62 @@ export const AgentRuntime = memo(function AgentRuntime({
   ])
 
   const [resolvedRoutingTurns, setResolvedRoutingTurns] = useState<
-    Record<string, { acceptedTarget: RuntimeAgentIdDto | null }>
+    Record<
+      string,
+      {
+        acceptedTarget: RuntimeAgentIdDto | null
+        acceptedTargetAgentDefinitionId: string | null
+        acceptedTargetLabel: string | null
+      }
+    >
   >({})
   const routingSuggestionDispatchValue = useMemo<RoutingSuggestionDispatchValue>(() => {
     return {
       resolveRoutingSuggestion: (turnId, decision) => {
         setResolvedRoutingTurns((previous) => ({
           ...previous,
-          [turnId]: { acceptedTarget: decision.kind === 'accept' ? decision.targetAgentId : null },
+          [turnId]: {
+            acceptedTarget: decision.kind === 'accept' ? decision.targetAgentId : null,
+            acceptedTargetAgentDefinitionId:
+              decision.kind === 'accept' ? decision.targetAgentDefinitionId ?? null : null,
+            acceptedTargetLabel: decision.kind === 'accept' ? decision.targetLabel ?? null : null,
+          },
         }))
         if (decision.kind === 'accept') {
           // Update the composer agent so the user's next message in this
           // session goes to the chosen specialist. The controller no-ops if
           // the picker is locked during an active run; the next run starts
           // under the new agent.
-          controller.handleComposerRuntimeAgentChange(decision.targetAgentId)
+          if (decision.targetAgentDefinitionId) {
+            controller.handleComposerAgentSelectionChange(
+              buildComposerAgentSelectionKey(
+                decision.targetAgentId,
+                decision.targetAgentDefinitionId,
+              ),
+            )
+          } else {
+            controller.handleComposerRuntimeAgentChange(decision.targetAgentId)
+          }
         }
       },
     }
-  }, [controller.handleComposerRuntimeAgentChange])
+  }, [
+    controller.handleComposerAgentSelectionChange,
+    controller.handleComposerRuntimeAgentChange,
+  ])
   function applyRoutingResolutions(turns: ConversationTurn[]): ConversationTurn[] {
     if (Object.keys(resolvedRoutingTurns).length === 0) return turns
     return turns.map((turn) => {
       if (turn.kind !== 'routing_suggestion') return turn
       const resolution = resolvedRoutingTurns[turn.id]
       if (!resolution) return turn
-      return { ...turn, isResolved: true, acceptedTarget: resolution.acceptedTarget }
+      return {
+        ...turn,
+        isResolved: true,
+        acceptedTarget: resolution.acceptedTarget,
+        acceptedTargetAgentDefinitionId: resolution.acceptedTargetAgentDefinitionId,
+        acceptedTargetLabel: resolution.acceptedTargetLabel,
+      }
     })
   }
   const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)

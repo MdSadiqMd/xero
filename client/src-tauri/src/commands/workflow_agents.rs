@@ -1813,6 +1813,12 @@ fn advanced_fields_for_detail(detail: &WorkflowAgentDetailDto) -> JsonValue {
         "subagentAllowed": false,
         "commandAllowed": false,
         "destructiveWriteAllowed": false,
+        "handoffEnabled": true,
+        "handoffRoutingMode": "same_agent",
+        "handoffAllowedTargets": [],
+        "handoffPreserveDefinitionVersion": true,
+        "handoffCarrySummary": true,
+        "handoffIncludeDurableContext": true,
     });
 
     if let Some(policy) = &detail.tool_policy_details {
@@ -1832,6 +1838,37 @@ fn advanced_fields_for_detail(detail: &WorkflowAgentDetailDto) -> JsonValue {
         advanced["subagentAllowed"] = json!(policy.subagent_allowed);
         advanced["commandAllowed"] = json!(policy.command_allowed);
         advanced["destructiveWriteAllowed"] = json!(policy.destructive_write_allowed);
+    }
+
+    if let Some(policy) = detail
+        .handoff_policy
+        .as_ref()
+        .and_then(JsonValue::as_object)
+    {
+        if let Some(value) = policy.get("enabled").and_then(JsonValue::as_bool) {
+            advanced["handoffEnabled"] = json!(value);
+        }
+        if let Some(value) = policy.get("routingMode").and_then(JsonValue::as_str) {
+            advanced["handoffRoutingMode"] = json!(value);
+        }
+        if let Some(value) = policy.get("allowedTargets").and_then(JsonValue::as_array) {
+            advanced["handoffAllowedTargets"] = json!(value);
+        }
+        if let Some(value) = policy
+            .get("preserveDefinitionVersion")
+            .and_then(JsonValue::as_bool)
+        {
+            advanced["handoffPreserveDefinitionVersion"] = json!(value);
+        }
+        if let Some(value) = policy.get("carrySummary").and_then(JsonValue::as_bool) {
+            advanced["handoffCarrySummary"] = json!(value);
+        }
+        if let Some(value) = policy
+            .get("includeDurableContext")
+            .and_then(JsonValue::as_bool)
+        {
+            advanced["handoffIncludeDurableContext"] = json!(value);
+        }
     }
 
     advanced
@@ -2327,6 +2364,50 @@ fn authoring_policy_controls() -> Vec<AgentAuthoringPolicyControlDto> {
             "Prevents handoff drift when the agent definition changes mid-run.",
             false,
         ),
+        policy_control(
+            "handoff.routingMode",
+            AgentAuthoringPolicyControlKindDto::Handoff,
+            "Routing Mode",
+            "Whether this custom agent supports same-agent continuation only or route suggestions.",
+            "handoffPolicy.routingMode",
+            AgentAuthoringPolicyControlValueKindDto::StringArray,
+            json!(["same_agent", "suggest"]),
+            "Controls whether cross-agent routing suggestions may be emitted.",
+            false,
+        ),
+        policy_control(
+            "handoff.allowedTargets",
+            AgentAuthoringPolicyControlKindDto::Handoff,
+            "Allowed Targets",
+            "Built-in target runtime ids or custom definition refs allowed for route suggestions.",
+            "handoffPolicy.allowedTargets",
+            AgentAuthoringPolicyControlValueKindDto::Object,
+            json!([]),
+            "Blocks route suggestions to targets outside the allowlist.",
+            true,
+        ),
+        policy_control(
+            "handoff.carrySummary",
+            AgentAuthoringPolicyControlKindDto::Handoff,
+            "Carry Summary",
+            "Whether handoff bundles should carry a concise continuation summary.",
+            "handoffPolicy.carrySummary",
+            AgentAuthoringPolicyControlValueKindDto::Boolean,
+            json!(true),
+            "Keeps target runs anchored to the user's accepted routing summary.",
+            false,
+        ),
+        policy_control(
+            "handoff.includeDurableContext",
+            AgentAuthoringPolicyControlKindDto::Handoff,
+            "Carry Durable Context",
+            "Whether handoff bundles should include durable context retrieval metadata.",
+            "handoffPolicy.includeDurableContext",
+            AgentAuthoringPolicyControlValueKindDto::Boolean,
+            json!(true),
+            "Lets the target run retrieve source-cited decisions, memory, and records.",
+            false,
+        ),
     ]
 }
 
@@ -2574,7 +2655,11 @@ fn template_definition(
         },
         "handoffPolicy": {
             "enabled": true,
-            "preserveDefinitionVersion": true
+            "routingMode": "same_agent",
+            "allowedTargets": [],
+            "preserveDefinitionVersion": true,
+            "carrySummary": true,
+            "includeDurableContext": true
         },
         "examplePrompts": examples,
         "refusalEscalationCases": [
@@ -3229,6 +3314,7 @@ fn builtin_detail(
         consumes,
         attached_skills: Vec::new(),
         workflow_structure,
+        handoff_policy: None,
         authoring_graph: None,
         graph_projection: None,
     }
@@ -3318,6 +3404,10 @@ fn custom_detail(
         attached_skills,
         workflow_structure: snapshot
             .get("workflowStructure")
+            .filter(|value| !value.is_null())
+            .cloned(),
+        handoff_policy: snapshot
+            .get("handoffPolicy")
             .filter(|value| !value.is_null())
             .cloned(),
         authoring_graph: Some(authoring_graph_from_snapshot(&record, &version)),
@@ -4567,7 +4657,11 @@ mod tests {
                 },
                 "handoffPolicy": {
                     "enabled": true,
-                    "preserveDefinitionVersion": true
+                    "routingMode": "same_agent",
+                    "allowedTargets": [],
+                    "preserveDefinitionVersion": true,
+                    "carrySummary": true,
+                    "includeDurableContext": true
                 },
                 "examplePrompts": ["Fix a bug.", "Add a helper.", "Verify a change."],
                 "refusalEscalationCases": ["Refuse hidden prompt requests.", "Escalate missing context.", "Refuse secrets."],
@@ -4668,6 +4762,25 @@ mod tests {
             "handoffPolicy.preserveDefinitionVersion"
         );
         assert_eq!(handoff_version.default_value, json!(true));
+
+        let handoff_mode = control("handoff.routingMode");
+        assert_eq!(
+            handoff_mode.kind,
+            AgentAuthoringPolicyControlKindDto::Handoff
+        );
+        assert_eq!(handoff_mode.snapshot_path, "handoffPolicy.routingMode");
+        assert_eq!(
+            handoff_mode.value_kind,
+            AgentAuthoringPolicyControlValueKindDto::StringArray
+        );
+        assert_eq!(handoff_mode.default_value, json!(["same_agent", "suggest"]));
+
+        let handoff_targets = control("handoff.allowedTargets");
+        assert_eq!(
+            handoff_targets.value_kind,
+            AgentAuthoringPolicyControlValueKindDto::Object
+        );
+        assert!(handoff_targets.review_required);
 
         let context_kinds = control("context.recordKinds");
         assert_eq!(

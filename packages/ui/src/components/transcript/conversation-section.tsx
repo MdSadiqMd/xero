@@ -189,11 +189,17 @@ export type ConversationTurn =
       id: string
       kind: 'routing_suggestion'
       sequence: number
+      targetKind: 'built_in' | 'custom'
       targetAgentId: RuntimeAgentIdDto
+      targetAgentDefinitionId: string | null
+      targetAgentDefinitionVersion: number | null
+      targetLabel: string | null
       reason: string
       summary: string
       isResolved: boolean
       acceptedTarget: RuntimeAgentIdDto | null
+      acceptedTargetAgentDefinitionId: string | null
+      acceptedTargetLabel: string | null
     }
   | {
       id: string
@@ -962,11 +968,17 @@ function ConversationTurnRow({
     return (
       <RoutingSuggestionCard
         turnId={turn.id}
+        targetKind={turn.targetKind}
         targetAgentId={turn.targetAgentId}
+        targetAgentDefinitionId={turn.targetAgentDefinitionId}
+        targetAgentDefinitionVersion={turn.targetAgentDefinitionVersion}
+        targetLabel={turn.targetLabel}
         reason={turn.reason}
         summary={turn.summary}
         isResolved={turn.isResolved}
         acceptedTarget={turn.acceptedTarget}
+        acceptedTargetAgentDefinitionId={turn.acceptedTargetAgentDefinitionId}
+        acceptedTargetLabel={turn.acceptedTargetLabel}
       />
     )
   }
@@ -3276,14 +3288,15 @@ function DenseTurnItem({
   }
 
   if (turn.kind === 'routing_suggestion') {
+    const label = turn.targetLabel ?? turn.targetAgentDefinitionId ?? turn.targetAgentId
     return (
       <li className="flex items-start gap-1.5 px-1 text-muted-foreground">
         <span className="shrink-0 select-none">↪</span>
         <span
           className="min-w-0 flex-1 truncate"
-          title={`Routing suggestion → ${turn.targetAgentId}`}
+          title={`Routing suggestion → ${label}`}
         >
-          suggested routing to {turn.targetAgentId}
+          suggested routing to {label}
         </span>
       </li>
     )

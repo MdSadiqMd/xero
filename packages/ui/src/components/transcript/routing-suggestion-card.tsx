@@ -7,7 +7,13 @@ import { Button } from '../ui/button'
 import { cn } from '../../lib/utils'
 
 export type RoutingSuggestionDecision =
-  | { kind: 'accept'; targetAgentId: RuntimeAgentIdDto }
+  | {
+      kind: 'accept'
+      targetAgentId: RuntimeAgentIdDto
+      targetAgentDefinitionId?: string | null
+      targetAgentDefinitionVersion?: number | null
+      targetLabel?: string | null
+    }
   | { kind: 'decline' }
 
 export interface RoutingSuggestionDispatchValue {
@@ -49,29 +55,63 @@ function iconForTarget(targetAgentId: RuntimeAgentIdDto) {
 
 export interface RoutingSuggestionCardProps {
   turnId: string
+  targetKind: 'built_in' | 'custom'
   targetAgentId: RuntimeAgentIdDto
+  targetAgentDefinitionId: string | null
+  targetAgentDefinitionVersion: number | null
+  targetLabel: string | null
   reason: string
   summary: string
   isResolved: boolean
   acceptedTarget: RuntimeAgentIdDto | null
+  acceptedTargetAgentDefinitionId: string | null
+  acceptedTargetLabel: string | null
 }
 
 export function RoutingSuggestionCard({
   turnId,
+  targetKind,
   targetAgentId,
+  targetAgentDefinitionId,
+  targetAgentDefinitionVersion,
+  targetLabel,
   reason,
   summary,
   isResolved,
   acceptedTarget,
+  acceptedTargetAgentDefinitionId,
+  acceptedTargetLabel,
 }: RoutingSuggestionCardProps) {
   const dispatch = useRoutingSuggestionDispatch()
   const TargetIcon = useMemo(() => iconForTarget(targetAgentId), [targetAgentId])
-  const targetLabel = getRuntimeAgentLabel(targetAgentId)
+  const displayTargetLabel =
+    targetLabel?.trim() ||
+    (targetKind === 'custom' ? 'a custom agent' : getRuntimeAgentLabel(targetAgentId))
+  const targetDescription =
+    targetKind === 'custom' ? displayTargetLabel : `the ${displayTargetLabel} agent`
+  const resolvedTargetLabel =
+    acceptedTargetLabel?.trim() ||
+    (acceptedTargetAgentDefinitionId ? 'custom agent' : null) ||
+    (acceptedTarget ? getRuntimeAgentLabel(acceptedTarget) : null)
 
   const handleAccept = useCallback(() => {
     if (isResolved || !dispatch) return
-    dispatch.resolveRoutingSuggestion(turnId, { kind: 'accept', targetAgentId })
-  }, [dispatch, isResolved, targetAgentId, turnId])
+    dispatch.resolveRoutingSuggestion(turnId, {
+      kind: 'accept',
+      targetAgentId,
+      targetAgentDefinitionId,
+      targetAgentDefinitionVersion,
+      targetLabel: displayTargetLabel,
+    })
+  }, [
+    dispatch,
+    displayTargetLabel,
+    isResolved,
+    targetAgentDefinitionId,
+    targetAgentDefinitionVersion,
+    targetAgentId,
+    turnId,
+  ])
 
   const handleDecline = useCallback(() => {
     if (isResolved || !dispatch) return
@@ -97,7 +137,7 @@ export function RoutingSuggestionCard({
         />
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-medium text-foreground">
-            This task may be better suited for the {targetLabel} agent
+            This task may be better suited for {targetDescription}
           </div>
           {reason ? (
             <div className="mt-1 text-[12px] leading-snug text-muted-foreground">
@@ -119,7 +159,7 @@ export function RoutingSuggestionCard({
             <>
               <ArrowRightCircle className="h-3.5 w-3.5" aria-hidden />
               <span>
-                Switched to {getRuntimeAgentLabel(acceptedTarget)} for your next message.
+                Switched to {resolvedTargetLabel ?? getRuntimeAgentLabel(acceptedTarget)} for your next message.
               </span>
             </>
           ) : (
@@ -135,7 +175,7 @@ export function RoutingSuggestionCard({
             className="h-7 gap-1.5 text-[12px]"
           >
             <TargetIcon className="h-3.5 w-3.5" aria-hidden />
-            Switch to {targetLabel}
+            Switch to {displayTargetLabel}
           </Button>
           <Button
             type="button"

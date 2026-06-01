@@ -108,7 +108,14 @@ const templateDefinition = {
     memoryKinds: ['project_fact'],
     limit: 6,
   },
-  handoffPolicy: { enabled: true, preserveDefinitionVersion: true },
+  handoffPolicy: {
+    enabled: true,
+    routingMode: 'same_agent',
+    allowedTargets: [],
+    preserveDefinitionVersion: true,
+    carrySummary: true,
+    includeDurableContext: true,
+  },
 } as const
 
 const attachedRustSkill = {

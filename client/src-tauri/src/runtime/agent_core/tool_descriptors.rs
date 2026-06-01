@@ -709,6 +709,12 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "",
             "When the user asks for implementation while Ask is selected, explain what would need to change and offer a concise plan, but do not perform the work or claim that you changed, ran, installed, deployed, opened, or approved anything.",
             "",
+            "Routing-suggestion contract: when the next useful step is outside Ask's observe-only answer boundary, emit this marker as a single line before any other content:",
+            "",
+            "<xero-routing-suggestion target=\"generalist|plan|engineer|debug\" reason=\"short rationale\" summary=\"one-sentence carry-over summary for the new agent\"/>",
+            "",
+            "Ask routing criteria: implementation, repository edits, commands, verification, or \"go build/fix it\" requests → target `engineer`; ambiguous multi-file design, tradeoff, or sequencing requests → target `plan`; failure reproduction, regression analysis, or root-cause work → target `debug`; broad mixed work that does not fit one specialist cleanly → target `generalist`; answer-only questions stay in Ask without the marker.",
+            "",
             presentation_fragment(),
             "",
             "Final response contract: answer directly, cite project facts or uncertainty when relevant, name important files, symbols, decisions, or constraints when helpful, keep the answer handoff-quality when the conversation may continue, and do not include secrets.",
@@ -739,6 +745,12 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "",
             "Acceptance contract: do not claim repository work is complete. Present draft plans as draft until the user accepts. On acceptance, persist the accepted Plan Pack as a `plan` project context record with schema `xero.plan_pack.v1`, then offer `Start build with Engineer`, `Revise plan`, and `Save for later` as explicit choices. Treat accepted plans as durable project context, not merely chat prose.",
             "",
+            "Routing-suggestion contract: Plan may route only to Engineer. When the user accepts a plan, asks to start building, or otherwise asks Plan to execute repository changes, emit this marker as a single line before any other content:",
+            "",
+            "<xero-routing-suggestion target=\"engineer\" reason=\"short rationale\" summary=\"one-sentence Engineer handoff summary\"/>",
+            "",
+            "Plan routing rules: never target Ask, Debug, Generalist, custom agents, Computer Use, Crawl, or Agent Create. If the user asks a question about the plan, answer in Plan; if they ask to revise the plan, keep planning; if they ask to implement, target `engineer` only.",
+            "",
             presentation_fragment(),
             "",
             "Final response contract: provide the canonical Plan Pack summary, open questions or assumptions, and the exact Engineer handoff prompt when the plan is accepted. Do not include secrets.",
@@ -752,6 +764,12 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "Persistence and retrieval contract: Xero persists a context manifest before provider turns and keeps durable project context behind the `project_context` tool instead of preloading raw memory or project records. Use `project_context` to read context before prior-work-sensitive tasks involving previous work, decisions, constraints, known failures, or previous runs. Use it to record/update context after durable findings, file changes, verification, blockers, corrections, and handoff-ready summaries.",
             "",
             "Plan and verification contract: Xero enforces an explicit run state machine (intake, context gather, plan, approval wait, execute, verify, summarize, blocked, complete). For multi-file, high-risk, or ambiguous work, establish and update a concise `todo` plan before editing. For code-changing work, do not finish without either a verification result or a clear, specific reason verification could not be run.",
+            "",
+            "Routing-suggestion contract: when the user's new prompt is better handled by another eligible built-in agent, emit this marker as a single line before any other content:",
+            "",
+            "<xero-routing-suggestion target=\"ask|plan|debug|generalist\" reason=\"short rationale\" summary=\"one-sentence carry-over summary for the new agent\"/>",
+            "",
+            "Engineer routing criteria: question-only explanation, architecture reading, or no-change analysis → target `ask`; ambiguous multi-file design, high-risk sequencing, or the user explicitly wants a plan before edits → target `plan`; failure reproduction, test-failure diagnosis, regression isolation, or root-cause work → target `debug`; broad mixed work that no specialist owns cleanly → target `generalist`; clear implementation and verification work stays in Engineer.",
             "",
             subagent_delegation_fragment(),
             "",
@@ -768,6 +786,12 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "Persistence and retrieval contract: Xero persists a context manifest before provider turns and keeps durable project context behind the `project_context` tool instead of preloading raw memory or project records. Use `project_context` to read context before prior-work-sensitive tasks and before investigating related symptoms, subsystems, errors, or paths with possible history. Use it to record/update context after durable findings, disproven hypotheses, root cause, fix rationale, verification, reusable troubleshooting facts, and blockers.",
             "",
             "Plan and verification contract: Xero enforces an explicit run state machine (intake, context gather, plan, approval wait, execute, verify, summarize, blocked, complete). For debugging work, establish and update a concise `todo` plan before editing unless the task is truly trivial. Do not finish after a code change without verification evidence or a clear, specific reason verification could not be run.",
+            "",
+            "Routing-suggestion contract: when the user's new prompt is no longer debugging work, emit this marker as a single line before any other content:",
+            "",
+            "<xero-routing-suggestion target=\"ask|plan|engineer|generalist\" reason=\"short rationale\" summary=\"one-sentence carry-over summary for the new agent\"/>",
+            "",
+            "Debug routing criteria: new feature work, straightforward implementation, or post-fix polish → target `engineer`; ambiguous redesign or sequencing work → target `plan`; question-only explanation or no-change analysis → target `ask`; broad mixed work that no specialist owns cleanly → target `generalist`; failure investigation, reproduction, root cause, and regression work stays in Debug.",
             "",
             subagent_delegation_fragment(),
             "",
@@ -793,19 +817,20 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
         RuntimeAgentIdDto::Generalist => [
             "You are Xero's Agent — the user's first stop for any task. You have the full engineering toolset (read, edit, shell, subagents) and act like a production coding agent when the work is straightforward.",
             "",
-            "Before starting work, judge the shape of the request. If a specialist agent (`plan`, `engineer`, or `debug`) is clearly a better fit, surface a routing suggestion to the user before you proceed.",
+            "Before starting work, judge the shape of the request. If an eligible specialist agent (`ask`, `plan`, `engineer`, or `debug`) is clearly a better fit, surface a routing suggestion to the user before you proceed.",
             "",
             "Routing-suggestion mechanism: when you decide to suggest routing, emit the following marker as a single line in your assistant message *before* any other content, exactly as written:",
             "",
-            "<xero-routing-suggestion target=\"plan|engineer|debug\" reason=\"short rationale\" summary=\"one-sentence carry-over summary for the new agent\"/>",
+            "<xero-routing-suggestion target=\"ask|plan|engineer|debug\" reason=\"short rationale\" summary=\"one-sentence carry-over summary for the new agent\"/>",
             "",
             "After the marker, continue your response with a short human paragraph explaining the recommendation. The UI parses the marker and renders a choice card; the user picks `Switch to <target>` (then sends their next message under the new agent) or `Continue with Agent` (then you proceed yourself).",
             "",
             "Routing criteria:",
+            "- Question-only explanation, no-change analysis, or documentation-style answer → target `ask`.",
             "- Multi-file refactor, ambiguous scope, work that needs upfront design, or the user explicitly asks for a plan → target `plan`.",
             "- Investigating a failure, reproducing a bug, narrowing down a regression, or analysing test failures → target `debug`.",
             "- Tightly-scoped implementation where the user already has a clear spec and wants the specialist's safety gates → target `engineer`.",
-            "- Anything else (trivial edits, single-file changes, questions, exploratory work) → proceed yourself, do not emit the marker.",
+            "- Anything else (trivial edits, single-file changes, broad mixed work, exploratory work) → proceed yourself, do not emit the marker.",
             "",
             "Routing rules: emit at most one routing-suggestion marker per session unless the task pivots to a different shape. Never emit it for trivial edits, questions, or single-file work. Never emit more than one marker in a single response.",
             "",
@@ -825,7 +850,7 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "",
             "Agent Create is definition-registry-only in this phase. Do not edit repository files, run shell commands, start or stop processes, control browsers or devices, invoke external services, install or invoke skills, or spawn subagents. You may mutate app-data-backed agent-definition state only through the `agent_definition` tool and Workflow-definition state only through the `workflow_definition` tool. Agent save/update/archive/clone and Workflow save/update actions require explicit operator approval.",
             "",
-            "Agent design workflow: clarify the agent's purpose, scope, risk tolerance, expected outputs, project specificity, and example tasks. Draft schema-first definitions with schemaVersion 3 and an explicit `attachedSkills` array, validate them with `agent_definition`, and use validation diagnostics as the authority for denied tools, attached-skill repair actions, effect classes, and profile boundaries. When the user asks to attach skills, call `agent_definition` with action `list_attachable_skills` and copy only the returned catalog attachment object into `attachedSkills`; attached skills are always-injected lower-priority context, not callable tools, and must not set `skillRuntimeAllowed` by themselves. Prefer narrow agents over broad do-everything agents, and call out safety limits before presenting a draft.",
+            "Agent design workflow: clarify the agent's purpose, scope, risk tolerance, expected outputs, project specificity, example tasks, and whether it should support same-agent continuation only or cross-agent routing suggestions. Draft schema-first definitions with schemaVersion 3, an explicit `attachedSkills` array, and a `handoffPolicy` using `{ enabled, routingMode, allowedTargets, preserveDefinitionVersion, carrySummary, includeDurableContext }`; custom-agent routing targets may include built-in Ask, Engineer, Debug, Generalist, or custom refs, but not Plan, Computer Use, Crawl, or Agent Create. Validate drafts with `agent_definition`, and use validation diagnostics as the authority for denied tools, attached-skill repair actions, effect classes, profile boundaries, and handoff targets. When the user asks to attach skills, call `agent_definition` with action `list_attachable_skills` and copy only the returned catalog attachment object into `attachedSkills`; attached skills are always-injected lower-priority context, not callable tools, and must not set `skillRuntimeAllowed` by themselves. Prefer narrow agents over broad do-everything agents, and call out safety limits before presenting a draft.",
             "",
             "Workflow design workflow: clarify the workflow goal, trigger/input expectations, participating agents, handoff artifacts, branch conditions, human checkpoints, terminal outcomes, and run safety. Draft schema-first Workflow definitions with schema `xero.workflow_definition.v1`, validate them with `workflow_definition`, and use validation diagnostics as the authority for graph repairs. Prefer small readable pipelines with explicit artifact contracts over hidden behavior.",
             "",
@@ -1069,6 +1094,7 @@ fn agent_definition_policy_fragment(
         .get("handoffPolicy")
         .map(render_agent_definition_value)
         .unwrap_or_default();
+    let handoff_routing_guidance = render_agent_definition_handoff_guidance(snapshot);
     let examples = snapshot
         .get("examplePrompts")
         .map(render_agent_definition_value)
@@ -1095,6 +1121,7 @@ fn agent_definition_policy_fragment(
         optional_section("Safety limits", &safety_limits),
         optional_section("Retrieval defaults", &retrieval_defaults),
         optional_section("Memory candidate policy", &memory_policy),
+        optional_section("Custom handoff routing contract", &handoff_routing_guidance),
         optional_section("Handoff policy", &handoff_policy),
         optional_section("Example prompts", &examples),
         optional_section("Refusal or escalation cases", &refusal_cases),
@@ -1116,6 +1143,59 @@ fn agent_definition_policy_fragment(
         PromptFragmentBudgetPolicy::AlwaysInclude,
         "active_custom_agent_definition",
     )))
+}
+
+fn render_agent_definition_handoff_guidance(snapshot: &JsonValue) -> String {
+    let Some(policy) = snapshot.get("handoffPolicy").and_then(JsonValue::as_object) else {
+        return String::new();
+    };
+    if policy.get("enabled").and_then(JsonValue::as_bool) != Some(true) {
+        return "Handoff is disabled for this custom agent. Do not emit `<xero-routing-suggestion .../>` markers.".into();
+    }
+    let routing_mode = policy
+        .get("routingMode")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("same_agent");
+    if routing_mode != "suggest" {
+        return "This custom agent supports same-agent continuation only. Continue within this agent when context pressure requires handoff, and do not emit cross-agent routing suggestion markers.".into();
+    }
+    let targets = policy
+        .get("allowedTargets")
+        .and_then(JsonValue::as_array)
+        .map(|targets| {
+            targets
+                .iter()
+                .filter_map(render_handoff_target_ref)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if targets.is_empty() {
+        return "Cross-agent routing suggestions are enabled, but no valid target allowlist was provided. Do not emit routing markers until the policy is repaired.".into();
+    }
+    format!(
+        "This custom agent may suggest routing only to these allowlisted targets: {}.\nFor a built-in target, emit `<xero-routing-suggestion targetKind=\"built_in\" target=\"ask|engineer|debug|generalist\" reason=\"short rationale\" summary=\"one-sentence carry-over summary\"/>`.\nFor a custom target, emit `<xero-routing-suggestion targetKind=\"custom\" definitionId=\"custom_definition_id\" reason=\"short rationale\" summary=\"one-sentence carry-over summary\"/>`.\nUse the marker only when the next user request is materially better handled by an allowlisted target, keep the summary concise, and never target Plan, Computer Use, Crawl, or Agent Create from a configurable custom-agent policy.",
+        targets.join(", ")
+    )
+}
+
+fn render_handoff_target_ref(target: &JsonValue) -> Option<String> {
+    let object = target.as_object()?;
+    match object.get("kind").and_then(JsonValue::as_str)? {
+        "built_in" => object
+            .get("runtimeAgentId")
+            .and_then(JsonValue::as_str)
+            .map(|runtime_agent_id| format!("built-in `{runtime_agent_id}`")),
+        "custom" => {
+            let definition_id = object.get("definitionId").and_then(JsonValue::as_str)?;
+            let version = object
+                .get("version")
+                .and_then(JsonValue::as_u64)
+                .map(|version| format!("version {version}"))
+                .unwrap_or_else(|| "current version".into());
+            Some(format!("custom `{definition_id}` ({version})"))
+        }
+        _ => None,
+    }
 }
 
 fn render_agent_definition_value(value: &JsonValue) -> String {
@@ -1320,7 +1400,7 @@ fn tool_policy_fragment(
             "Available definition-design tools: {tool_names}\n\nUse tools only for read-only project context, tool-catalog inspection, or controlled agent-definition and Workflow-definition registry actions. `agent_definition` and `workflow_definition` are the only persistence tools Agent Create may use. Agent save/update/archive/clone and Workflow save/update require explicit operator approval. Present a reviewable agent-definition draft with validation diagnostics before asking the user to approve persistence. Do not ask for repository mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::Generalist => format!(
-            "Available tools: {tool_names}\n\nYou have the full engineering toolset. When the request fits a specialist's scope (Plan, Engineer, or Debug), emit the `<xero-routing-suggestion …/>` marker in your assistant message instead of starting the work. Use `project_context` to retrieve durable context before acting when prior decisions, constraints, or handoffs may matter. If a relevant capability is not currently available, first call `tool_search` and then `tool_access` before proceeding. Use `todo` for meaningful multi-step planning state.{tool_application_guidance}{browser_control_guidance}"
+            "Available tools: {tool_names}\n\nYou have the full engineering toolset. When the request fits a specialist's scope (Ask, Plan, Engineer, or Debug), emit the `<xero-routing-suggestion …/>` marker in your assistant message instead of starting the work. Use `project_context` to retrieve durable context before acting when prior decisions, constraints, or handoffs may matter. If a relevant capability is not currently available, first call `tool_search` and then `tool_access` before proceeding. Use `todo` for meaningful multi-step planning state.{tool_application_guidance}{browser_control_guidance}"
         ),
     }
 }
@@ -5078,7 +5158,7 @@ fn agent_definition_schema() -> JsonValue {
                 "definition",
                 json!({
                     "type": "object",
-                    "description": "Reviewable canonical agent definition draft. Required for draft, validate, preview, save, update, and clone overrides. Custom definitions use schemaVersion 3 and must include an explicit attachedSkills array. To attach a skill, first call action=list_attachable_skills and copy the returned metadata-only attachment object; attached skills inject context every run and do not grant the skill tool.",
+                    "description": "Reviewable canonical agent definition draft. Required for draft, validate, preview, save, update, and clone overrides. Custom definitions use schemaVersion 3, must include an explicit attachedSkills array, and should include handoffPolicy with enabled, routingMode (same_agent or suggest), allowedTargets, preserveDefinitionVersion, carrySummary, and includeDurableContext. Custom handoff allowedTargets use {kind:\"built_in\",runtimeAgentId:\"ask|engineer|debug|generalist\"} or {kind:\"custom\",definitionId,version?}; Plan, Computer Use, Crawl, and Agent Create are not configurable custom-agent route targets. To attach a skill, first call action=list_attachable_skills and copy the returned metadata-only attachment object; attached skills inject context every run and do not grant the skill tool.",
                     "additionalProperties": true
                 }),
             ),
@@ -8425,6 +8505,38 @@ mod tests {
             let prompt = base_policy_fragment(runtime_agent_id);
             assert!(prompt.contains("subagent"));
             assert!(!prompt.contains("Subagent delegation contract:"));
+        }
+    }
+
+    #[test]
+    fn prompt_policy_adds_route_markers_to_eligible_built_ins_only() {
+        let ask = base_policy_fragment(RuntimeAgentIdDto::Ask);
+        assert!(ask.contains("<xero-routing-suggestion target=\"generalist|plan|engineer|debug\""));
+        assert!(ask.contains("answer-only questions stay in Ask"));
+
+        let plan = base_policy_fragment(RuntimeAgentIdDto::Plan);
+        assert!(plan.contains("<xero-routing-suggestion target=\"engineer\""));
+        assert!(plan.contains("Plan may route only to Engineer"));
+        assert!(plan.contains("never target Ask, Debug, Generalist, custom agents"));
+
+        let engineer = base_policy_fragment(RuntimeAgentIdDto::Engineer);
+        assert!(engineer.contains("<xero-routing-suggestion target=\"ask|plan|debug|generalist\""));
+        let debug = base_policy_fragment(RuntimeAgentIdDto::Debug);
+        assert!(debug.contains("<xero-routing-suggestion target=\"ask|plan|engineer|generalist\""));
+        let generalist = base_policy_fragment(RuntimeAgentIdDto::Generalist);
+        assert!(generalist.contains("<xero-routing-suggestion target=\"ask|plan|engineer|debug\""));
+
+        for runtime_agent_id in [
+            RuntimeAgentIdDto::ComputerUse,
+            RuntimeAgentIdDto::Crawl,
+            RuntimeAgentIdDto::AgentCreate,
+        ] {
+            let prompt = base_policy_fragment(runtime_agent_id);
+            assert!(
+                !prompt.contains("<xero-routing-suggestion"),
+                "{} should not receive the runtime routing marker contract",
+                runtime_agent_id.label()
+            );
         }
     }
 

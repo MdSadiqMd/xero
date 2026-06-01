@@ -2361,7 +2361,11 @@ mod tests {
                 },
                 "handoffPolicy": {
                     "enabled": true,
-                    "preserveDefinitionVersion": true
+                    "routingMode": "same_agent",
+                    "allowedTargets": [],
+                    "preserveDefinitionVersion": true,
+                    "carrySummary": true,
+                    "includeDurableContext": true
                 },
                 "attachedSkills": []
             }),

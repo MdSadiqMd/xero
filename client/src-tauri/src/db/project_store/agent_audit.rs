@@ -2095,7 +2095,14 @@ mod tests {
                     "memoryKinds": ["project_fact"],
                     "reviewRequired": true
                 },
-                "handoffPolicy": { "enabled": true, "preserveDefinitionVersion": true },
+                "handoffPolicy": {
+                    "enabled": true,
+                    "routingMode": "same_agent",
+                    "allowedTargets": [],
+                    "preserveDefinitionVersion": true,
+                    "carrySummary": true,
+                    "includeDurableContext": true
+                },
                 "memoryPolicy": { "reviewRequired": true },
                 "retrievalDefaults": {
                     "enabled": true,

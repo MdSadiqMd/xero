@@ -2540,14 +2540,6 @@ fn validate_handoff(record: &NewAgentHandoffLineageRecord) -> Result<(), Command
         "sourceRunId",
         "agent_handoff_lineage_source_run_required",
     )?;
-    if record.source_agent_definition_id != record.target_agent_definition_id
-        || record.source_agent_definition_version != record.target_agent_definition_version
-    {
-        return Err(CommandError::user_fixable(
-            "agent_handoff_lineage_target_definition_mismatch",
-            "Same-agent handoff requires the target agent definition id and version to match the source definition.",
-        ));
-    }
     validate_non_empty_text(
         &record.source_agent_definition_id,
         "sourceAgentDefinitionId",
