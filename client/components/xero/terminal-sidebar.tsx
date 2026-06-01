@@ -389,9 +389,11 @@ function normalizePersistedInputBuffer(value: string | null | undefined): string
 function trimRestoredTranscriptInput(transcript: string, inputBuffer: string | null | undefined): string {
   const normalizedInput = normalizePersistedInputBuffer(inputBuffer)
   if (!normalizedInput) return transcript
-  return transcript.endsWith(normalizedInput)
-    ? transcript.slice(0, -normalizedInput.length)
-    : transcript
+  const tailStart = Math.max(0, transcript.length - MAX_PERSISTED_INPUT_BUFFER_LENGTH * 2)
+  const tail = transcript.slice(tailStart)
+  const inputIndex = tail.lastIndexOf(normalizedInput)
+  if (inputIndex === -1) return transcript
+  return transcript.slice(0, tailStart + inputIndex)
 }
 
 function terminalCommandSourceLabel(source: TerminalSpawnSource | undefined): string | null {

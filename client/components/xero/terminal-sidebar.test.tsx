@@ -368,7 +368,7 @@ describe("TerminalSidebar persistence", () => {
           ]),
         ],
       ]),
-      transcripts: new Map([["client-web", "sn0w@host project % clear"]]),
+      transcripts: new Map([["client-web", "sn0w@host project % clear\x1b[H\x1b[2J"]]),
     })
 
     render(<TerminalSidebar open projectId="project-a" />)
