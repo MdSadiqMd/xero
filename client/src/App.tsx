@@ -2621,6 +2621,11 @@ export function XeroApp({ adapter }: XeroAppProps) {
       await handle.spawnTabWithCommand(target.command, {
         label: target.name,
         browserSupported: target.browserSupported,
+        source: {
+          kind: 'start-target',
+          targetId: target.id,
+          targetName: target.name,
+        },
       })
     },
     [activeProjectId, activeProjectStartTargets, revealTerminalSidebar, waitForTerminalSidebarHandle],
@@ -2640,6 +2645,11 @@ export function XeroApp({ adapter }: XeroAppProps) {
       await handle.spawnTabWithCommand(target.command, {
         label: target.name,
         browserSupported: target.browserSupported,
+        source: {
+          kind: 'start-target',
+          targetId: target.id,
+          targetName: target.name,
+        },
       })
     }
   }, [activeProjectId, activeProjectStartTargets, revealTerminalSidebar, waitForTerminalSidebarHandle])
@@ -2653,6 +2663,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
       return handle.spawnTabWithCommand(request.command, {
         label: request.label,
         exitWhenDone: request.exitWhenDone ?? true,
+        source: {
+          kind: 'editor-task',
+          label: request.label,
+        },
         onData: request.onData,
         onExit: request.onExit,
       })

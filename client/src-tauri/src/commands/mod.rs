@@ -235,11 +235,12 @@ pub use project_records::{
     SupersedeProjectContextRecordResponseDto,
 };
 pub use project_runner::{
-    suggest_project_start_targets, terminal_close, terminal_open, terminal_resize, terminal_write,
-    update_project_start_targets, OpenTerminalRequestDto, OpenTerminalResponseDto,
-    StartTargetInputDto, SuggestProjectStartTargetsRequestDto, SuggestedStartTargetDto,
-    SuggestedStartTargetsDto, TerminalIdRequestDto, TerminalResizeRequestDto,
-    TerminalWriteRequestDto, UpdateProjectStartTargetsRequestDto,
+    suggest_project_start_targets, terminal_clear_transcript, terminal_close, terminal_open,
+    terminal_read_transcript, terminal_resize, terminal_write, update_project_start_targets,
+    OpenTerminalRequestDto, OpenTerminalResponseDto, StartTargetInputDto,
+    SuggestProjectStartTargetsRequestDto, SuggestedStartTargetDto, SuggestedStartTargetsDto,
+    TerminalIdRequestDto, TerminalResizeRequestDto, TerminalTranscriptRequestDto,
+    TerminalTranscriptResponseDto, TerminalWriteRequestDto, UpdateProjectStartTargetsRequestDto,
 };
 pub use project_state::{
     create_project_state_backup, list_project_state_backups, read_app_ui_state,

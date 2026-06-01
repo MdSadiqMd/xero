@@ -641,6 +641,8 @@ const COMMANDS = {
   terminalWrite: 'terminal_write',
   terminalResize: 'terminal_resize',
   terminalClose: 'terminal_close',
+  terminalReadTranscript: 'terminal_read_transcript',
+  terminalClearTranscript: 'terminal_clear_transcript',
   getProjectSnapshot: 'get_project_snapshot',
   getProjectUsageSummary: 'get_project_usage_summary',
   getRepositoryStatus: 'get_repository_status',
@@ -897,6 +899,13 @@ const openTerminalResponseSchema = z.object({
 })
 export type OpenTerminalResponseDto = z.infer<typeof openTerminalResponseSchema>
 
+const terminalTranscriptResponseSchema = z.object({
+  projectId: z.string().min(1),
+  clientTerminalId: z.string().min(1),
+  content: z.string(),
+})
+export type TerminalTranscriptResponseDto = z.infer<typeof terminalTranscriptResponseSchema>
+
 const suggestedStartTargetSchema = z.object({
   name: z.string(),
   command: z.string(),
@@ -942,8 +951,14 @@ export interface UpdateProjectStartTargetsRequestDto {
 
 export interface OpenTerminalRequestDto {
   projectId?: string | null
+  clientTerminalId?: string | null
   cols?: number
   rows?: number
+}
+
+export interface TerminalTranscriptRequestDto {
+  projectId: string
+  clientTerminalId: string
 }
 
 export interface SuggestProjectStartTargetsRequestDto {
@@ -1152,6 +1167,10 @@ export interface XeroDesktopAdapter {
   terminalWrite?(terminalId: string, data: string): Promise<void>
   terminalResize?(terminalId: string, cols: number, rows: number): Promise<void>
   terminalClose?(terminalId: string): Promise<void>
+  terminalReadTranscript?(
+    request: TerminalTranscriptRequestDto,
+  ): Promise<TerminalTranscriptResponseDto>
+  terminalClearTranscript?(request: TerminalTranscriptRequestDto): Promise<void>
   getProjectUsageSummary(projectId: string): Promise<ProjectUsageSummaryDto>
   getRepositoryStatus(projectId: string): Promise<RepositoryStatusResponseDto>
   getRepositoryDiff(projectId: string, scope: RepositoryDiffScope): Promise<RepositoryDiffResponseDto>
@@ -2426,6 +2445,7 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     return invokeTyped(COMMANDS.terminalOpen, openTerminalResponseSchema, {
       request: {
         projectId: request.projectId ?? null,
+        clientTerminalId: request.clientTerminalId ?? null,
         cols: request.cols ?? null,
         rows: request.rows ?? null,
       },
@@ -2446,6 +2466,24 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
 
   async terminalClose(terminalId) {
     await invokeRaw(COMMANDS.terminalClose, { request: { terminalId } })
+  },
+
+  terminalReadTranscript(request) {
+    return invokeTyped(COMMANDS.terminalReadTranscript, terminalTranscriptResponseSchema, {
+      request: {
+        projectId: request.projectId,
+        clientTerminalId: request.clientTerminalId,
+      },
+    })
+  },
+
+  async terminalClearTranscript(request) {
+    await invokeRaw(COMMANDS.terminalClearTranscript, {
+      request: {
+        projectId: request.projectId,
+        clientTerminalId: request.clientTerminalId,
+      },
+    })
   },
 
   suggestProjectStartTargets(request) {

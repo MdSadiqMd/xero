@@ -19,8 +19,9 @@
 //! `terminal:status` events.
 
 use std::collections::{HashMap, VecDeque};
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
 use std::sync::{
@@ -34,6 +35,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtyS
 use rand::RngCore;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::auth::now_timestamp;
@@ -41,12 +43,12 @@ use crate::commands::{
     default_runtime_agent_id,
     provider_credentials::load_provider_credentials_view,
     runtime_support::{emit_project_updated, resolve_owned_agent_provider_config},
-    CommandError, CommandResult, ProjectSummaryDto, ProjectUpdateReason,
+    validate_non_empty, CommandError, CommandResult, ProjectSummaryDto, ProjectUpdateReason,
     ProviderModelThinkingEffortDto, RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto,
     RuntimeRunApprovalModeDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
     StartTargetDto,
 };
-use crate::db::{database_path_for_repo, project_store};
+use crate::db::{database_path_for_repo, project_app_data_dir_for_repo, project_store};
 use crate::global_db::open_global_database;
 use crate::provider_credentials::ProviderCredentialsView;
 use crate::runtime::autonomous_tool_runtime::resolve_imported_repo_root;
@@ -136,9 +138,26 @@ pub struct OpenTerminalRequestDto {
     #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
+    pub client_terminal_id: Option<String>,
+    #[serde(default)]
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalTranscriptRequestDto {
+    pub project_id: String,
+    pub client_terminal_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalTranscriptResponseDto {
+    pub project_id: String,
+    pub client_terminal_id: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -306,6 +325,11 @@ struct TerminalProcessHandle {
 type TerminalRegistry = HashMap<String, Arc<TerminalHandle>>;
 
 static TERMINALS: LazyLock<Mutex<TerminalRegistry>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone)]
+struct TerminalTranscriptTarget {
+    path: PathBuf,
+}
 
 struct TerminalOutputBuffer {
     chunks: VecDeque<TerminalOutputChunkDto>,
@@ -884,24 +908,41 @@ fn terminal_open_blocking<R: Runtime + 'static>(
     state: DesktopState,
     request: OpenTerminalRequestDto,
 ) -> CommandResult<OpenTerminalResponseDto> {
-    let cwd = if let Some(project_id) = request
+    let client_terminal_id = request
+        .client_terminal_id
+        .as_ref()
+        .map(|value| validate_client_terminal_id(value))
+        .transpose()?;
+
+    let (cwd, transcript_target) = if let Some(project_id) = request
         .project_id
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
         let root = resolve_imported_repo_root(&app, &state, project_id)?;
-        root.to_string_lossy().into_owned()
+        let transcript_target = client_terminal_id
+            .as_deref()
+            .map(|id| terminal_transcript_target(&root, id))
+            .transpose()?;
+        (root.to_string_lossy().into_owned(), transcript_target)
     } else {
-        dirs::home_dir()
+        let cwd = dirs::home_dir()
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ".".to_owned())
+            .unwrap_or_else(|| ".".to_owned());
+        (cwd, None)
     };
 
     let cols = request.cols.unwrap_or(120).max(1);
     let rows = request.rows.unwrap_or(32).max(1);
 
-    terminal_open_in_cwd(cwd, cols, rows, TerminalEventSink::tauri(app))
+    terminal_open_in_cwd(
+        cwd,
+        cols,
+        rows,
+        TerminalEventSink::tauri(app),
+        transcript_target,
+    )
 }
 
 pub fn terminal_open_for_cwd(
@@ -914,6 +955,7 @@ pub fn terminal_open_for_cwd(
         cols.unwrap_or(120).max(1),
         rows.unwrap_or(32).max(1),
         TerminalEventSink::none(),
+        None,
     )
 }
 
@@ -922,6 +964,7 @@ fn terminal_open_in_cwd(
     cols: u16,
     rows: u16,
     sink: TerminalEventSink,
+    transcript_target: Option<TerminalTranscriptTarget>,
 ) -> CommandResult<OpenTerminalResponseDto> {
     let shell = detect_user_shell();
     let pty_system = NativePtySystem::default();
@@ -1011,6 +1054,7 @@ fn terminal_open_in_cwd(
     let terminal_id_reader = terminal_id.clone();
     let handle_for_reader = Arc::clone(&handle);
     let sink_for_reader = sink.clone();
+    let transcript_target_for_reader = transcript_target.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -1018,6 +1062,9 @@ fn terminal_open_in_cwd(
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    if let Some(target) = transcript_target_for_reader.as_ref() {
+                        let _ = append_terminal_transcript(target, &chunk);
+                    }
                     let sequence = handle_for_reader
                         .next_sequence
                         .fetch_add(1, Ordering::Relaxed);
@@ -1059,6 +1106,57 @@ fn terminal_open_in_cwd(
         cwd,
         started_at,
     })
+}
+
+#[tauri::command]
+pub fn terminal_read_transcript<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: TerminalTranscriptRequestDto,
+) -> CommandResult<TerminalTranscriptResponseDto> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    let client_terminal_id = validate_client_terminal_id(&request.client_terminal_id)?;
+    let repo_root = resolve_imported_repo_root(&app, state.inner(), &request.project_id)?;
+    let target = terminal_transcript_target(&repo_root, &client_terminal_id)?;
+    let content = match fs::read_to_string(&target.path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(CommandError::retryable(
+                "terminal_transcript_read_failed",
+                format!(
+                    "Xero could not read terminal transcript `{client_terminal_id}` from app-data storage: {error}"
+                ),
+            ));
+        }
+    };
+    Ok(TerminalTranscriptResponseDto {
+        project_id: request.project_id,
+        client_terminal_id,
+        content,
+    })
+}
+
+#[tauri::command]
+pub fn terminal_clear_transcript<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: TerminalTranscriptRequestDto,
+) -> CommandResult<()> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    let client_terminal_id = validate_client_terminal_id(&request.client_terminal_id)?;
+    let repo_root = resolve_imported_repo_root(&app, state.inner(), &request.project_id)?;
+    let target = terminal_transcript_target(&repo_root, &client_terminal_id)?;
+    match fs::remove_file(&target.path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CommandError::retryable(
+            "terminal_transcript_clear_failed",
+            format!(
+                "Xero could not remove terminal transcript `{client_terminal_id}` from app-data storage: {error}"
+            ),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -1329,6 +1427,69 @@ fn random_target_id() -> String {
     format!("tgt-{hex}")
 }
 
+fn validate_client_terminal_id(value: &str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 128
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(CommandError::invalid_request("clientTerminalId"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn terminal_transcript_target(
+    repo_root: &Path,
+    client_terminal_id: &str,
+) -> CommandResult<TerminalTranscriptTarget> {
+    let client_terminal_id = validate_client_terminal_id(client_terminal_id)?;
+    let digest = Sha256::digest(client_terminal_id.as_bytes());
+    let filename = format!("{}.ansi", hex_digest(digest.as_slice()));
+    Ok(TerminalTranscriptTarget {
+        path: project_app_data_dir_for_repo(repo_root)
+            .join("terminal-transcripts")
+            .join(filename),
+    })
+}
+
+fn append_terminal_transcript(target: &TerminalTranscriptTarget, chunk: &str) -> CommandResult<()> {
+    if let Some(parent) = target.path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::retryable(
+                "terminal_transcript_dir_failed",
+                format!("Xero could not create terminal transcript app-data storage: {error}"),
+            )
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&target.path)
+        .map_err(|error| {
+            CommandError::retryable(
+                "terminal_transcript_append_open_failed",
+                format!("Xero could not open terminal transcript app-data storage: {error}"),
+            )
+        })?;
+    file.write_all(chunk.as_bytes()).map_err(|error| {
+        CommandError::retryable(
+            "terminal_transcript_append_failed",
+            format!("Xero could not append terminal transcript output: {error}"),
+        )
+    })
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
+}
+
 fn build_suggest_prompt(repo_root: &Path) -> String {
     let mut sections: Vec<String> = Vec::new();
     sections.push(format!(
@@ -1583,6 +1744,23 @@ mod tests {
         let incremental = buffer.read_after(Some(0), 64);
         assert_eq!(incremental.len(), 1);
         assert_eq!(incremental[0].sequence, 1);
+    }
+
+    #[test]
+    fn terminal_transcript_round_trips_under_project_app_data() {
+        let repo = tempfile::tempdir().expect("repo");
+        let target =
+            terminal_transcript_target(repo.path(), "term-tab-test").expect("transcript target");
+
+        append_terminal_transcript(&target, "first line\n").expect("append first");
+        append_terminal_transcript(&target, "second line\n").expect("append second");
+
+        let content = fs::read_to_string(&target.path).expect("read transcript");
+        assert_eq!(content, "first line\nsecond line\n");
+        assert!(target
+            .path
+            .starts_with(project_app_data_dir_for_repo(repo.path())));
+        assert!(validate_client_terminal_id("../escape").is_err());
     }
 
     #[test]

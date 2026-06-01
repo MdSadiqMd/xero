@@ -394,6 +394,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::project_runner::terminal_write,
             commands::project_runner::terminal_resize,
             commands::project_runner::terminal_close,
+            commands::project_runner::terminal_read_transcript,
+            commands::project_runner::terminal_clear_transcript,
             commands::skills::update_github_skill_source,
             commands::skills::upsert_plugin_root,
             commands::skills::remove_plugin_root,

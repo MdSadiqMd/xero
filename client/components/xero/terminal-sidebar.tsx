@@ -7,6 +7,7 @@ import { Terminal as XTerm, type ITheme as IXTermTheme } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Plus, X } from "lucide-react"
+import { z } from "zod"
 import { cn } from "@/lib/utils"
 import { useSidebarOpenMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import { createSafeTauriUnlisten } from "@/src/lib/tauri-events"
@@ -40,6 +41,10 @@ const TERMINAL_FONT_FAMILY =
   'ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace'
 const TERMINAL_SHIFT_ENTER_SEQUENCE = "\x1b[13;2u"
 const MAX_TAB_LABEL_LENGTH = 48
+const TERMINAL_TABS_UI_STATE_KEY = "terminal.tabs.v1"
+const TERMINAL_TABS_STATE_SCHEMA = "xero.terminal.tabs.v1"
+const MAX_PERSISTED_TERMINAL_TABS = 24
+const MAX_PERSISTED_COMMAND_LENGTH = 20_000
 
 /**
  * Build an xterm theme from the active Xero theme. ANSI slots draw from the
@@ -96,12 +101,67 @@ export interface TerminalSidebarHandle {
   ) => Promise<string | null>
 }
 
+export type TerminalSpawnSource =
+  | {
+      kind: "start-target"
+      targetId?: string | null
+      targetName?: string | null
+    }
+  | {
+      kind: "editor-task"
+      label?: string | null
+    }
+  | {
+      kind: "xero-command"
+      label?: string | null
+    }
+
 export interface TerminalSpawnOptions {
   label?: string
   browserSupported?: boolean
   exitWhenDone?: boolean
+  source?: TerminalSpawnSource
   onData?: (data: string) => void
   onExit?: (event: EditorTerminalTaskExit) => void
+}
+
+type PersistedTerminalCommandSourceKind = TerminalSpawnSource["kind"]
+
+interface PersistedTerminalCommand {
+  text: string
+  sourceKind: PersistedTerminalCommandSourceKind
+  sourceId?: string | null
+  sourceLabel?: string | null
+  exitWhenDone?: boolean
+  autoReplay: false
+}
+
+interface PersistedTerminalTab {
+  clientId: string
+  label: string
+  labelLocked: boolean
+  browserSupported: boolean | null
+  cwd: string | null
+  command: PersistedTerminalCommand | null
+}
+
+interface PersistedTerminalTabsState {
+  schema: typeof TERMINAL_TABS_STATE_SCHEMA
+  tabs: PersistedTerminalTab[]
+  activeTabId: string | null
+}
+
+interface LoadedTerminalTabsState {
+  exists: boolean
+  state: PersistedTerminalTabsState | null
+  malformed: boolean
+}
+
+interface InternalTerminalSpawnOptions extends TerminalSpawnOptions {
+  clientId?: string
+  labelLocked?: boolean
+  restoredCommand?: PersistedTerminalCommand | null
+  restoredCwd?: string | null
 }
 
 interface TerminalSidebarProps {
@@ -117,12 +177,47 @@ interface TerminalSidebarProps {
 
 interface TerminalTab {
   id: string
+  clientId: string
+  projectId: string
   label: string
   labelLocked?: boolean
   browserSupported?: boolean | null
+  cwd: string | null
+  command: PersistedTerminalCommand | null
+  running: boolean
   terminal: XTerm
   fit: FitAddon
 }
+
+const persistedTerminalCommandSchema = z
+  .object({
+    text: z.string().trim().min(1).max(MAX_PERSISTED_COMMAND_LENGTH),
+    sourceKind: z.enum(["start-target", "editor-task", "xero-command"]),
+    sourceId: z.string().trim().min(1).max(256).nullable().optional(),
+    sourceLabel: z.string().trim().min(1).max(MAX_TAB_LABEL_LENGTH).nullable().optional(),
+    exitWhenDone: z.boolean().optional(),
+    autoReplay: z.literal(false),
+  })
+  .strict()
+
+const persistedTerminalTabSchema = z
+  .object({
+    clientId: z.string().trim().min(1).max(128),
+    label: z.string().trim().min(1).max(MAX_TAB_LABEL_LENGTH),
+    labelLocked: z.boolean(),
+    browserSupported: z.boolean().nullable(),
+    cwd: z.string().trim().min(1).max(4096).nullable(),
+    command: persistedTerminalCommandSchema.nullable(),
+  })
+  .strict()
+
+const persistedTerminalTabsStateSchema = z
+  .object({
+    schema: z.literal(TERMINAL_TABS_STATE_SCHEMA),
+    tabs: z.array(persistedTerminalTabSchema).max(MAX_PERSISTED_TERMINAL_TABS),
+    activeTabId: z.string().trim().min(1).max(128).nullable(),
+  })
+  .strict()
 
 function viewportDefaultWidth(): number {
   if (typeof window === "undefined") return 560
@@ -196,6 +291,104 @@ function buildTerminalCommandWrite(command: string, options?: TerminalSpawnOptio
   return `(\n${trimmed}\n)\n__xero_task_status=$?; printf '\\n[xero task exited with status %s]\\n' "$__xero_task_status"; exit "$__xero_task_status"\r`
 }
 
+function createTerminalClientId(): string {
+  const randomId =
+    typeof window !== "undefined" &&
+    typeof window.crypto?.randomUUID === "function"
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  return `term-tab-${randomId.replace(/[^A-Za-z0-9_-]/g, "-")}`
+}
+
+function terminalCommandSourceLabel(source: TerminalSpawnSource | undefined): string | null {
+  if (!source) return null
+  if (source.kind === "start-target") return source.targetName ?? null
+  return source.label ?? null
+}
+
+function buildPersistedTerminalCommand(
+  command: string | undefined,
+  options: TerminalSpawnOptions | undefined,
+): PersistedTerminalCommand | null {
+  const text = command?.trim()
+  if (!text) return null
+  const sourceKind = options?.source?.kind ?? "xero-command"
+  const sourceLabel =
+    sanitizeTerminalTabLabel(terminalCommandSourceLabel(options?.source) ?? options?.label ?? "") ??
+    null
+  return {
+    text: text.slice(0, MAX_PERSISTED_COMMAND_LENGTH),
+    sourceKind,
+    sourceId:
+      options?.source?.kind === "start-target"
+        ? options.source.targetId ?? null
+        : null,
+    sourceLabel,
+    exitWhenDone: options?.exitWhenDone,
+    autoReplay: false,
+  }
+}
+
+function normalizePersistedTerminalTabsState(
+  value: PersistedTerminalTabsState,
+): PersistedTerminalTabsState {
+  const seen = new Set<string>()
+  const tabs = value.tabs.filter((tab) => {
+    if (seen.has(tab.clientId)) return false
+    seen.add(tab.clientId)
+    return true
+  })
+  const activeTabId = tabs.some((tab) => tab.clientId === value.activeTabId)
+    ? value.activeTabId
+    : tabs[tabs.length - 1]?.clientId ?? null
+  return {
+    schema: TERMINAL_TABS_STATE_SCHEMA,
+    tabs,
+    activeTabId,
+  }
+}
+
+function parsePersistedTerminalTabsState(value: unknown): LoadedTerminalTabsState {
+  if (value == null) {
+    return { exists: false, state: null, malformed: false }
+  }
+  const parsed = persistedTerminalTabsStateSchema.safeParse(value)
+  if (!parsed.success) {
+    return { exists: true, state: null, malformed: true }
+  }
+  return {
+    exists: true,
+    state: normalizePersistedTerminalTabsState(parsed.data),
+    malformed: false,
+  }
+}
+
+function serializeTerminalTabs(
+  tabs: TerminalTab[],
+  activeTabId: string | null,
+): PersistedTerminalTabsState {
+  const persistedTabs = tabs
+    .filter((tab) => tab.projectId.trim().length > 0)
+    .slice(0, MAX_PERSISTED_TERMINAL_TABS)
+    .map((tab) => ({
+      clientId: tab.clientId,
+      label: sanitizeTerminalTabLabel(tab.label) ?? "terminal",
+      labelLocked: tab.labelLocked === true,
+      browserSupported: tab.browserSupported ?? null,
+      cwd: tab.cwd,
+      command: tab.command,
+    }))
+  const activeClientId =
+    tabs.find((tab) => tab.id === activeTabId)?.clientId ??
+    persistedTabs[persistedTabs.length - 1]?.clientId ??
+    null
+  return {
+    schema: TERMINAL_TABS_STATE_SCHEMA,
+    tabs: persistedTabs,
+    activeTabId: activeClientId,
+  }
+}
+
 export function TerminalSidebar({
   open,
   projectId,
@@ -208,6 +401,7 @@ export function TerminalSidebar({
   const [isResizing, setIsResizing] = useState(false)
   const [tabs, setTabs] = useState<TerminalTab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  const [hydratedProjectId, setHydratedProjectId] = useState<string | null>(null)
   const motionOpen = useSidebarOpenMotion(open)
   const targetWidth = motionOpen ? width : 0
   const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
@@ -224,6 +418,8 @@ export function TerminalSidebar({
   widthRef.current = width
   const tabsRef = useRef<TerminalTab[]>([])
   tabsRef.current = tabs
+  const activeTabIdRef = useRef<string | null>(activeTabId)
+  activeTabIdRef.current = activeTabId
   const openRef = useRef(open)
   openRef.current = open
   const projectIdRef = useRef<string | null>(projectId)
@@ -236,6 +432,9 @@ export function TerminalSidebar({
   const taskHandlersRef = useRef<Map<string, Pick<TerminalSpawnOptions, "onData" | "onExit">>>(new Map())
   const autoOpeningTerminalRef = useRef(false)
   const lastTabReplacementPendingRef = useRef(false)
+  const hydrationGenerationRef = useRef(0)
+  const hydratedProjectIdRef = useRef<string | null>(null)
+  const previousProjectIdRef = useRef<string | null>(projectId)
 
   const handleTerminalLink = useCallback((uri: string) => {
     if (isBrowserSupportedDevServerUrl(uri)) {
@@ -259,9 +458,14 @@ export function TerminalSidebar({
     }
   }, [])
 
+  const activeProjectTabs = useMemo(
+    () => tabs.filter((tab) => tab.projectId === projectId),
+    [projectId, tabs],
+  )
+
   const activeTab = useMemo(
-    () => tabs.find((tab) => tab.id === activeTabId) ?? null,
-    [tabs, activeTabId],
+    () => activeProjectTabs.find((tab) => tab.id === activeTabId) ?? null,
+    [activeProjectTabs, activeTabId],
   )
 
   const updateTabLabel = useCallback((terminalId: string, label: string) => {
@@ -316,6 +520,11 @@ export function TerminalSidebar({
       taskHandlersRef.current.delete(terminalId)
       if (!tab) return
       tab.terminal.write(`\r\n\x1b[2m[exited${code === null ? '' : ` with code ${code}`}]\x1b[0m\r\n`)
+      setTabs((current) =>
+        current.map((entry) =>
+          entry.id === terminalId ? { ...entry, running: false } : entry,
+        ),
+      )
     }).then((fn) => {
       const unlisten = createSafeTauriUnlisten(fn)
       if (cancelled) {
@@ -407,14 +616,94 @@ export function TerminalSidebar({
     }
   }, [activeTab])
 
+  const persistTerminalTabsForProject = useCallback(
+    (
+      targetProjectId: string | null,
+      snapshot: TerminalTab[],
+      snapshotActiveTabId: string | null,
+    ) => {
+      if (!targetProjectId || !defaultAdapter.writeProjectUiState) return
+      const projectTabs = snapshot.filter((tab) => tab.projectId === targetProjectId)
+      const value = serializeTerminalTabs(projectTabs, snapshotActiveTabId)
+      void defaultAdapter.writeProjectUiState({
+        projectId: targetProjectId,
+        key: TERMINAL_TABS_UI_STATE_KEY,
+        value,
+      }).catch(() => undefined)
+    },
+    [],
+  )
+
+  const loadPersistedTerminalTabsState = useCallback(
+    async (targetProjectId: string): Promise<LoadedTerminalTabsState> => {
+      if (!defaultAdapter.readProjectUiState) {
+        return { exists: false, state: null, malformed: false }
+      }
+      try {
+        const response = await defaultAdapter.readProjectUiState({
+          projectId: targetProjectId,
+          key: TERMINAL_TABS_UI_STATE_KEY,
+        })
+        const loaded = parsePersistedTerminalTabsState(response.value ?? null)
+        if (loaded.malformed) {
+          await defaultAdapter.writeProjectUiState?.({
+            projectId: targetProjectId,
+            key: TERMINAL_TABS_UI_STATE_KEY,
+            value: null,
+          })
+        }
+        return loaded
+      } catch {
+        return { exists: false, state: null, malformed: false }
+      }
+    },
+    [],
+  )
+
+  const disposeTerminalTab = useCallback(
+    (
+      tab: TerminalTab,
+      options: { notifyTask?: boolean; clearTranscript?: boolean } = {},
+    ) => {
+      closingTerminalIdsRef.current.add(tab.id)
+      terminalHostsRef.current.delete(tab.id)
+      openedTerminalIdsRef.current.delete(tab.id)
+      pendingWriteBuffersRef.current.delete(tab.id)
+      try { tab.terminal.dispose() } catch { /* swallow */ }
+      if (options.notifyTask !== false) {
+        taskHandlersRef.current.get(tab.id)?.onExit?.({ terminalId: tab.id, exitCode: null })
+      }
+      taskHandlersRef.current.delete(tab.id)
+      void defaultAdapter.terminalClose?.(tab.id).catch(() => undefined)
+      if (options.clearTranscript) {
+        void defaultAdapter.terminalClearTranscript?.({
+          projectId: tab.projectId,
+          clientTerminalId: tab.clientId,
+        }).catch(() => undefined)
+      }
+    },
+    [],
+  )
+
   const spawnTab = useCallback(
-    async (command?: string, options?: TerminalSpawnOptions): Promise<string | null> => {
+    async (command?: string, options?: InternalTerminalSpawnOptions): Promise<string | null> => {
       if (!isTauri()) return null
+      const targetProjectId = projectIdRef.current
+      if (!targetProjectId) return null
       const cols = 120
       const rows = 32
       try {
+        const clientId = options?.clientId ?? createTerminalClientId()
+        const restoredTranscript =
+          options?.clientId && defaultAdapter.terminalReadTranscript
+            ? await defaultAdapter.terminalReadTranscript({
+                projectId: targetProjectId,
+                clientTerminalId: clientId,
+              }).then((response) => response.content).catch(() => "")
+            : ""
         const response = await defaultAdapter.terminalOpen?.({
-          projectId: projectIdRef.current ?? null,
+          projectId: targetProjectId,
+          clientTerminalId: clientId,
           cols,
           rows,
         })
@@ -440,6 +729,9 @@ export function TerminalSidebar({
         terminal.onTitleChange((title) => {
           updateTabLabel(response.terminalId, title)
         })
+        if (restoredTranscript.length > 0) {
+          terminal.write(restoredTranscript)
+        }
         const buffered = pendingWriteBuffersRef.current.get(response.terminalId)
         if (buffered) {
           terminal.write(buffered)
@@ -451,9 +743,14 @@ export function TerminalSidebar({
           "terminal"
         const tab: TerminalTab = {
           id: response.terminalId,
+          clientId,
+          projectId: targetProjectId,
           label: initialLabel,
-          labelLocked: !!options?.label,
+          labelLocked: options?.labelLocked ?? !!options?.label,
           browserSupported: options?.browserSupported ?? null,
+          cwd: options?.restoredCwd ?? response.cwd ?? null,
+          command: options?.restoredCommand ?? buildPersistedTerminalCommand(command, options),
+          running: true,
           terminal,
           fit,
         }
@@ -495,13 +792,83 @@ export function TerminalSidebar({
     })
   }, [spawnTab])
 
+  useEffect(() => {
+    if (!projectId) return
+    if (hydratedProjectId !== projectId || hydratedProjectIdRef.current !== projectId) return
+    persistTerminalTabsForProject(projectId, tabs, activeTabId)
+  }, [activeTabId, hydratedProjectId, persistTerminalTabsForProject, projectId, tabs])
+
+  useEffect(() => {
+    const previousProjectId = previousProjectIdRef.current
+    if (previousProjectId && previousProjectId !== projectId) {
+      const snapshot = tabsRef.current
+      persistTerminalTabsForProject(previousProjectId, snapshot, activeTabIdRef.current)
+      snapshot
+        .filter((tab) => tab.projectId === previousProjectId)
+        .forEach((tab) => disposeTerminalTab(tab, { notifyTask: true, clearTranscript: false }))
+      setTabs((current) => current.filter((tab) => tab.projectId !== previousProjectId))
+      setActiveTabId(null)
+    }
+    previousProjectIdRef.current = projectId
+  }, [disposeTerminalTab, persistTerminalTabsForProject, projectId])
+
+  useEffect(() => {
+    const targetProjectId = projectId
+    const generation = hydrationGenerationRef.current + 1
+    hydrationGenerationRef.current = generation
+    hydratedProjectIdRef.current = null
+    setHydratedProjectId(null)
+
+    if (!targetProjectId || !isTauri()) {
+      hydratedProjectIdRef.current = targetProjectId
+      setHydratedProjectId(targetProjectId)
+      return
+    }
+
+    let cancelled = false
+    void loadPersistedTerminalTabsState(targetProjectId)
+      .then(async (loaded) => {
+        if (cancelled || hydrationGenerationRef.current !== generation) return
+        const persistedTabs = loaded.state?.tabs ?? []
+        const restoredIds = new Map<string, string>()
+        for (const persistedTab of persistedTabs) {
+          if (cancelled || hydrationGenerationRef.current !== generation) return
+          const terminalId = await spawnTab(undefined, {
+            clientId: persistedTab.clientId,
+            label: persistedTab.label,
+            labelLocked: persistedTab.labelLocked,
+            browserSupported: persistedTab.browserSupported ?? undefined,
+            restoredCommand: persistedTab.command,
+            restoredCwd: persistedTab.cwd,
+          })
+          if (terminalId) restoredIds.set(persistedTab.clientId, terminalId)
+        }
+        if (cancelled || hydrationGenerationRef.current !== generation) return
+        const activeClientId = loaded.state?.activeTabId ?? null
+        const activeTerminalId = activeClientId ? restoredIds.get(activeClientId) ?? null : null
+        if (activeTerminalId) {
+          setActiveTabId(activeTerminalId)
+        }
+      })
+      .finally(() => {
+        if (cancelled || hydrationGenerationRef.current !== generation) return
+        hydratedProjectIdRef.current = targetProjectId
+        setHydratedProjectId(targetProjectId)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [loadPersistedTerminalTabsState, projectId, spawnTab])
+
   // Auto-create the first tab when the sidebar opens or recovers from an
   // unexpected empty state.
   useEffect(() => {
     if (!open) return
-    if (tabs.length > 0) return
+    if (hydratedProjectId !== projectId) return
+    if (activeProjectTabs.length > 0) return
     ensureTerminalTab()
-  }, [ensureTerminalTab, open, tabs.length])
+  }, [activeProjectTabs.length, ensureTerminalTab, hydratedProjectId, open, projectId])
 
   useEffect(() => {
     if (!registerHandle) return
@@ -516,21 +883,16 @@ export function TerminalSidebar({
       const snapshot = tabsRef.current
       const tab = snapshot.find((entry) => entry.id === id)
       if (!tab) return
-      const remaining = snapshot.filter((entry) => entry.id !== id)
+      const remaining = snapshot.filter(
+        (entry) => entry.projectId === tab.projectId && entry.id !== id,
+      )
       const closeTab = (fallbackActiveTabId: string | null) => {
-        closingTerminalIdsRef.current.add(id)
-        terminalHostsRef.current.delete(id)
-        openedTerminalIdsRef.current.delete(id)
-        tab.terminal.dispose()
-        pendingWriteBuffersRef.current.delete(id)
-        taskHandlersRef.current.get(id)?.onExit?.({ terminalId: id, exitCode: null })
-        taskHandlersRef.current.delete(id)
+        disposeTerminalTab(tab, { notifyTask: true, clearTranscript: true })
         setTabs((current) => current.filter((entry) => entry.id !== id))
         setActiveTabId((current) => {
           if (current !== id) return current
           return fallbackActiveTabId
         })
-        void defaultAdapter.terminalClose?.(id).catch(() => undefined)
       }
 
       if (remaining.length === 0 && openRef.current && isTauri()) {
@@ -550,7 +912,7 @@ export function TerminalSidebar({
       const fallbackActiveTabId = remaining.length > 0 ? remaining[remaining.length - 1].id : null
       closeTab(fallbackActiveTabId)
     },
-    [spawnTab],
+    [disposeTerminalTab, spawnTab],
   )
 
   const handleResizeStart = useCallback(
@@ -607,17 +969,12 @@ export function TerminalSidebar({
   useEffect(() => {
     return () => {
       const snapshot = tabsRef.current
-      snapshot.forEach((tab) => {
-        closingTerminalIdsRef.current.add(tab.id)
-        terminalHostsRef.current.delete(tab.id)
-        openedTerminalIdsRef.current.delete(tab.id)
-        try { tab.terminal.dispose() } catch { /* swallow */ }
-        taskHandlersRef.current.get(tab.id)?.onExit?.({ terminalId: tab.id, exitCode: null })
-        taskHandlersRef.current.delete(tab.id)
-        void defaultAdapter.terminalClose?.(tab.id).catch(() => undefined)
-      })
+      persistTerminalTabsForProject(projectIdRef.current, snapshot, activeTabIdRef.current)
+      snapshot.forEach((tab) =>
+        disposeTerminalTab(tab, { notifyTask: true, clearTranscript: false }),
+      )
     }
-  }, [])
+  }, [disposeTerminalTab, persistTerminalTabsForProject])
 
   return (
     <aside
@@ -651,7 +1008,7 @@ export function TerminalSidebar({
       <div className="flex h-full min-w-0 shrink-0 flex-col" style={{ width }}>
         <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/70">
           <div className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            {tabs.map((tab) => (
+            {activeProjectTabs.map((tab) => (
               <div
                 key={tab.id}
                 className={cn(
@@ -718,7 +1075,7 @@ export function TerminalSidebar({
               background: var(--scrollbar-thumb-hover) !important;
             }
           `}</style>
-          {tabs.map((tab) => (
+          {activeProjectTabs.map((tab) => (
             <div
               key={tab.id}
               ref={(node) => registerTerminalHost(tab, node)}
@@ -729,7 +1086,7 @@ export function TerminalSidebar({
             />
           ))}
         </div>
-        {tabs.length === 0 ? (
+        {activeProjectTabs.length === 0 ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 top-9 flex items-center justify-center text-[12px] text-muted-foreground">
             {isTauri() ? "Opening terminal…" : "Terminals are only available in the desktop app."}
           </div>
