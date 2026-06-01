@@ -205,6 +205,45 @@ describe("Composer", () => {
 		expect(modelList).toHaveClass("overflow-y-auto");
 	});
 
+	it("routes wheel gestures to the model list inside the dropdown", () => {
+		renderComposer({
+			modelGroups: [
+				{
+					id: "models",
+					options: Array.from({ length: 40 }, (_, index) => ({
+						id: `model-${index}`,
+						label: `Model ${index}`,
+					})),
+				},
+			],
+			selectedModelId: "model-0",
+			thinkingOptions: [{ id: "low", label: "Low" }],
+			selectedThinkingId: "low",
+			onThinkingChange: vi.fn(),
+		});
+
+		fireEvent.pointerDown(
+			screen.getByRole("combobox", { name: "Model and thinking selector" }),
+			{ button: 0 },
+		);
+
+		const modelList = document.querySelector(
+			'[data-slot="command-list"]',
+		) as HTMLElement;
+		Object.defineProperty(modelList, "clientHeight", {
+			configurable: true,
+			value: 120,
+		});
+		Object.defineProperty(modelList, "scrollHeight", {
+			configurable: true,
+			value: 900,
+		});
+
+		fireEvent.wheel(modelList, { deltaY: 80 });
+
+		expect(modelList.scrollTop).toBe(80);
+	});
+
 	it("keeps the combined selector open after choosing a model so thinking can be adjusted", () => {
 		const onModelChange = vi.fn();
 		const onThinkingChange = vi.fn();

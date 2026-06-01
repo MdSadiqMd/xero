@@ -1,5 +1,14 @@
 import { Brain, CheckIcon, ChevronDown, Cpu } from "lucide-react";
-import { Fragment, type ReactNode, memo, useMemo, useState } from "react";
+import {
+	Fragment,
+	type ReactNode,
+	type WheelEvent,
+	memo,
+	useCallback,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { cn } from "../../lib/utils";
 import {
 	Command,
@@ -71,6 +80,7 @@ export const ComposerModelSelect = memo(function ComposerModelSelect({
 	emptyText = "No models found.",
 }: ComposerModelSelectProps) {
 	const [open, setOpen] = useState(false);
+	const listRef = useRef<HTMLDivElement | null>(null);
 	const selectedLabel = useMemo(() => {
 		for (const group of groups) {
 			const match = group.options.find((option) => option.id === value);
@@ -152,6 +162,32 @@ export const ComposerModelSelect = memo(function ComposerModelSelect({
 			</DropdownMenuItem>
 		) : null;
 
+	const handleWheelCapture = useCallback((event: WheelEvent<HTMLDivElement>) => {
+		const list = listRef.current;
+		if (!list) return;
+
+		const deltaY =
+			event.deltaMode === 1
+				? event.deltaY * 16
+				: event.deltaMode === 2
+					? event.deltaY * list.clientHeight
+					: event.deltaY;
+		if (deltaY === 0) return;
+
+		const maxScrollTop = list.scrollHeight - list.clientHeight;
+		if (maxScrollTop <= 0) return;
+
+		const nextScrollTop = Math.max(
+			0,
+			Math.min(maxScrollTop, list.scrollTop + deltaY),
+		);
+		if (nextScrollTop === list.scrollTop) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+		list.scrollTop = nextScrollTop;
+	}, []);
+
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
 			<DropdownMenuTrigger asChild>
@@ -191,6 +227,7 @@ export const ComposerModelSelect = memo(function ComposerModelSelect({
 						composerInlineSelectContentClassName,
 						"max-h-none w-72 overflow-visible p-0",
 					)}
+					onWheelCapture={handleWheelCapture}
 				>
 					<Command>
 						<CommandInput placeholder={searchPlaceholder} />
@@ -201,7 +238,10 @@ export const ComposerModelSelect = memo(function ComposerModelSelect({
 								</div>
 							</>
 						) : null}
-						<CommandList className="max-h-[min(18rem,calc(var(--radix-dropdown-menu-content-available-height)_-_5rem))]">
+						<CommandList
+							ref={listRef}
+							className="max-h-[min(18rem,calc(var(--radix-dropdown-menu-content-available-height)_-_5rem))]"
+						>
 							<CommandEmpty>{emptyText}</CommandEmpty>
 							{groups.map((group, index) => (
 								<Fragment key={group.id}>
