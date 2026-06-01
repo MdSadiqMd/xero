@@ -212,6 +212,66 @@ pub const AUTONOMOUS_TOOL_SKILL: &str = "skill";
 pub const AUTONOMOUS_TOOL_BROWSER_OBSERVE: &str = "browser_observe";
 pub const AUTONOMOUS_TOOL_BROWSER_CONTROL: &str = "browser_control";
 pub const AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX: &str = "mcp__";
+pub const AUTONOMOUS_TOOL_STALE_FILE_ERROR_CODE: &str = "autonomous_tool_stale_file";
+pub const AUTONOMOUS_TOOL_EXPECTED_HASH_REQUIRED_CODE: &str =
+    "autonomous_tool_expected_hash_required";
+
+pub(super) fn stale_file_error(
+    operation: &str,
+    path: &str,
+    hash_field: &'static str,
+    expected_hash: &str,
+    current_hash: &str,
+) -> CommandError {
+    let details = json!({
+        "path": path,
+        "hashField": hash_field,
+        "expectedHash": expected_hash.trim(),
+        "currentHash": current_hash,
+        "requiredAction": "re-read current file evidence, then retry with the new hash"
+    });
+    CommandError::user_fixable(
+        AUTONOMOUS_TOOL_STALE_FILE_ERROR_CODE,
+        format!(
+            "Xero refused to {operation} `{path}` because `{hash_field}` no longer matches the current file. staleFile={details}"
+        ),
+    )
+}
+
+pub(super) fn expected_hash_required_error(
+    operation: &str,
+    path: &str,
+    hash_field: &'static str,
+    current_hash: &str,
+) -> CommandError {
+    let details = json!({
+        "path": path,
+        "hashField": hash_field,
+        "currentHash": current_hash,
+        "requiredAction": "read or hash the current file, then retry with this hash field"
+    });
+    CommandError::user_fixable(
+        AUTONOMOUS_TOOL_EXPECTED_HASH_REQUIRED_CODE,
+        format!(
+            "Xero refused to {operation} existing file `{path}` without `{hash_field}`. staleFile={details}"
+        ),
+    )
+}
+
+pub(super) fn validate_sha256_hash(value: &str, field: &'static str) -> CommandResult<String> {
+    let hash = value.trim();
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(CommandError::user_fixable(
+            "autonomous_tool_expected_hash_invalid",
+            format!("Xero requires `{field}` to be a lowercase 64-character SHA-256 hex digest."),
+        ));
+    }
+    Ok(hash.to_owned())
+}
 
 const DESKTOP_FEATURE_MASTER_ENV: &str = "XERO_COMPUTER_USE_DESKTOP_ENABLED";
 const DESKTOP_FEATURE_OBSERVE_ENV: &str = "XERO_COMPUTER_USE_DESKTOP_OBSERVE_ENABLED";
@@ -2439,7 +2499,7 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
         catalog_entry(
             AUTONOMOUS_TOOL_WRITE,
             "mutation",
-            "Write a UTF-8 text file by repo-relative path.",
+            "Create a UTF-8 text file or replace an existing file with expected-hash protection.",
             &["file", "write", "create", "replace"],
             &["path", "content"],
             &["Create a new generated source file."],
@@ -2448,7 +2508,7 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
         catalog_entry(
             AUTONOMOUS_TOOL_EDIT,
             "mutation",
-            "Apply an exact expected-text line-range edit with optional file and line hash anchors.",
+            "Apply an exact expected-text line-range edit with mandatory owned-agent file hash anchors.",
             &["file", "edit", "line", "expected_text", "hash_guard"],
             &[
                 "path",
@@ -3088,9 +3148,15 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
         catalog_entry(
             AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
             "notebook",
-            "Edit a Jupyter notebook cell source.",
+            "Edit a Jupyter notebook cell source with expected-hash protection.",
             &["notebook", "jupyter", "ipynb", "cell", "edit"],
-            &["path", "cellIndex", "expectedSource", "replacementSource"],
+            &[
+                "path",
+                "cellIndex",
+                "expectedHash",
+                "expectedSource",
+                "replacementSource",
+            ],
             &["Replace a notebook cell after reading it."],
             "write",
         ),
@@ -7130,6 +7196,8 @@ pub struct AutonomousNotebookEditRequest {
     pub path: String,
     pub cell_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_source: Option<String>,
     pub replacement_source: String,
 }
@@ -8853,6 +8921,8 @@ pub struct AutonomousNotebookEditOutput {
     pub cell_type: String,
     pub old_source_chars: usize,
     pub new_source_chars: usize,
+    pub old_hash: String,
+    pub new_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

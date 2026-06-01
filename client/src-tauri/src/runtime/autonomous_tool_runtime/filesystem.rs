@@ -19,16 +19,18 @@ use serde_json::{json, Value as JsonValue};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use super::{
+    expected_hash_required_error,
     repo_scope::{
         build_glob_matcher, normalize_glob_pattern, normalize_optional_relative_path,
         normalize_relative_path, path_to_forward_slash, scope_relative_match_path,
     },
-    AutonomousCopyOmissions, AutonomousCopyOperation, AutonomousCopyOutput, AutonomousCopyRequest,
-    AutonomousDeleteOutput, AutonomousDeleteRequest, AutonomousDirectoryDigestEntry,
-    AutonomousDirectoryDigestHashMode, AutonomousDirectoryDigestOmissions,
-    AutonomousDirectoryDigestOutput, AutonomousDirectoryDigestRequest, AutonomousEditOutput,
-    AutonomousEditRequest, AutonomousFindMode, AutonomousFindOmissions, AutonomousFindOutput,
-    AutonomousFindRequest, AutonomousFsTransactionAction, AutonomousFsTransactionOperation,
+    stale_file_error, AutonomousCopyOmissions, AutonomousCopyOperation, AutonomousCopyOutput,
+    AutonomousCopyRequest, AutonomousDeleteOutput, AutonomousDeleteRequest,
+    AutonomousDirectoryDigestEntry, AutonomousDirectoryDigestHashMode,
+    AutonomousDirectoryDigestOmissions, AutonomousDirectoryDigestOutput,
+    AutonomousDirectoryDigestRequest, AutonomousEditOutput, AutonomousEditRequest,
+    AutonomousFindMode, AutonomousFindOmissions, AutonomousFindOutput, AutonomousFindRequest,
+    AutonomousFsTransactionAction, AutonomousFsTransactionOperation,
     AutonomousFsTransactionOperationResult, AutonomousFsTransactionOutput,
     AutonomousFsTransactionRequest, AutonomousFsTransactionRollbackAttempt,
     AutonomousFsTransactionRollbackStatus, AutonomousFsTransactionValidationSummary,
@@ -290,6 +292,10 @@ impl FsTransactionRollbackReport {
 }
 
 impl AutonomousToolRuntime {
+    fn requires_existing_file_hash_guard(&self, preview: bool) -> bool {
+        self.agent_run_context.is_some() && !preview
+    }
+
     pub fn read(&self, request: AutonomousReadRequest) -> CommandResult<AutonomousToolResult> {
         self.read_with_approval(request, false)
     }
@@ -1277,6 +1283,7 @@ impl AutonomousToolRuntime {
         validate_non_empty(&request.expected, "expected")?;
         let relative_path = normalize_relative_path(&request.path, "path")?;
         let resolved_path = self.resolve_existing_path(&relative_path)?;
+        let display_path = path_to_forward_slash(&relative_path);
 
         if request.start_line == 0 || request.end_line == 0 || request.end_line < request.start_line
         {
@@ -1287,10 +1294,13 @@ impl AutonomousToolRuntime {
         }
 
         let decoded = self.read_decoded_text_file(&resolved_path)?;
-        validate_expected_hash_for_bytes(
+        let old_hash = validate_expected_hash_for_bytes(
+            "edit",
+            &display_path,
+            "expectedHash",
             request.expected_hash.as_deref(),
             &decoded.raw_bytes,
-            "autonomous_tool_edit_expected_hash_mismatch",
+            self.requires_existing_file_hash_guard(request.preview),
         )?;
         let existing = decoded.text;
         let total_lines = count_lines(&existing);
@@ -1350,8 +1360,6 @@ impl AutonomousToolRuntime {
             })?;
         }
 
-        let display_path = path_to_forward_slash(&relative_path);
-        let old_hash = sha256_hex(&decoded.raw_bytes);
         let new_hash = sha256_hex(&updated_bytes);
         let diff = compact_text_diff(&display_path, &existing, &updated);
         let verb = if request.preview {
@@ -1450,14 +1458,18 @@ impl AutonomousToolRuntime {
         let created = existing_bytes.is_none();
         let new_bytes = request.content.as_bytes().to_vec();
         let new_hash = sha256_hex(&new_bytes);
-        let old_hash = existing_bytes.as_deref().map(sha256_hex);
-        if let Some(existing_bytes) = existing_bytes.as_deref() {
-            validate_expected_hash_for_bytes(
+        let old_hash = if let Some(existing_bytes) = existing_bytes.as_deref() {
+            Some(validate_expected_hash_for_bytes(
+                "write",
+                &display_path,
+                "expectedHash",
                 request.expected_hash.as_deref(),
                 existing_bytes,
-                "autonomous_tool_write_expected_hash_mismatch",
-            )?;
-        }
+                self.requires_existing_file_hash_guard(request.preview),
+            )?)
+        } else {
+            None
+        };
         let diff = if let Some(existing_bytes) = existing_bytes.as_ref() {
             let decoded = decode_text_bytes(existing_bytes.clone()).map_err(|_| {
                 CommandError::user_fixable(
@@ -1522,8 +1534,9 @@ impl AutonomousToolRuntime {
 
     pub fn patch(&self, request: AutonomousPatchRequest) -> CommandResult<AutonomousToolResult> {
         let preview = request.preview;
+        let require_hash = self.requires_existing_file_hash_guard(preview);
         let operations = normalize_patch_operations(request)?;
-        let planned_files = self.plan_patch_files(&operations)?;
+        let planned_files = self.plan_patch_files(&operations, require_hash)?;
 
         let rollback_status = if preview {
             patch_no_rollback_status()
@@ -1781,16 +1794,14 @@ impl AutonomousToolRuntime {
         plan: &mut CopyPlan,
     ) -> CommandResult<()> {
         let bytes = read_file_bytes(from, "autonomous_tool_copy_read_failed")?;
-        let source_hash = sha256_hex(&bytes);
-        if let Some(expected_hash) = request.expected_source_hash.as_deref() {
-            validate_sha256(expected_hash, "expectedSourceHash")?;
-            if expected_hash.trim() != source_hash {
-                return Err(CommandError::user_fixable(
-                    "autonomous_tool_copy_expected_source_hash_mismatch",
-                    "Xero refused to copy because expectedSourceHash no longer matches.",
-                ));
-            }
-        }
+        let source_hash = validate_expected_hash_for_bytes(
+            "copy",
+            from_display,
+            "expectedSourceHash",
+            request.expected_source_hash.as_deref(),
+            &bytes,
+            self.requires_existing_file_hash_guard(request.preview),
+        )?;
         plan.source_hash = Some(source_hash);
         let overwritten = if to.exists() {
             if !to.is_file() {
@@ -1809,14 +1820,14 @@ impl AutonomousToolRuntime {
                     };
                     let target_bytes =
                         read_file_bytes(to, "autonomous_tool_copy_target_read_failed")?;
-                    let target_hash = sha256_hex(&target_bytes);
-                    validate_sha256(expected_target_hash, "expectedTargetHash")?;
-                    if expected_target_hash.trim() != target_hash {
-                        return Err(CommandError::user_fixable(
-                            "autonomous_tool_copy_expected_target_hash_mismatch",
-                            "Xero refused to overwrite the copy target because expectedTargetHash no longer matches.",
-                        ));
-                    }
+                    let target_hash = validate_expected_hash_for_bytes(
+                        "copy overwrite",
+                        to_display,
+                        "expectedTargetHash",
+                        Some(expected_target_hash),
+                        &target_bytes,
+                        true,
+                    )?;
                     plan.target_hash = Some(target_hash);
                     true
                 }
@@ -2204,7 +2215,11 @@ impl AutonomousToolRuntime {
         let preview_request = fs_transaction_request_with_preview(request.clone(), true);
         let preview_result = self.apply_fs_transaction_request(preview_request)?;
         if !transaction_preview {
-            validate_fs_transaction_apply_guards(operation, &preview_result.output)?;
+            validate_fs_transaction_apply_guards(
+                operation,
+                &preview_result.output,
+                self.agent_run_context.is_some(),
+            )?;
         }
         let changed_paths = fs_transaction_changed_paths_from_output(&preview_result.output);
         let backup_paths = self.fs_transaction_backup_paths_from_output(&preview_result.output)?;
@@ -2394,10 +2409,13 @@ impl AutonomousToolRuntime {
         let resolved_path = self.resolve_existing_path(&relative_path)?;
         let display_path = path_to_forward_slash(&relative_path);
         let decoded = self.read_decoded_text_file(&resolved_path)?;
-        validate_expected_hash_for_bytes(
+        let old_hash = validate_expected_hash_for_bytes(
+            "structured edit",
+            &display_path,
+            "expectedHash",
             request.expected_hash.as_deref(),
             &decoded.raw_bytes,
-            "autonomous_tool_structured_edit_expected_hash_mismatch",
+            self.requires_existing_file_hash_guard(request.preview),
         )?;
         let original_text = decoded.text;
         let mut document = parse_structured_document(&original_text, format)?;
@@ -2420,7 +2438,6 @@ impl AutonomousToolRuntime {
             })?;
         }
 
-        let old_hash = sha256_hex(&decoded.raw_bytes);
         let new_hash = sha256_hex(&updated_bytes);
         let diff = compact_text_diff(&display_path, &original_text, &updated);
         let verb = if request.preview {
@@ -2528,9 +2545,12 @@ impl AutonomousToolRuntime {
         if path_kind == AutonomousStatKind::File {
             let existing = read_file_bytes(&resolved_path, "autonomous_tool_delete_read_failed")?;
             validate_expected_hash_for_bytes(
+                "delete",
+                &display_path,
+                "expectedHash",
                 request.expected_hash.as_deref(),
                 &existing,
-                "autonomous_tool_delete_expected_hash_mismatch",
+                self.requires_existing_file_hash_guard(request.preview),
             )?;
         } else if request.expected_hash.is_some() {
             return Err(CommandError::user_fixable(
@@ -2737,12 +2757,14 @@ impl AutonomousToolRuntime {
         let source_bytes = stat_size(&from_metadata, source_kind);
         let source_hash = if source_kind == AutonomousStatKind::File {
             let existing = read_file_bytes(&from_resolved, "autonomous_tool_rename_read_failed")?;
-            validate_expected_hash_for_bytes(
+            Some(validate_expected_hash_for_bytes(
+                "rename",
+                &path_to_forward_slash(&from_relative),
+                "expectedHash",
                 request.expected_hash.as_deref(),
                 &existing,
-                "autonomous_tool_rename_expected_hash_mismatch",
-            )?;
-            Some(sha256_hex(&existing))
+                self.requires_existing_file_hash_guard(request.preview),
+            )?)
         } else {
             if request.expected_hash.is_some() {
                 return Err(CommandError::user_fixable(
@@ -2794,13 +2816,16 @@ impl AutonomousToolRuntime {
                             "Xero requires expectedTargetHash before overwriting a rename target.",
                         ));
                     };
-                    validate_sha256(expected_target_hash, "expectedTargetHash")?;
-                    if target_hash.as_deref() != Some(expected_target_hash.trim()) {
-                        return Err(CommandError::user_fixable(
-                            "autonomous_tool_rename_expected_target_hash_mismatch",
-                            "Xero refused to overwrite the rename target because expectedTargetHash no longer matches.",
-                        ));
-                    }
+                    let target_bytes =
+                        read_file_bytes(&to_resolved, "autonomous_tool_rename_target_read_failed")?;
+                    validate_expected_hash_for_bytes(
+                        "rename overwrite",
+                        &path_to_forward_slash(&to_relative),
+                        "expectedTargetHash",
+                        Some(expected_target_hash),
+                        &target_bytes,
+                        true,
+                    )?;
                     true
                 }
                 Some(false) | None => {
@@ -4485,6 +4510,7 @@ impl AutonomousToolRuntime {
     fn plan_patch_files(
         &self,
         operations: &[NormalizedPatchOperation],
+        require_hash: bool,
     ) -> CommandResult<Vec<PlannedPatchFile>> {
         let mut grouped = BTreeMap::<String, GroupedPatchOperations<'_>>::new();
         for operation in operations {
@@ -4514,7 +4540,7 @@ impl AutonomousToolRuntime {
                 .collect::<Vec<_>>();
 
             for operation in group.operations {
-                validate_patch_expected_hash(operation, &decoded.raw_bytes)?;
+                validate_patch_expected_hash(operation, &decoded.raw_bytes, require_hash)?;
                 let matches = updated.matches(operation.search.as_str()).count();
                 if matches == 0 {
                     return Err(patch_operation_error(
@@ -4777,7 +4803,42 @@ fn fs_transaction_request_with_preview(
 fn validate_fs_transaction_apply_guards(
     operation: &AutonomousFsTransactionOperation,
     output: &AutonomousToolOutput,
+    require_hashes: bool,
 ) -> CommandResult<()> {
+    if require_hashes {
+        match (&operation.action, output) {
+            (AutonomousFsTransactionAction::EditFile, AutonomousToolOutput::Edit(_))
+            | (AutonomousFsTransactionAction::EditFile, AutonomousToolOutput::Patch(_))
+            | (AutonomousFsTransactionAction::DeleteFile, AutonomousToolOutput::Delete(_))
+                if operation.expected_hash.is_none() =>
+            {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_fs_transaction_expected_hash_required",
+                    "Xero requires expectedHash from a current file read/hash before applying this transaction file operation.",
+                ));
+            }
+            (AutonomousFsTransactionAction::Rename, AutonomousToolOutput::Rename(output))
+                if output.source_kind == AutonomousStatKind::File
+                    && operation.expected_hash.is_none() =>
+            {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_fs_transaction_expected_hash_required",
+                    "Xero requires expectedHash from a current file read/hash before applying this transaction file operation.",
+                ));
+            }
+            (AutonomousFsTransactionAction::Copy, AutonomousToolOutput::Copy(output))
+                if output.source_kind == AutonomousStatKind::File
+                    && operation.expected_source_hash.is_none() =>
+            {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_fs_transaction_expected_source_hash_required",
+                    "Xero requires expectedSourceHash from a current file read/hash before applying this transaction file copy.",
+                ));
+            }
+            _ => {}
+        }
+    }
+
     match (&operation.action, output) {
         (AutonomousFsTransactionAction::DeleteDirectory, AutonomousToolOutput::Delete(output))
             if output.recursive && operation.expected_digest.is_none() =>
@@ -6694,22 +6755,31 @@ fn required_patch_field(value: Option<String>, field: &'static str) -> CommandRe
 fn validate_patch_expected_hash(
     operation: &NormalizedPatchOperation,
     current_bytes: &[u8],
+    require_hash: bool,
 ) -> CommandResult<()> {
-    let Some(expected_hash) = operation.expected_hash.as_deref() else {
-        return Ok(());
-    };
-    validate_sha256(expected_hash, "expectedHash")?;
     let actual = sha256_hex(current_bytes);
-    if actual != expected_hash.trim() {
-        return Err(CommandError::user_fixable(
-            "autonomous_tool_patch_expected_hash_mismatch",
-            format!(
-                "Xero refused patch operation #{} for `{}` because expectedHash `{}` no longer matches the current file hash `{actual}`.",
-                operation.operation_index + 1,
-                operation.display_path,
-                expected_hash.trim()
-            ),
-        ));
+    match operation.expected_hash.as_deref() {
+        Some(expected_hash) => {
+            validate_sha256(expected_hash, "expectedHash")?;
+            if actual != expected_hash.trim() {
+                return Err(stale_file_error(
+                    "patch",
+                    &operation.display_path,
+                    "expectedHash",
+                    expected_hash,
+                    &actual,
+                ));
+            }
+        }
+        None if require_hash => {
+            return Err(expected_hash_required_error(
+                "patch",
+                &operation.display_path,
+                "expectedHash",
+                &actual,
+            ));
+        }
+        None => {}
     }
     Ok(())
 }
@@ -6808,22 +6878,38 @@ fn single_file_field<T>(
 }
 
 fn validate_expected_hash_for_bytes(
+    operation: &str,
+    display_path: &str,
+    hash_field: &'static str,
     expected_hash: Option<&str>,
     current_bytes: &[u8],
-    error_code: &'static str,
-) -> CommandResult<()> {
-    let Some(expected_hash) = expected_hash else {
-        return Ok(());
-    };
-    validate_sha256(expected_hash, "expectedHash")?;
+    require_hash: bool,
+) -> CommandResult<String> {
     let actual = sha256_hex(current_bytes);
-    if actual != expected_hash.trim() {
-        return Err(CommandError::user_fixable(
-            error_code,
-            "Xero refused the file operation because expectedHash no longer matches the current file contents.",
-        ));
+    match expected_hash {
+        Some(expected_hash) => {
+            validate_sha256(expected_hash, hash_field)?;
+            if actual != expected_hash.trim() {
+                return Err(stale_file_error(
+                    operation,
+                    display_path,
+                    hash_field,
+                    expected_hash,
+                    &actual,
+                ));
+            }
+        }
+        None if require_hash => {
+            return Err(expected_hash_required_error(
+                operation,
+                display_path,
+                hash_field,
+                &actual,
+            ));
+        }
+        None => {}
     }
-    Ok(())
+    Ok(actual)
 }
 
 fn validate_sha256(value: &str, field: &'static str) -> CommandResult<()> {

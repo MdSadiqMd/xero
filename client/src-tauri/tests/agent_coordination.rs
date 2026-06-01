@@ -250,6 +250,43 @@ fn file_reservations_detect_overlap_expire_and_allow_explicit_override() {
 }
 
 #[test]
+fn file_reservations_capture_observed_file_hash() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (project_id, repo_root) = seed_project(&root);
+    fs::write(repo_root.join("src/lib.rs"), "pub fn demo() {}\n").expect("seed file");
+    seed_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+        "run-hash",
+    );
+
+    let claim = project_store::claim_agent_file_reservations(
+        &repo_root,
+        &project_store::ClaimAgentFileReservationRequest {
+            project_id: project_id.clone(),
+            owner_run_id: "run-hash".into(),
+            paths: vec!["src/lib.rs".into()],
+            operation: project_store::AgentCoordinationReservationOperation::Editing,
+            note: None,
+            override_reason: None,
+            claimed_at: "2026-05-03T00:00:00Z".into(),
+            lease_seconds: Some(300),
+        },
+    )
+    .expect("claim reservation");
+
+    assert_eq!(claim.claimed.len(), 1);
+    let reservation = &claim.claimed[0];
+    assert_eq!(reservation.path, "src/lib.rs");
+    assert_eq!(reservation.observed_hash.as_deref().map(str::len), Some(64));
+    assert_eq!(
+        reservation.observed_at.as_deref(),
+        Some("2026-05-03T00:00:00Z")
+    );
+}
+
+#[test]
 fn active_presence_and_reservations_are_cleaned_up_for_completed_runs() {
     let root = tempfile::tempdir().expect("temp dir");
     let (project_id, repo_root) = seed_project(&root);

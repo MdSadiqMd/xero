@@ -4260,7 +4260,7 @@ impl AgentWorkspaceGuard {
                         "agent_file_write_requires_observation",
                         CommandErrorClass::PolicyDenied,
                         format!(
-                            "Xero refused to modify `{path_key}` because the owned agent has not read this existing file during the run."
+                            "Xero refused to modify `{path_key}` because the owned agent has not read or hashed this existing file during the run. Read or hash the current file evidence, then retry with the current expected hash."
                         ),
                         false,
                     ));
@@ -4273,12 +4273,12 @@ impl AgentWorkspaceGuard {
                         old_hash: Some(current_hash.clone()),
                     });
                 }
-                (Some(_), Some(observed_hash)) => {
+                (Some(current_hash), Some(observed_hash)) => {
                     return Err(CommandError::new(
                         "agent_file_changed_since_observed",
                         CommandErrorClass::PolicyDenied,
                         format!(
-                            "Xero refused to modify `{path_key}` because the file changed after the owned agent last observed it (last observed hash: {}).",
+                            "Xero refused to modify `{path_key}` because the file changed after the owned agent last observed it (last observed hash: {}, current hash: {current_hash}). Re-read or re-hash the current file evidence before retrying.",
                             observed_hash.as_deref().unwrap_or("absent")
                         ),
                         false,
@@ -4330,6 +4330,15 @@ impl AgentWorkspaceGuard {
                 self.record_code_workspace_epoch(workspace_epoch);
             }
         }
+        if let AutonomousToolOutput::Command(output) = output {
+            if output.changed_files_truncated {
+                self.observed_hashes.clear();
+            } else {
+                for entry in &output.changed_files {
+                    self.invalidate_path_observation(&entry.path);
+                }
+            }
+        }
         for path in observed_paths_from_output(output) {
             self.record_path_observation(repo_root, &path)?;
         }
@@ -4346,6 +4355,14 @@ impl AgentWorkspaceGuard {
         let hash = file_hash_if_present(repo_root, &path_key)?;
         self.observed_hashes.insert(path_key, hash);
         Ok(())
+    }
+
+    fn invalidate_path_observation(&mut self, path: &str) {
+        let Some(path_key) = relative_path_key(path) else {
+            return;
+        };
+        self.observed_hashes
+            .retain(|observed_path, _| !paths_overlap(observed_path, &path_key));
     }
 
     fn record_persisted_output_observation(
@@ -4396,6 +4413,18 @@ impl AgentWorkspaceGuard {
                     }
                 }
             }
+            AutonomousToolOutput::NotebookEdit(output) => {
+                self.record_persisted_path_hash(output.path.as_str(), Some(&output.new_hash));
+            }
+            AutonomousToolOutput::Command(output) => {
+                if output.changed_files_truncated {
+                    self.observed_hashes.clear();
+                } else {
+                    for entry in &output.changed_files {
+                        self.invalidate_path_observation(&entry.path);
+                    }
+                }
+            }
             AutonomousToolOutput::AgentCoordination(output) => {
                 if let Some(workspace_epoch) = output.code_workspace_epoch {
                     self.record_code_workspace_epoch(workspace_epoch);
@@ -4420,6 +4449,10 @@ fn path_is_inside_subagent_write_set(path: &str, owned: &str) -> bool {
         || path
             .strip_prefix(owned)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn paths_overlap(left: &str, right: &str) -> bool {
+    path_is_inside_subagent_write_set(left, right) || path_is_inside_subagent_write_set(right, left)
 }
 
 fn planned_file_change_paths(request: &AutonomousToolRequest) -> Vec<&str> {
@@ -4698,11 +4731,16 @@ mod tests {
     use crate::db::project_store::{
         AgentEventRecord, AgentFileChangeRecord, AgentRunRecord, AgentToolCallRecord,
     };
-    use crate::runtime::{
-        AutonomousAgentCoordinationAction, AutonomousAgentCoordinationOutput, AutonomousLineEnding,
-        AutonomousPatchOperation, AutonomousPatchRequest, AutonomousReadContentKind,
-        AutonomousReadOutput, AutonomousSearchMatch, AutonomousSearchOmissions,
-        AutonomousSearchOutput, AutonomousStatKind, FakeProviderAdapter,
+    use crate::{
+        commands::{RepositoryStatusEntryDto, RuntimeRunApprovalModeDto},
+        runtime::{
+            AutonomousAgentCoordinationAction, AutonomousAgentCoordinationOutput,
+            AutonomousCommandOutput, AutonomousCommandPolicyOutcome,
+            AutonomousCommandPolicyProfile, AutonomousCommandPolicyTrace, AutonomousLineEnding,
+            AutonomousPatchOperation, AutonomousPatchRequest, AutonomousReadContentKind,
+            AutonomousReadOutput, AutonomousSearchMatch, AutonomousSearchOmissions,
+            AutonomousSearchOutput, AutonomousStatKind, FakeProviderAdapter,
+        },
     };
     use crate::{db, git::repository::CanonicalRepository, state::DesktopState};
     use tempfile::tempdir;
@@ -5493,6 +5531,77 @@ Repository map captured.
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0].path, "src/lib.rs");
         assert!(observations[0].old_hash.is_some());
+    }
+
+    #[test]
+    fn command_changed_files_invalidate_observed_hashes() {
+        let tempdir = tempdir().expect("tempdir");
+        let root = tempdir.path();
+        fs::create_dir_all(root.join("src")).expect("src");
+        fs::write(root.join("src/lib.rs"), "fn before() {}\n").expect("source");
+
+        let mut guard = AgentWorkspaceGuard::default();
+        guard
+            .record_path_observation(root, "src/lib.rs")
+            .expect("record observation");
+        guard
+            .record_tool_output(
+                root,
+                &AutonomousToolOutput::Command(AutonomousCommandOutput {
+                    argv: vec![
+                        "sh".into(),
+                        "-c".into(),
+                        "printf changed > src/lib.rs".into(),
+                    ],
+                    cwd: ".".into(),
+                    intent: "simulate command mutation".into(),
+                    stdout: Some(String::new()),
+                    stderr: Some(String::new()),
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    stdout_redacted: false,
+                    stderr_redacted: false,
+                    exit_code: Some(0),
+                    timed_out: false,
+                    spawned: false,
+                    preview_token: None,
+                    policy: AutonomousCommandPolicyTrace {
+                        outcome: AutonomousCommandPolicyOutcome::Allowed,
+                        approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                        profile: AutonomousCommandPolicyProfile::GeneralExecution,
+                        code: "test".into(),
+                        reason: "test".into(),
+                    },
+                    changed_files: vec![RepositoryStatusEntryDto {
+                        path: "src/lib.rs".into(),
+                        staged: None,
+                        unstaged: None,
+                        untracked: true,
+                    }],
+                    changed_files_truncated: false,
+                    output_artifact: None,
+                    suggested_next_actions: Vec::new(),
+                    host_command_impact: None,
+                    sandbox: None,
+                }),
+            )
+            .expect("record command output");
+
+        let error = guard
+            .validate_write_intent(
+                root,
+                &AutonomousToolRequest::Write(crate::runtime::AutonomousWriteRequest {
+                    path: "src/lib.rs".into(),
+                    content: "after\n".into(),
+                    expected_hash: None,
+                    create_only: false,
+                    overwrite: Some(true),
+                    preview: false,
+                }),
+                false,
+            )
+            .expect_err("command mutation should invalidate prior observation");
+        assert_eq!(error.code, "agent_file_write_requires_observation");
     }
 
     #[test]

@@ -190,4 +190,6 @@ const INTERRUPTED_TOOL_CALL_CODE: &str = "agent_tool_call_interrupted";
 const RERUNNABLE_APPROVED_TOOL_ERROR_CODES: &[&str] = &[
     "agent_file_write_requires_observation",
     "agent_file_changed_since_observed",
+    "autonomous_tool_stale_file",
+    "autonomous_tool_expected_hash_required",
 ];

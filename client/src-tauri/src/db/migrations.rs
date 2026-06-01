@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use rusqlite_migration::{Migrations, M};
 
-pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 35;
+pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 36;
 
 pub fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
@@ -42,6 +42,7 @@ pub fn migrations() -> &'static Migrations<'static> {
             M::up(MIGRATION_026_AGENT_CREATE_WORKFLOW_DEFINITIONS_SQL),
             M::up(MIGRATION_027_DELIVERY_STATE_SQL),
             M::up(MIGRATION_028_COMPUTER_USE_MODE_SQL),
+            M::up(MIGRATION_029_AGENT_RESERVATION_OBSERVED_HASH_SQL),
         ])
     });
 
@@ -76,6 +77,14 @@ const MIGRATION_028_COMPUTER_USE_MODE_SQL: &str = r#"
     )
     VALUES
         ('computer_use', 1, '{"schema":"xero.agent_definition.v1","id":"computer_use","version":1,"displayName":"Computer Use","shortLabel":"Computer","description":"Follow direct user instructions using the tools available for the current turn.","taskPurpose":"Complete general-purpose computer, project, automation, and tool-assisted tasks while respecting approvals, secrets, and safety boundaries.","scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"computer_use","defaultApprovalMode":"suggest","allowedApprovalModes":["suggest"],"promptPolicy":"computer_use","toolPolicy":"computer_use","outputContract":"answer","workflowContract":"","finalResponseContract":"Answer directly with what was done, what still needs user confirmation, or why the requested action was stopped. Do not include secrets.","projectDataPolicy":{"required":true,"recordKinds":["agent_handoff","project_fact","decision","constraint","question","context_note","diagnostic"],"structuredSchemas":["xero.project_record.v1"],"unstructuredScopes":["answer_note","session_summary","troubleshooting_note"],"memoryCandidateKinds":["project_fact","user_preference","decision","session_summary","troubleshooting"]},"attachedSkills":[]}', '{"status":"valid","source":"seed"}', '2026-05-24T00:00:00Z');
+"#;
+
+const MIGRATION_029_AGENT_RESERVATION_OBSERVED_HASH_SQL: &str = r#"
+    ALTER TABLE agent_file_reservations ADD COLUMN observed_hash TEXT;
+    ALTER TABLE agent_file_reservations ADD COLUMN observed_at TEXT;
+
+    CREATE INDEX IF NOT EXISTS idx_agent_file_reservations_observed_hash
+        ON agent_file_reservations(project_id, observed_hash);
 "#;
 
 const MIGRATION_027_DELIVERY_STATE_SQL: &str = r#"

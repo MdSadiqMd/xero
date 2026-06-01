@@ -747,7 +747,7 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
         RuntimeAgentIdDto::Engineer => [
             "You are Xero's Engineer agent. Work directly in the imported repository, use tools for filesystem and command work, record evidence, and stop only when the task is done or a configured safety boundary requires user input.",
             "",
-            "Operate like a production coding agent: inspect before editing, respect a dirty worktree, keep changes scoped, prefer `rg` for search, run focused verification when behavior changes, and summarize concrete evidence before completion. File-write tools enforce current-run observation and stale-write preconditions.",
+            "Operate like a production coding agent: inspect before editing, respect a dirty worktree, keep changes scoped, prefer `rg` for search, run focused verification when behavior changes, and summarize concrete evidence before completion. Existing-file mutations require current file evidence: use read/file_hash and pass the current expectedHash (or expectedSourceHash for copy sources) before edit, write-overwrite, patch, structured edit, notebook_edit, delete, rename, copy, or fs_transaction apply. If a tool returns autonomous_tool_stale_file or autonomous_tool_expected_hash_required, re-read or re-hash the current file before retrying; do not reuse stale evidence.",
             "",
             "Persistence and retrieval contract: Xero persists a context manifest before provider turns and keeps durable project context behind the `project_context` tool instead of preloading raw memory or project records. Use `project_context` to read context before prior-work-sensitive tasks involving previous work, decisions, constraints, known failures, or previous runs. Use it to record/update context after durable findings, file changes, verification, blockers, corrections, and handoff-ready summaries.",
             "",
@@ -3611,7 +3611,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                     ),
                     (
                         "expectedHash",
-                        sha256_schema("Optional lowercase SHA-256 expected current file hash."),
+                        sha256_schema("Required lowercase SHA-256 expected current file hash for owned-agent applies; obtain it from read or file_hash."),
                     ),
                     (
                         "startLineHash",
@@ -3649,7 +3649,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                     (
                         "expectedHash",
                         sha256_schema(
-                            "Optional lowercase SHA-256 expected current file hash when replacing an existing file.",
+                            "Required lowercase SHA-256 expected current file hash when an owned agent replaces an existing file.",
                         ),
                     ),
                     (
@@ -3702,7 +3702,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                     ),
                     (
                         "expectedSourceHash",
-                        sha256_schema("Optional lowercase SHA-256 expected source file hash."),
+                        sha256_schema("Required lowercase SHA-256 expected source file hash for owned-agent file copy applies."),
                     ),
                     (
                         "expectedSourceDigest",
@@ -3769,8 +3769,8 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                                     "replace": { "type": "string", "description": "Replacement text for search/replace edit_file operations." },
                                     "replaceAll": boolean_schema("Replace all search matches for search/replace edit_file operations."),
                                     "recursive": boolean_schema("Required for copy directory operations."),
-                                    "expectedHash": sha256_schema("Lowercase SHA-256 guard for file replace, edit, delete, or rename source operations."),
-                                    "expectedSourceHash": sha256_schema("Lowercase SHA-256 guard for copy file sources."),
+                                    "expectedHash": sha256_schema("Required lowercase SHA-256 guard for owned-agent file replace, edit, delete, or rename source operations."),
+                                    "expectedSourceHash": sha256_schema("Required lowercase SHA-256 guard for owned-agent copy file sources."),
                                     "expectedSourceDigest": sha256_schema("Lowercase SHA-256 guard from a copy directory transaction preview."),
                                     "expectedTargetHash": sha256_schema("Lowercase SHA-256 guard for overwrite targets."),
                                     "expectedDigest": sha256_schema("Lowercase SHA-256 guard from a delete_directory transaction preview."),
@@ -3828,7 +3828,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                     ),
                     (
                         "expectedHash",
-                        sha256_schema("Optional lowercase SHA-256 expected file hash."),
+                        sha256_schema("Required lowercase SHA-256 expected file hash for owned-agent file deletes."),
                     ),
                     (
                         "expectedDigest",
@@ -3865,7 +3865,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                     ),
                     (
                         "expectedHash",
-                        sha256_schema("Optional lowercase SHA-256 expected source file hash."),
+                        sha256_schema("Required lowercase SHA-256 expected source file hash for owned-agent file renames."),
                     ),
                     (
                         "expectedTargetHash",
@@ -4380,14 +4380,18 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
         ),
         descriptor(
             AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
-            "Edit a Jupyter notebook cell source by cell index.",
+            "Edit a Jupyter notebook cell source by cell index with expected-hash protection.",
             object_schema(
-                &["path", "cellIndex", "replacementSource"],
+                &["path", "cellIndex", "expectedHash", "replacementSource"],
                 &[
                     ("path", string_schema("Repo-relative .ipynb path.")),
                     (
                         "cellIndex",
                         integer_schema("Zero-based notebook cell index."),
+                    ),
+                    (
+                        "expectedHash",
+                        sha256_schema("Required lowercase SHA-256 expected current notebook file hash from read or file_hash."),
                     ),
                     (
                         "expectedSource",
@@ -4904,7 +4908,7 @@ fn patch_schema() -> JsonValue {
             "search": string_schema("Exact current text to replace."),
             "replace": string_schema("Replacement text."),
             "replaceAll": boolean_schema("Replace every match instead of exactly one match."),
-            "expectedHash": sha256_schema("Optional lowercase SHA-256 expected current file hash for this file before any patch operations run.")
+            "expectedHash": sha256_schema("Required lowercase SHA-256 expected current file hash for owned-agent applies; repeat it on every operation for this file.")
         }
     });
 
@@ -4929,7 +4933,7 @@ fn patch_schema() -> JsonValue {
                     ),
                     (
                         "expectedHash",
-                        sha256_schema("Optional lowercase SHA-256 expected current file hash."),
+                        sha256_schema("Required lowercase SHA-256 expected current file hash for owned-agent applies."),
                     ),
                     (
                         "preview",
@@ -5003,7 +5007,7 @@ fn structured_edit_schema(format_name: &str) -> JsonValue {
             ),
             (
                 "expectedHash",
-                sha256_schema("Optional lowercase SHA-256 expected current file hash."),
+                sha256_schema("Required lowercase SHA-256 expected current file hash for owned-agent applies."),
             ),
             (
                 "formattingMode",

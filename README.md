@@ -379,6 +379,8 @@ Use `--json` on batch commands for scriptable output, and `--app-data-dir PATH` 
 
 The agent TUI parity matrix lives in `docs/agent-tui-parity.md`. Desktop-only browser viewport, emulator live panes, graphical canvas gestures, window chrome, and microphone dictation remain explicit exclusions; renderer-independent workflows are exposed through terminal-native panes or CLI commands.
 
+Owned-agent file mutations use stale-file protection: agents must observe existing files and pass current SHA-256 guards before writing, while command mutations invalidate prior observations. See `docs/agent-stale-file-protection.md` for the mutation-path inventory and retry contract.
+
 Scoped verification for harness work:
 
 ```bash
