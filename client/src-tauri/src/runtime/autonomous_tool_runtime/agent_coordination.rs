@@ -356,6 +356,12 @@ impl AutonomousToolRuntime {
                     &now,
                     request.limit.unwrap_or(25),
                 )?;
+                project_store::record_agent_mailbox_inbox_check(
+                    self.repo_root(),
+                    &run_context.project_id,
+                    &run_context.run_id,
+                    &now,
+                )?;
                 Ok(AutonomousAgentCoordinationOutput {
                     action: request.action,
                     message: format!("Found {} temporary mailbox item(s).", mailbox.len()),

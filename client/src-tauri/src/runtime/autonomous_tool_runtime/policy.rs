@@ -17,11 +17,16 @@ use super::{
     AUTONOMOUS_TOOL_COMMAND_PROBE, AUTONOMOUS_TOOL_COMMAND_VERIFY, AUTONOMOUS_TOOL_HOST_COMMAND,
     DEFAULT_COMMAND_TIMEOUT_MS,
 };
-use crate::commands::{
-    validate_non_empty, CommandError, CommandErrorClass, CommandResult, RuntimeRunApprovalModeDto,
-};
 use crate::runtime::redaction::{
     find_prohibited_persistence_content, is_sensitive_argument_name, render_command_for_persistence,
+};
+use crate::{
+    auth::now_timestamp,
+    commands::{
+        validate_non_empty, CommandError, CommandErrorClass, CommandResult,
+        RuntimeRunApprovalModeDto,
+    },
+    db::project_store,
 };
 use serde_json::Value as JsonValue;
 
@@ -126,6 +131,17 @@ impl AutonomousToolRuntime {
             ));
         }
 
+        if request_requires_mailbox_check(self, tool_name, request)? {
+            if let Some((code, explanation)) = mailbox_check_policy_denial(self)? {
+                return Ok(safety_decision(
+                    AutonomousSafetyPolicyAction::Deny,
+                    code,
+                    explanation,
+                    &context,
+                ));
+            }
+        }
+
         let command_decision = command_family_policy_decision(self, tool_name, request)?;
         if let Some((action, code, explanation)) = command_decision {
             return Ok(safety_decision(action, code, explanation, &context));
@@ -146,6 +162,24 @@ impl AutonomousToolRuntime {
             "Xero allowed the tool call after central safety policy evaluation.",
             &context,
         ))
+    }
+
+    pub(super) fn enforce_mailbox_check_before_mutation(
+        &self,
+        tool_name: &str,
+        request: &AutonomousToolRequest,
+    ) -> CommandResult<()> {
+        if request_requires_mailbox_check(self, tool_name, request)? {
+            if let Some((code, explanation)) = mailbox_check_policy_denial(self)? {
+                return Err(CommandError::new(
+                    code,
+                    CommandErrorClass::PolicyDenied,
+                    explanation,
+                    false,
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn prepare_command_request(
@@ -675,6 +709,121 @@ fn project_context_action_is_read(action: AutonomousProjectContextAction) -> boo
             | AutonomousProjectContextAction::ListOpenQuestionsBlockers
             | AutonomousProjectContextAction::ExplainCurrentContextPackage
     )
+}
+
+fn request_requires_mailbox_check(
+    runtime: &AutonomousToolRuntime,
+    tool_name: &str,
+    request: &AutonomousToolRequest,
+) -> CommandResult<bool> {
+    if repository_write_request(request) {
+        return Ok(true);
+    }
+
+    let command_request = match request {
+        AutonomousToolRequest::Command(request) => Some(request.clone()),
+        AutonomousToolRequest::CommandSessionStart(request) => Some(AutonomousCommandRequest {
+            argv: request.argv.clone(),
+            cwd: request.cwd.clone(),
+            timeout_ms: request.timeout_ms,
+        }),
+        AutonomousToolRequest::PowerShell(request) => Some(AutonomousCommandRequest {
+            argv: vec![
+                if cfg!(target_os = "windows") {
+                    "powershell.exe".into()
+                } else {
+                    "pwsh".into()
+                },
+                "-NoLogo".into(),
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                request.script.clone(),
+            ],
+            cwd: request.cwd.clone(),
+            timeout_ms: request.timeout_ms,
+        }),
+        _ => None,
+    };
+
+    let Some(command_request) = command_request else {
+        return Ok(false);
+    };
+    let prepared = runtime.prepare_command_request(command_request)?;
+    let profile = match classify_command(&prepared) {
+        CommandClassification::Safe { profile, .. } => profile,
+        CommandClassification::Escalated { profile, .. } => profile,
+    };
+    if matches!(
+        profile,
+        AutonomousCommandPolicyProfile::ReadOnlyVerification
+    ) {
+        return Ok(false);
+    }
+    if let Some(policy) = command_tool_scope_escalation(
+        tool_name,
+        &prepared,
+        &policy_trace(
+            AutonomousCommandPolicyOutcome::Allowed,
+            RuntimeRunApprovalModeDto::Yolo,
+            profile,
+            "mailbox_gate_command_scope_probe",
+            "Classified command for mailbox mutation gating.",
+        ),
+    ) {
+        return Ok(policy.profile != AutonomousCommandPolicyProfile::ReadOnlyVerification);
+    }
+    Ok(true)
+}
+
+fn repository_write_request(request: &AutonomousToolRequest) -> bool {
+    matches!(
+        request,
+        AutonomousToolRequest::Edit(_)
+            | AutonomousToolRequest::Write(_)
+            | AutonomousToolRequest::Patch(_)
+            | AutonomousToolRequest::Copy(_)
+            | AutonomousToolRequest::FsTransaction(_)
+            | AutonomousToolRequest::JsonEdit(_)
+            | AutonomousToolRequest::TomlEdit(_)
+            | AutonomousToolRequest::YamlEdit(_)
+            | AutonomousToolRequest::Delete(_)
+            | AutonomousToolRequest::Rename(_)
+            | AutonomousToolRequest::Mkdir(_)
+            | AutonomousToolRequest::NotebookEdit(_)
+    )
+}
+
+fn mailbox_check_policy_denial(
+    runtime: &AutonomousToolRuntime,
+) -> CommandResult<Option<(&'static str, String)>> {
+    let Some(run_context) = runtime.agent_run_context() else {
+        return Ok(None);
+    };
+    let now = now_timestamp();
+    let status = project_store::agent_mailbox_mutation_gate_status(
+        runtime.repo_root(),
+        &run_context.project_id,
+        &run_context.run_id,
+        &now,
+    )?;
+    if !status.requires_mailbox_check() {
+        return Ok(None);
+    }
+
+    let freshness = match status.checked_at.as_deref() {
+        Some(checked_at) => format!(
+            "the last mailbox check at {checked_at} is stale for the current coordination state"
+        ),
+        None => "this run has not checked its mailbox for the current coordination state".into(),
+    };
+    Ok(Some((
+        "policy_requires_mailbox_check_before_mutation",
+        format!(
+            "Xero denied this project-changing mutation because {freshness} while {} same-project sibling run(s) are active. Call `agent_coordination` with action `read_inbox`, review the temporary mailbox, then retry the mutation.",
+            status.active_sibling_count
+        ),
+    )))
 }
 
 fn browser_action_is_observe(action: &AutonomousBrowserAction) -> bool {

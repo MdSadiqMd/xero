@@ -4895,6 +4895,7 @@ impl AutonomousToolRuntime {
         self.consume_delegated_tool_call_budget()?;
         let tool_name = request.tool_name();
         self.enforce_agent_workflow_before_tool(tool_name)?;
+        self.enforce_mailbox_check_before_mutation(tool_name, &request)?;
         let result = self.execute_without_workflow(request);
         self.record_agent_workflow_after_tool(tool_name, result.is_ok())?;
         result
@@ -5103,6 +5104,7 @@ impl AutonomousToolRuntime {
         self.check_cancelled()?;
         let tool_name = request.tool_name();
         self.enforce_agent_workflow_before_tool(tool_name)?;
+        self.enforce_mailbox_check_before_mutation(tool_name, &request)?;
         let result = match request {
             AutonomousToolRequest::Read(request) => self.read_with_operator_approval(request),
             AutonomousToolRequest::Command(request) => self.command_with_operator_approval(request),

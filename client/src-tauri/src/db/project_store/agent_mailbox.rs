@@ -204,6 +204,36 @@ struct AgentMailboxActor {
     role: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentMailboxInboxCheckRecord {
+    pub project_id: String,
+    pub agent_session_id: String,
+    pub run_id: String,
+    pub checked_at: String,
+    pub latest_relevant_item_rowid: i64,
+    pub relevant_item_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentMailboxMutationGateStatus {
+    pub active_sibling_count: usize,
+    pub checked_at: Option<String>,
+    pub latest_relevant_item_rowid: i64,
+    pub checked_relevant_item_rowid: Option<i64>,
+    pub relevant_item_count: usize,
+}
+
+impl AgentMailboxMutationGateStatus {
+    pub fn requires_mailbox_check(&self) -> bool {
+        self.active_sibling_count > 0
+            && self
+                .checked_relevant_item_rowid
+                .is_none_or(|checked_rowid| checked_rowid < self.latest_relevant_item_rowid)
+    }
+}
+
 pub fn publish_agent_mailbox_item(
     repo_root: &Path,
     record: &NewAgentMailboxItemRecord,
@@ -681,6 +711,116 @@ pub fn active_agent_mailbox_context(
     )
 }
 
+pub fn record_agent_mailbox_inbox_check(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    checked_at: &str,
+) -> CommandResult<AgentMailboxInboxCheckRecord> {
+    validate_non_empty_text(project_id, "projectId", "agent_mailbox_check_invalid")?;
+    validate_non_empty_text(run_id, "runId", "agent_mailbox_check_invalid")?;
+    validate_non_empty_text(checked_at, "checkedAt", "agent_mailbox_check_invalid")?;
+    cleanup_expired_agent_mailbox(repo_root, project_id, checked_at)?;
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    let actor = require_mailbox_actor_for_run(&connection, repo_root, project_id, run_id)?;
+    let high_watermark = relevant_mailbox_high_watermark(
+        &connection,
+        &database_path,
+        &actor,
+        project_id,
+        run_id,
+        checked_at,
+    )?;
+    connection
+        .execute(
+            r#"
+            INSERT INTO agent_mailbox_inbox_checks (
+                project_id,
+                agent_session_id,
+                run_id,
+                checked_at,
+                latest_relevant_item_rowid,
+                relevant_item_count
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(project_id, run_id) DO UPDATE SET
+                agent_session_id = excluded.agent_session_id,
+                checked_at = excluded.checked_at,
+                latest_relevant_item_rowid = excluded.latest_relevant_item_rowid,
+                relevant_item_count = excluded.relevant_item_count
+            "#,
+            params![
+                project_id,
+                actor.agent_session_id,
+                run_id,
+                checked_at,
+                high_watermark.latest_relevant_item_rowid,
+                high_watermark.relevant_item_count as i64,
+            ],
+        )
+        .map_err(|error| {
+            map_mailbox_write_error(&database_path, "agent_mailbox_check_upsert_failed", error)
+        })?;
+    Ok(AgentMailboxInboxCheckRecord {
+        project_id: project_id.to_owned(),
+        agent_session_id: actor.agent_session_id,
+        run_id: run_id.to_owned(),
+        checked_at: checked_at.to_owned(),
+        latest_relevant_item_rowid: high_watermark.latest_relevant_item_rowid,
+        relevant_item_count: high_watermark.relevant_item_count,
+    })
+}
+
+pub fn agent_mailbox_mutation_gate_status(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    now: &str,
+) -> CommandResult<AgentMailboxMutationGateStatus> {
+    validate_non_empty_text(project_id, "projectId", "agent_mailbox_gate_invalid")?;
+    validate_non_empty_text(run_id, "runId", "agent_mailbox_gate_invalid")?;
+    validate_non_empty_text(now, "now", "agent_mailbox_gate_invalid")?;
+    let active_sibling_count = super::list_active_agent_coordination_presence(
+        repo_root,
+        project_id,
+        Some(run_id),
+        now,
+        1_000,
+    )?
+    .len();
+    if active_sibling_count == 0 {
+        return Ok(AgentMailboxMutationGateStatus {
+            active_sibling_count,
+            checked_at: None,
+            latest_relevant_item_rowid: 0,
+            checked_relevant_item_rowid: None,
+            relevant_item_count: 0,
+        });
+    }
+
+    cleanup_expired_agent_mailbox(repo_root, project_id, now)?;
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    let actor = require_mailbox_actor_for_run(&connection, repo_root, project_id, run_id)?;
+    let high_watermark = relevant_mailbox_high_watermark(
+        &connection,
+        &database_path,
+        &actor,
+        project_id,
+        run_id,
+        now,
+    )?;
+    let check = read_agent_mailbox_inbox_check(&connection, &database_path, project_id, run_id)?;
+    Ok(AgentMailboxMutationGateStatus {
+        active_sibling_count,
+        checked_at: check.as_ref().map(|record| record.checked_at.clone()),
+        latest_relevant_item_rowid: high_watermark.latest_relevant_item_rowid,
+        checked_relevant_item_rowid: check.map(|record| record.latest_relevant_item_rowid),
+        relevant_item_count: high_watermark.relevant_item_count,
+    })
+}
+
 pub fn cleanup_expired_agent_mailbox(
     repo_root: &Path,
     project_id: &str,
@@ -918,6 +1058,98 @@ fn require_mailbox_actor_for_run(
             ),
         )
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RelevantMailboxHighWatermark {
+    latest_relevant_item_rowid: i64,
+    relevant_item_count: usize,
+}
+
+fn relevant_mailbox_high_watermark(
+    connection: &Connection,
+    database_path: &Path,
+    actor: &AgentMailboxActor,
+    project_id: &str,
+    run_id: &str,
+    now: &str,
+) -> CommandResult<RelevantMailboxHighWatermark> {
+    connection
+        .query_row(
+            r#"
+            SELECT
+                COALESCE(MAX(rowid), 0),
+                COUNT(*)
+            FROM agent_mailbox_items
+            WHERE project_id = ?1
+              AND expires_at > ?2
+              AND status = 'open'
+              AND sender_run_id <> ?3
+              AND (target_run_id IS NULL OR target_run_id = ?3)
+              AND (target_agent_session_id IS NULL OR target_agent_session_id = ?4)
+              AND (target_role IS NULL OR target_role = ?5)
+            "#,
+            params![
+                project_id,
+                now,
+                run_id,
+                actor.agent_session_id,
+                actor.role.as_deref(),
+            ],
+            |row| {
+                let count: i64 = row.get(1)?;
+                Ok(RelevantMailboxHighWatermark {
+                    latest_relevant_item_rowid: row.get(0)?,
+                    relevant_item_count: count.max(0) as usize,
+                })
+            },
+        )
+        .map_err(|error| {
+            map_mailbox_query_error(
+                &database_path,
+                "agent_mailbox_high_watermark_read_failed",
+                error,
+            )
+        })
+}
+
+fn read_agent_mailbox_inbox_check(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> CommandResult<Option<AgentMailboxInboxCheckRecord>> {
+    connection
+        .query_row(
+            r#"
+            SELECT
+                project_id,
+                agent_session_id,
+                run_id,
+                checked_at,
+                latest_relevant_item_rowid,
+                relevant_item_count
+            FROM agent_mailbox_inbox_checks
+            WHERE project_id = ?1
+              AND run_id = ?2
+            "#,
+            params![project_id, run_id],
+            |row| {
+                let relevant_item_count: i64 = row.get(5)?;
+                Ok(AgentMailboxInboxCheckRecord {
+                    project_id: row.get(0)?,
+                    agent_session_id: row.get(1)?,
+                    run_id: row.get(2)?,
+                    checked_at: row.get(3)?,
+                    latest_relevant_item_rowid: row.get(4)?,
+                    relevant_item_count: relevant_item_count.max(0) as usize,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| {
+            map_mailbox_query_error(&database_path, "agent_mailbox_check_read_failed", error)
+        })
 }
 
 fn read_agent_mailbox_item(
