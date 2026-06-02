@@ -24,6 +24,11 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { BaseAlertDialog, BaseDialog } from "@xero/ui/components/base-dialog"
+import {
+  ModelThinkingSelect,
+  type ModelThinkingSelectGroup,
+  type ModelThinkingSelectOption,
+} from "@xero/ui/components/model-thinking-select"
 
 import { cn } from "@/lib/utils"
 import { useDeferredFilterQuery } from "@/lib/input-priority"
@@ -37,15 +42,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarOpenMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import {
@@ -1456,17 +1452,35 @@ function AgentDefaultModelDialog({
     )
   }, [agent, modelOptions, selectionKey])
 
-  const groupedOptions = useMemo(() => {
-    const groups = new Map<string, ComposerModelOptionView[]>()
+  const modelGroups = useMemo<ModelThinkingSelectGroup[]>(() => {
+    const groups = new Map<string, ModelThinkingSelectOption[]>()
     for (const option of modelOptions) {
       const list = groups.get(option.providerLabel) ?? []
-      list.push(option)
+      list.push({ id: option.selectionKey, label: option.displayName })
       groups.set(option.providerLabel, list)
     }
-    return Array.from(groups.entries())
+    return [
+      {
+        id: "default",
+        options: [{ id: INHERIT_MODEL_VALUE, label: "Use provider default" }],
+      },
+      ...Array.from(groups.entries()).map(([providerLabel, options]) => ({
+        id: providerLabel,
+        label: providerLabel,
+        options,
+      })),
+    ]
   }, [modelOptions])
 
   const thinkingOptions = selectedModel?.thinkingEffortOptions ?? []
+  const thinkingSelectOptions = useMemo<ModelThinkingSelectOption[]>(
+    () =>
+      thinkingOptions.map((effort) => ({
+        id: effort,
+        label: formatThinkingEffort(effort),
+      })),
+    [thinkingOptions],
+  )
 
   useEffect(() => {
     if (!selectedModel) {
@@ -1533,54 +1547,26 @@ function AgentDefaultModelDialog({
 
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="agent-default-model-select">Model</Label>
-            <Select
+            <Label>Model</Label>
+            <ModelThinkingSelect
+              ariaLabel="Model"
               value={selectionKey}
-              onValueChange={(value) => setSelectionKey(value)}
+              onChange={(value) => setSelectionKey(value)}
+              groups={modelGroups}
               disabled={saving || !hasModels}
-            >
-              <SelectTrigger id="agent-default-model-select" className="w-full">
-                <SelectValue placeholder={hasModels ? "Select model" : "No models available"} />
-              </SelectTrigger>
-              <SelectContent className="max-h-[320px]">
-                <SelectItem value={INHERIT_MODEL_VALUE}>Use provider default</SelectItem>
-                {groupedOptions.map(([providerLabel, options]) => (
-                  <SelectGroup key={providerLabel}>
-                    <SelectLabel>{providerLabel}</SelectLabel>
-                    {options.map((option) => (
-                      <SelectItem key={option.selectionKey} value={option.selectionKey}>
-                        {option.displayName}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                ))}
-              </SelectContent>
-            </Select>
+              onThinkingChange={(value) =>
+                setThinkingEffort(value as ProviderModelThinkingEffortDto)
+              }
+              placeholder={hasModels ? "Select model" : "No models available"}
+              selectedThinkingId={
+                thinkingEffort ?? selectedModel?.defaultThinkingEffort ?? thinkingOptions[0] ?? null
+              }
+              thinkingDisabled={saving || thinkingOptions.length === 0}
+              thinkingOptions={thinkingSelectOptions}
+              thinkingPlaceholder={selectedModel ? "Thinking unavailable" : "Choose model"}
+              variant="field"
+            />
           </div>
-
-          {thinkingOptions.length > 0 ? (
-            <div className="grid gap-2">
-              <Label htmlFor="agent-default-thinking-select">Thinking effort</Label>
-              <Select
-                value={thinkingEffort ?? selectedModel?.defaultThinkingEffort ?? thinkingOptions[0]}
-                onValueChange={(value) =>
-                  setThinkingEffort(value as ProviderModelThinkingEffortDto)
-                }
-                disabled={saving}
-              >
-                <SelectTrigger id="agent-default-thinking-select" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {thinkingOptions.map((effort) => (
-                    <SelectItem key={effort} value={effort}>
-                      {formatThinkingEffort(effort)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
 
           {error ? (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12px] text-destructive">

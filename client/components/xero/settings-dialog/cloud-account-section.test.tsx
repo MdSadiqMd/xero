@@ -22,6 +22,15 @@ const linkedDevice = {
   userAgent: null,
 }
 
+const desktopDevice = {
+  id: "device-desktop",
+  kind: "desktop",
+  name: "Xero Desktop",
+  lastSeen: "2026-05-31T12:10:00Z",
+  revokedAt: null,
+  userAgent: null,
+}
+
 describe("CloudAccountSection", () => {
   beforeEach(() => {
     isTauriMock.mockReset()
@@ -32,7 +41,7 @@ describe("CloudAccountSection", () => {
         return Promise.resolve({
           signedIn: true,
           account: { githubLogin: "sn0w" },
-          devices: [linkedDevice],
+          devices: [desktopDevice, linkedDevice],
           devicesError: null,
         })
       }
@@ -60,6 +69,14 @@ describe("CloudAccountSection", () => {
         request: { deviceId: "device-web" },
       }),
     )
+  })
+
+  it("hides the current desktop app and only shows cloud web connections", async () => {
+    render(<CloudAccountSection />)
+
+    expect(await screen.findByText("Xero Web")).toBeVisible()
+    expect(screen.queryByText("Xero Desktop")).not.toBeInTheDocument()
+    expect(screen.queryByText("Desktop")).not.toBeInTheDocument()
   })
 
   it("clears the unlink confirmation when the pointer leaves the button", async () => {

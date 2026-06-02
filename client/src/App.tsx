@@ -5573,7 +5573,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 }}
                 resolveSuggestRequest={resolveProjectRunnerSuggestRequest}
                 onSuggest={handleSuggestProjectStartTargets}
-                modelOptions={projectRunnerModelOptions}
               />
             ) : null}
           </Suspense>

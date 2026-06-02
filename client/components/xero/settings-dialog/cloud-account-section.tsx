@@ -47,7 +47,11 @@ export function CloudAccountSection() {
       const response = await invoke<BridgeStatusResponse>("bridge_status")
       setSignedIn(Boolean(response.signedIn))
       setAccount(response.account ?? null)
-      setDevices((response.devices ?? []).filter((device) => !device.revokedAt))
+      setDevices(
+        (response.devices ?? []).filter(
+          (device) => device.kind === "web" && !device.revokedAt,
+        ),
+      )
       setError(response.devicesError?.trim() || null)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -82,7 +86,7 @@ export function CloudAccountSection() {
     <div className="flex flex-col gap-7">
       <SectionHeader
         title="Cloud account"
-        description="Manage the desktops and browsers linked to your GitHub account. Linked browsers can drive non-archived sessions from signed-in desktops."
+        description="Manage cloud-app browser connections linked to your GitHub account. Linked browsers can drive non-archived sessions from signed-in desktops."
       />
 
       <div className="flex flex-col gap-3">
@@ -97,7 +101,7 @@ export function CloudAccountSection() {
           </p>
         ) : devices.length === 0 ? (
           <p className="text-[12px] text-muted-foreground">
-            No active devices.
+            No active cloud-app browser connections.
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-border/60 rounded-md border border-border/60 bg-secondary/10">

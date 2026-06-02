@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { WorkflowAgentSummaryDto } from '@/src/lib/xero-model/workflow-agents'
 import type { WorkflowDefinitionSummaryDto } from '@/src/lib/xero-model/workflow-definition'
+import type { ComposerModelOptionView } from '@/src/features/xero/use-xero-desktop-state/runtime-provider'
 
 import { WorkflowsSidebar } from './workflows-sidebar'
 
@@ -52,6 +53,24 @@ const WORKFLOWS: WorkflowDefinitionSummaryDto[] = [
     activeVersionNumber: 1,
     createdAt: '2026-05-23T00:00:00.000Z',
     updatedAt: '2026-05-23T00:00:00.000Z',
+  },
+]
+
+const MODEL_OPTIONS: ComposerModelOptionView[] = [
+  {
+    selectionKey: 'openai_codex:gpt-5.4',
+    profileId: 'openai_codex-default',
+    providerId: 'openai_codex',
+    providerLabel: 'OpenAI Codex',
+    modelId: 'gpt-5.4',
+    displayName: 'GPT-5.4',
+    thinking: {
+      supported: true,
+      effortOptions: ['low', 'medium', 'high'],
+      defaultEffort: 'low',
+    },
+    thinkingEffortOptions: ['low', 'medium', 'high'],
+    defaultThinkingEffort: 'low',
   },
 ]
 
@@ -141,6 +160,46 @@ describe('WorkflowsSidebar', () => {
 
     await waitFor(() =>
       expect(onSetAgentDefaultModel).toHaveBeenCalledWith(REAL_AGENTS[0], null),
+    )
+  })
+
+  it('saves a default model with the selected thinking level', async () => {
+    const onSetAgentDefaultModel = vi.fn(async () => undefined)
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        modelOptions={MODEL_OPTIONS}
+        onSetAgentDefaultModel={onSetAgentDefaultModel}
+      />,
+    )
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Engineer' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Default model' }))
+
+    fireEvent.pointerDown(await screen.findByRole('combobox', { name: 'Model' }), {
+      button: 0,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.click(await screen.findByRole('option', { name: 'GPT-5.4' }))
+    const thinkingItem = screen.getByRole('menuitem', { name: /Thinking/i })
+    fireEvent.keyDown(thinkingItem, { key: 'ArrowRight' })
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'High' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onSetAgentDefaultModel).toHaveBeenCalledWith(REAL_AGENTS[0], {
+        providerId: 'openai_codex',
+        providerProfileId: 'openai_codex-default',
+        modelId: 'gpt-5.4',
+        selectionKey: 'openai_codex:gpt-5.4',
+        thinkingEffort: 'high',
+      }),
     )
   })
 

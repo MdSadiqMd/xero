@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react"
 import {
-  ComposerModelSelect,
-  type ComposerSelectGroup,
-  type ComposerSelectOption,
-} from "@xero/ui/components/composer"
+  ModelThinkingSelect,
+  type ModelThinkingSelectGroup,
+  type ModelThinkingSelectOption,
+} from "@xero/ui/components/model-thinking-select"
 
 import { Switch } from "@/components/ui/switch"
 import type { StartTargetsModelOption } from "@/components/xero/start-targets-editor"
@@ -73,10 +73,10 @@ export function TerminalSection({ modelOptions = [] }: TerminalSectionProps) {
     [],
   )
 
-  const modelGroups = useMemo<ComposerSelectGroup[]>(() => {
+  const modelGroups = useMemo<ModelThinkingSelectGroup[]>(() => {
     const groups = new Map<
       string,
-      { providerLabel: string; options: ComposerSelectOption[] }
+      { providerLabel: string; options: ModelThinkingSelectOption[] }
     >()
     for (const option of modelOptions) {
       const existing = groups.get(option.providerLabel)
@@ -107,7 +107,7 @@ export function TerminalSection({ modelOptions = [] }: TerminalSectionProps) {
     modelOptions.find((option) => optionMatchesSelection(option, settings.modelSelection)) ??
     null
   const modelSelectValue = selectedModel?.selectionKey ?? DEFAULT_MODEL_VALUE
-  const thinkingOptions = useMemo<ComposerSelectOption[]>(
+  const thinkingOptions = useMemo<ModelThinkingSelectOption[]>(
     () =>
       (selectedModel?.thinkingEffortOptions ?? []).map((effort) => ({
         id: effort,
@@ -204,7 +204,7 @@ export function TerminalSection({ modelOptions = [] }: TerminalSectionProps) {
             ) : null}
           </div>
 
-          <ComposerModelSelect
+          <ModelThinkingSelect
             ariaLabel="Model"
             disabled={!settings.enabled || modelGroups.length === 0}
             groups={modelGroups}
