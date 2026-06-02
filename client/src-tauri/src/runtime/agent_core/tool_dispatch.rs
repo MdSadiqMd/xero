@@ -14,7 +14,7 @@ use xero_agent_core::{
     ToolRegistryResult, ToolRegistryV2, ToolRollback, ToolSandbox, ToolSandboxResult,
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct AgentToolBatchDispatchOptions {
     approved_existing_write_call_ids: BTreeSet<String>,
     operator_approved_call_ids: BTreeSet<String>,
@@ -257,6 +257,14 @@ fn dispatch_tool_batch_with_options(
         )?;
     }
 
+    let run_record = project_store::load_agent_run_record(repo_root, project_id, run_id)?;
+    let failure_log_context = AgentToolFailureLogContext::from_run_record(
+        &run_record,
+        turn_index,
+        &options.approved_existing_write_call_ids,
+        &options.operator_approved_call_ids,
+    );
+
     for tool_call in &tool_calls {
         if tool_registry.descriptor(&tool_call.tool_name).is_some() {
             continue;
@@ -274,16 +282,25 @@ fn dispatch_tool_batch_with_options(
         };
         let _ =
             record_policy_decode_failure_event(repo_root, project_id, run_id, tool_call, &error);
+        let dispatch = json!({
+            "registryVersion": "tool_registry_v2",
+            "preflight": "legacy_registry_descriptor_missing",
+        });
+        log_preflight_tool_failure(
+            project_id,
+            run_id,
+            tool_call,
+            &error,
+            dispatch.clone(),
+            &failure_log_context,
+        );
         finish_failed_tool_call_with_dispatch(
             repo_root,
             project_id,
             run_id,
             tool_call,
             &error,
-            Some(json!({
-                "registryVersion": "tool_registry_v2",
-                "preflight": "legacy_registry_descriptor_missing",
-            })),
+            Some(dispatch),
         )?;
         return Ok(AgentToolBatchDispatchResult {
             results: Vec::new(),
@@ -291,7 +308,6 @@ fn dispatch_tool_batch_with_options(
         });
     }
 
-    let run_record = project_store::load_agent_run_record(repo_root, project_id, run_id)?;
     let shared = Arc::new(AutonomousToolHandlerShared {
         legacy_registry: tool_registry.clone(),
         tool_runtime: tool_runtime.clone(),
@@ -332,8 +348,20 @@ fn dispatch_tool_batch_with_options(
                 input: tool_call.input.clone(),
             })
             .collect::<Vec<_>>();
+        let original_calls = tool_calls
+            .iter()
+            .map(|tool_call| (tool_call.tool_call_id.clone(), tool_call.clone()))
+            .collect::<BTreeMap<_, _>>();
         let report = registry_v2.dispatch_batch(&calls, &config);
-        persist_tool_batch_report(repo_root, project_id, run_id, report, &budget)
+        persist_tool_batch_report(
+            repo_root,
+            project_id,
+            run_id,
+            report,
+            &budget,
+            &original_calls,
+            &failure_log_context,
+        )
     })();
 
     restore_workspace_guard(&shared, workspace_guard)?;
@@ -1484,12 +1512,71 @@ fn tool_dispatch_budget(_tool_runtime: &AutonomousToolRuntime) -> ToolBudget {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AgentToolFailureLogContext {
+    app_data_dir: Option<PathBuf>,
+    agent_session_id: String,
+    turn_index: usize,
+    provider_id: String,
+    model_id: String,
+    runtime_agent_id: String,
+    approved_existing_write_call_ids: BTreeSet<String>,
+    operator_approved_call_ids: BTreeSet<String>,
+}
+
+impl AgentToolFailureLogContext {
+    fn from_run_record(
+        run_record: &project_store::AgentRunRecord,
+        turn_index: usize,
+        approved_existing_write_call_ids: &BTreeSet<String>,
+        operator_approved_call_ids: &BTreeSet<String>,
+    ) -> Self {
+        Self {
+            app_data_dir: crate::db::configured_app_data_dir(),
+            agent_session_id: run_record.agent_session_id.clone(),
+            turn_index,
+            provider_id: run_record.provider_id.clone(),
+            model_id: run_record.model_id.clone(),
+            runtime_agent_id: run_record.runtime_agent_id.as_str().to_owned(),
+            approved_existing_write_call_ids: approved_existing_write_call_ids.clone(),
+            operator_approved_call_ids: operator_approved_call_ids.clone(),
+        }
+    }
+
+    fn context_json(&self, tool_call_id: &str) -> JsonValue {
+        let operator_approved = self.operator_approved_call_ids.contains(tool_call_id);
+        let approved_existing_write = self.approved_existing_write_call_ids.contains(tool_call_id);
+        let approval_state = if operator_approved {
+            "operator_approved"
+        } else if approved_existing_write {
+            "approved_existing_write"
+        } else {
+            "not_approved"
+        };
+
+        json!({
+            "providerId": self.provider_id,
+            "modelId": self.model_id,
+            "runtimeAgentId": self.runtime_agent_id,
+            "operatorApproved": operator_approved,
+            "approvedExistingWrite": approved_existing_write,
+            "approvalState": approval_state,
+            "turnIndex": self.turn_index,
+            "launchMode": std::env::var("XERO_LAUNCH_MODE").ok(),
+            "hostOs": std::env::consts::OS,
+            "appVersion": env!("CARGO_PKG_VERSION"),
+        })
+    }
+}
+
 fn persist_tool_batch_report(
     repo_root: &Path,
     project_id: &str,
     run_id: &str,
     report: ToolBatchDispatchReport,
     budget: &ToolBudget,
+    original_calls: &BTreeMap<String, AgentToolCall>,
+    failure_log_context: &AgentToolFailureLogContext,
 ) -> CommandResult<AgentToolBatchDispatchResult> {
     let mut results = Vec::new();
     let mut failure = None;
@@ -1521,6 +1608,8 @@ fn persist_tool_batch_report(
                         group_elapsed_ms,
                         timeout_error.as_ref(),
                         budget,
+                        original_calls,
+                        failure_log_context,
                     )?;
                     results.push(result);
                     if failure.is_none() {
@@ -1710,6 +1799,8 @@ fn persist_tool_dispatch_failure(
     group_elapsed_ms: u128,
     timeout_error: Option<&ToolExecutionError>,
     budget: &ToolBudget,
+    original_calls: &BTreeMap<String, AgentToolCall>,
+    failure_log_context: &AgentToolFailureLogContext,
 ) -> CommandResult<(CommandError, AgentToolResult)> {
     let command_error = tool_execution_error_ref_to_command_error(&failure.error);
     let dispatch = dispatch_failure_metadata_json(
@@ -1719,15 +1810,28 @@ fn persist_tool_dispatch_failure(
         timeout_error,
         budget,
     );
+    let original_call = original_calls
+        .get(&failure.tool_call_id)
+        .cloned()
+        .unwrap_or_else(|| AgentToolCall {
+            tool_call_id: failure.tool_call_id.clone(),
+            tool_name: failure.tool_name.clone(),
+            input: json!({}),
+        });
+    log_dispatch_tool_failure(
+        project_id,
+        run_id,
+        &original_call,
+        &failure,
+        &command_error,
+        dispatch.clone(),
+        failure_log_context,
+    );
     finish_failed_tool_call_with_dispatch(
         repo_root,
         project_id,
         run_id,
-        &AgentToolCall {
-            tool_call_id: failure.tool_call_id.clone(),
-            tool_name: failure.tool_name.clone(),
-            input: json!({}),
-        },
+        &original_call,
         &command_error,
         Some(dispatch.clone()),
     )?;
@@ -1756,6 +1860,89 @@ fn failed_agent_tool_result_from_dispatch_failure(
         }),
         persistence: None,
         parent_assistant_message_id: None,
+    }
+}
+
+fn log_preflight_tool_failure(
+    project_id: &str,
+    run_id: &str,
+    tool_call: &AgentToolCall,
+    error: &CommandError,
+    dispatch: JsonValue,
+    context: &AgentToolFailureLogContext,
+) {
+    crate::developer_tool_error_log::log_tool_call_failure_best_effort(
+        context.app_data_dir.as_deref(),
+        crate::developer_tool_error_log::ToolCallErrorLogEntryDraft {
+            source: "tool_registry_v2_preflight".into(),
+            project_id: Some(project_id.into()),
+            agent_session_id: Some(context.agent_session_id.clone()),
+            run_id: Some(run_id.into()),
+            turn_index: Some(context.turn_index.try_into().unwrap_or(i64::MAX)),
+            tool_call_id: tool_call.tool_call_id.clone(),
+            tool_name: tool_call.tool_name.clone(),
+            input: tool_call.input.clone(),
+            error_code: error.code.clone(),
+            error_class: command_error_class_label(&error.class),
+            error_category: None,
+            error_message: error.message.clone(),
+            model_message: None,
+            retryable: error.retryable,
+            dispatch,
+            context: context.context_json(&tool_call.tool_call_id),
+        },
+    );
+}
+
+fn log_dispatch_tool_failure(
+    project_id: &str,
+    run_id: &str,
+    tool_call: &AgentToolCall,
+    failure: &ToolDispatchFailure,
+    command_error: &CommandError,
+    dispatch: JsonValue,
+    context: &AgentToolFailureLogContext,
+) {
+    crate::developer_tool_error_log::log_tool_call_failure_best_effort(
+        context.app_data_dir.as_deref(),
+        crate::developer_tool_error_log::ToolCallErrorLogEntryDraft {
+            source: "tool_registry_v2_dispatch".into(),
+            project_id: Some(project_id.into()),
+            agent_session_id: Some(context.agent_session_id.clone()),
+            run_id: Some(run_id.into()),
+            turn_index: Some(context.turn_index.try_into().unwrap_or(i64::MAX)),
+            tool_call_id: tool_call.tool_call_id.clone(),
+            tool_name: tool_call.tool_name.clone(),
+            input: tool_call.input.clone(),
+            error_code: command_error.code.clone(),
+            error_class: command_error_class_label(&command_error.class),
+            error_category: Some(serde_label(&failure.error.category)),
+            error_message: command_error.message.clone(),
+            model_message: optional_non_empty(failure.error.model_message.clone()),
+            retryable: command_error.retryable,
+            dispatch,
+            context: context.context_json(&tool_call.tool_call_id),
+        },
+    );
+}
+
+fn command_error_class_label(class: &CommandErrorClass) -> String {
+    serde_label(class)
+}
+
+fn serde_label<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn optional_non_empty(value: String) -> Option<String> {
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 
@@ -1873,6 +2060,7 @@ fn dispatch_failure_metadata_json(
         "typedErrorCategory": failure.error.category,
         "modelMessage": failure.error.model_message,
         "retryable": failure.error.retryable,
+        "telemetry": &failure.error.telemetry_attributes,
         "doomLoopSignal": failure.doom_loop_signal,
         "rollbackPayload": failure.rollback_payload,
         "rollbackError": failure.rollback_error.as_ref().map(tool_execution_error_json),
@@ -2204,7 +2392,11 @@ fn finish_failed_tool_call_with_dispatch(
 mod tests {
     use super::*;
 
-    use std::{fs, path::Path};
+    use std::{
+        env, fs,
+        path::Path,
+        sync::{LazyLock, Mutex},
+    };
 
     use rusqlite::{params, Connection};
 
@@ -2317,6 +2509,168 @@ mod tests {
         assert_eq!(availability["affectedPaths"], json!(["src/app.ts"]));
         assert_eq!(availability["fileChangeCount"], json!(1));
         assert_eq!(availability["textHunkCount"], json!(2));
+    }
+
+    #[test]
+    fn developer_tool_error_log_records_preflight_and_dispatch_failures() {
+        let _launch_mode = LocalSourceLaunchModeGuard::new();
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let app_data_dir = tempdir.path().join("app-data");
+        fs::create_dir_all(&app_data_dir).expect("create app data");
+        crate::db::configure_project_database_paths(&app_data_dir.join("xero.db"));
+
+        let context = AgentToolFailureLogContext {
+            app_data_dir: Some(app_data_dir.clone()),
+            agent_session_id: "session-1".into(),
+            turn_index: 7,
+            provider_id: "openai_codex".into(),
+            model_id: "gpt-5".into(),
+            runtime_agent_id: "engineer".into(),
+            approved_existing_write_call_ids: BTreeSet::new(),
+            operator_approved_call_ids: BTreeSet::from(["call-sandbox".into()]),
+        };
+        let preflight_call = AgentToolCall {
+            tool_call_id: "call-preflight".into(),
+            tool_name: "missing_tool".into(),
+            input: json!({ "api_key": "sk-live-secret", "path": "src/main.rs" }),
+        };
+        let preflight_error = CommandError::user_fixable(
+            "agent_tool_call_unknown",
+            "The owned-agent model requested unregistered tool `missing_tool`.",
+        );
+        log_preflight_tool_failure(
+            "project-1",
+            "run-1",
+            &preflight_call,
+            &preflight_error,
+            json!({ "registryVersion": "tool_registry_v2", "preflight": "legacy_registry_descriptor_missing" }),
+            &context,
+        );
+
+        for (tool_call_id, tool_name, error) in [
+            (
+                "call-sandbox",
+                "write",
+                ToolExecutionError::sandbox_denied(
+                    "agent_sandbox_path_denied",
+                    "Sandbox denied the write.",
+                ),
+            ),
+            (
+                "call-policy",
+                "command",
+                ToolExecutionError::policy_denied(
+                    "agent_policy_denied",
+                    "Policy denied the command.",
+                ),
+            ),
+            (
+                "call-handler",
+                "read",
+                ToolExecutionError::retryable("agent_tool_handler_failed", "The handler failed."),
+            ),
+        ] {
+            let dispatch_call = AgentToolCall {
+                tool_call_id: tool_call_id.into(),
+                tool_name: tool_name.into(),
+                input: json!({ "path": "src/main.rs", "content": "hello" }),
+            };
+            let failure = ToolDispatchFailure {
+                tool_call_id: dispatch_call.tool_call_id.clone(),
+                tool_name: dispatch_call.tool_name.clone(),
+                error,
+                doom_loop_signal: None,
+                rollback_payload: Some(json!({ "rolledBack": false })),
+                rollback_error: None,
+                pre_hook_payload: json!({}),
+                post_hook_payload: json!({}),
+                elapsed_ms: 12,
+                sandbox_metadata: None,
+            };
+            let command_error = tool_execution_error_ref_to_command_error(&failure.error);
+            log_dispatch_tool_failure(
+                "project-1",
+                "run-1",
+                &dispatch_call,
+                &failure,
+                &command_error,
+                json!({ "registryVersion": "tool_registry_v2", "groupMode": "sequential_mutating" }),
+                &context,
+            );
+        }
+
+        let response = crate::developer_tool_error_log::list_tool_call_error_log_entries(
+            &app_data_dir,
+            crate::developer_tool_error_log::DeveloperToolErrorLogListRequestDto::default(),
+        )
+        .expect("list dev tool errors");
+
+        assert_eq!(response.total_count, 4);
+        let preflight = response
+            .entries
+            .iter()
+            .find(|entry| entry.tool_call_id == "call-preflight")
+            .expect("preflight entry");
+        assert_eq!(preflight.source, "tool_registry_v2_preflight");
+        assert_eq!(preflight.input_json["api_key"], json!("[REDACTED]"));
+        assert_eq!(preflight.agent_session_id.as_deref(), Some("session-1"));
+        assert_eq!(preflight.turn_index, Some(7));
+
+        let dispatch = response
+            .entries
+            .iter()
+            .find(|entry| entry.tool_call_id == "call-sandbox")
+            .expect("sandbox dispatch entry");
+        assert_eq!(dispatch.source, "tool_registry_v2_dispatch");
+        assert_eq!(dispatch.error_category.as_deref(), Some("sandbox_denied"));
+        assert_eq!(dispatch.context_json["operatorApproved"], json!(true));
+
+        let policy = response
+            .entries
+            .iter()
+            .find(|entry| entry.tool_call_id == "call-policy")
+            .expect("policy dispatch entry");
+        assert_eq!(policy.error_category.as_deref(), Some("policy_denied"));
+
+        let handler = response
+            .entries
+            .iter()
+            .find(|entry| entry.tool_call_id == "call-handler")
+            .expect("handler dispatch entry");
+        assert_eq!(
+            handler.error_category.as_deref(),
+            Some("retryable_provider_tool_failure")
+        );
+        assert!(handler.retryable);
+    }
+
+    static LAUNCH_MODE_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct LocalSourceLaunchModeGuard {
+        previous: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl LocalSourceLaunchModeGuard {
+        fn new() -> Self {
+            let guard = LAUNCH_MODE_ENV_LOCK.lock().expect("launch mode env lock");
+            let previous = env::var_os("XERO_LAUNCH_MODE");
+            env::set_var("XERO_LAUNCH_MODE", "local-source");
+            Self {
+                previous,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for LocalSourceLaunchModeGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                env::set_var("XERO_LAUNCH_MODE", previous);
+            } else {
+                env::remove_var("XERO_LAUNCH_MODE");
+            }
+        }
     }
 
     fn create_project_database(repo_root: &Path, project_id: &str) {

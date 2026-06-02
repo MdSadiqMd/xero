@@ -86,6 +86,7 @@ export * from './xero-model/autonomous-web-search'
 export * from './xero-model/usage'
 export * from './xero-model/environment'
 export * from './xero-model/developer-storage'
+export * from './xero-model/developer-tool-error-log'
 export * from '@xero/ui/model/code-history'
 export * from './xero-model/wipe-data'
 

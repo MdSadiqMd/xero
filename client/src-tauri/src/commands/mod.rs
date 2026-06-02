@@ -15,6 +15,7 @@ pub mod code_rollback;
 pub mod complete_oauth_callback;
 pub mod create_repository;
 pub mod desktop_control;
+pub mod developer_tool_error_log;
 pub mod developer_tool_harness;
 pub mod development_storage;
 pub mod dictation;
@@ -158,6 +159,7 @@ pub use desktop_control::{
     DesktopControlPolicyProfileDto, DesktopControlSettingsDto, DesktopControlStatusDto,
     UpsertDesktopControlSettingsRequestDto,
 };
+pub use developer_tool_error_log::{developer_tool_error_log_clear, developer_tool_error_log_list};
 pub use developer_tool_harness::{
     developer_tool_catalog, developer_tool_dry_run, developer_tool_harness_project,
     developer_tool_model_run, developer_tool_sequence_delete, developer_tool_sequence_list,

@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod commands;
 pub mod db;
+pub mod developer_tool_error_log;
 pub mod developer_tool_harness_terminal;
 pub mod developer_tool_harness_tui;
 pub mod environment;
@@ -236,6 +237,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::developer_tool_harness::developer_tool_sequence_list,
             commands::developer_tool_harness::developer_tool_sequence_upsert,
             commands::developer_tool_harness::developer_tool_synthetic_run,
+            commands::developer_tool_error_log::developer_tool_error_log_clear,
+            commands::developer_tool_error_log::developer_tool_error_log_list,
             commands::development_storage::developer_storage_overview,
             commands::development_storage::developer_storage_read_table,
             commands::list_projects::list_projects,

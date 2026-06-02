@@ -852,6 +852,16 @@ describe('SettingsDialog', () => {
           rootPath: '/tmp/harness-fixture',
         })
       }
+      if (command === 'developer_tool_error_log_list') {
+        return Promise.resolve({
+          databasePath: '/tmp/xero/development/tool-call-errors.sqlite',
+          entries: [],
+          projectIds: [],
+          totalCount: 0,
+          limit: 100,
+          offset: 0,
+        })
+      }
       if (command === 'browser_control_settings') {
         return Promise.resolve({
           preference: 'default',
@@ -986,8 +996,10 @@ describe('SettingsDialog', () => {
       { timeout: 5000 },
     )
     const toolbarHeading = await screen.findByRole('heading', { name: 'Toolbar platform' })
+    const errorLogHeading = await screen.findByRole('heading', { name: 'Tool-call failures' })
     const harnessHeading = await screen.findByRole('heading', { name: 'Tool harness' })
     expect(screen.getByRole('button', { name: 'Start onboarding' })).toBeEnabled()
+    expect(await screen.findByText('No tool-call failures logged.')).toBeVisible()
     expect(await screen.findByText(/Harness fixture: Tool harness fixture/)).toBeVisible()
 
     expect(
@@ -998,12 +1010,25 @@ describe('SettingsDialog', () => {
       toolbarHeading.compareDocumentPosition(harnessHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+    expect(
+      toolbarHeading.compareDocumentPosition(errorLogHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      errorLogHeading.compareDocumentPosition(harnessHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
     expect(screen.queryByRole('tab', { name: 'Storage' })).not.toBeInTheDocument()
     expect(screen.queryByText('Storage inspector')).not.toBeInTheDocument()
     expect(screen.queryByText('Local storage')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Reveal sensitive storage values')).not.toBeInTheDocument()
     expect(invokeMock).not.toHaveBeenCalledWith('developer_storage_overview')
     expect(invokeMock).not.toHaveBeenCalledWith('developer_storage_read_table', expect.anything())
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith('developer_tool_error_log_list', {
+        request: { limit: 100 },
+      }),
+    )
   }, 15000)
 
   it('renders doctor reports from the diagnostics section and runs extended checks explicitly', async () => {

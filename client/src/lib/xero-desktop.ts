@@ -482,6 +482,14 @@ import {
   type UpsertAutonomousWebSearchSettingsRequestDto,
 } from '@/src/lib/xero-model/autonomous-web-search'
 import {
+  developerToolErrorLogClearResponseSchema,
+  developerToolErrorLogListRequestSchema,
+  developerToolErrorLogListResponseSchema,
+  type DeveloperToolErrorLogClearResponseDto,
+  type DeveloperToolErrorLogListRequestDto,
+  type DeveloperToolErrorLogListResponseDto,
+} from '@/src/lib/xero-model/developer-tool-error-log'
+import {
   compactSessionHistoryRequestSchema,
   compactSessionHistoryResponseSchema,
   agentSessionBranchResponseSchema,
@@ -812,6 +820,8 @@ const COMMANDS = {
   soulUpdateSettings: 'soul_update_settings',
   agentToolingSettings: 'agent_tooling_settings',
   agentToolingUpdateSettings: 'agent_tooling_update_settings',
+  developerToolErrorLogList: 'developer_tool_error_log_list',
+  developerToolErrorLogClear: 'developer_tool_error_log_clear',
   autonomousWebSearchSettings: 'autonomous_web_search_settings',
   autonomousWebSearchUpdateSettings: 'autonomous_web_search_update_settings',
   autonomousWebSearchUpsertProvider: 'autonomous_web_search_upsert_provider',
@@ -1567,6 +1577,10 @@ export interface XeroDesktopAdapter {
   agentToolingUpdateSettings?(
     request: UpsertAgentToolingSettingsRequestDto,
   ): Promise<AgentToolingSettingsDto>
+  developerToolErrorLogList?(
+    request?: DeveloperToolErrorLogListRequestDto,
+  ): Promise<DeveloperToolErrorLogListResponseDto>
+  developerToolErrorLogClear?(): Promise<DeveloperToolErrorLogClearResponseDto>
   autonomousWebSearchSettings?(): Promise<AutonomousWebSearchSettingsDto>
   autonomousWebSearchUpdateSettings?(
     request: UpsertAutonomousWebSearchSettingsRequestDto,
@@ -3934,6 +3948,20 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     return invokeTyped(COMMANDS.agentToolingUpdateSettings, agentToolingSettingsSchema, {
       request: parsedRequest,
     })
+  },
+
+  developerToolErrorLogList(request = {}) {
+    const parsedRequest = developerToolErrorLogListRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.developerToolErrorLogList, developerToolErrorLogListResponseSchema, {
+      request: parsedRequest,
+    })
+  },
+
+  developerToolErrorLogClear() {
+    return invokeTyped(
+      COMMANDS.developerToolErrorLogClear,
+      developerToolErrorLogClearResponseSchema,
+    )
   },
 
   autonomousWebSearchSettings() {
