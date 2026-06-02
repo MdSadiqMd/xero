@@ -20,12 +20,12 @@ use crate::{
         CommandResult, CommandToolResultSummaryDto, FileToolResultSummaryDto,
         GitToolResultScopeDto, GitToolResultSummaryDto, McpCapabilityKindDto,
         McpCapabilityToolResultSummaryDto, ProjectAssetState, RuntimeActionAnswerShape,
-        RuntimeActionRequiredOptionDto, RuntimeStreamIssueDto, RuntimeStreamItemDto,
-        RuntimeStreamItemKind, RuntimeStreamPatchDto, RuntimeStreamPlanItemDto,
-        RuntimeStreamPlanItemStatus, RuntimeStreamTranscriptRole, RuntimeStreamViewSnapshotDto,
-        RuntimeStreamViewStatusDto, RuntimeToolCallState, SubscribeRuntimeStreamRequestDto,
-        SubscribeRuntimeStreamResponseDto, ToolResultSummaryDto, WebToolResultContentKindDto,
-        WebToolResultSummaryDto,
+        RuntimeActionRequiredOptionDto, RuntimeSensitiveInputFieldDto, RuntimeStreamIssueDto,
+        RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeStreamPatchDto,
+        RuntimeStreamPlanItemDto, RuntimeStreamPlanItemStatus, RuntimeStreamTranscriptRole,
+        RuntimeStreamViewSnapshotDto, RuntimeStreamViewStatusDto, RuntimeToolCallState,
+        SubscribeRuntimeStreamRequestDto, SubscribeRuntimeStreamResponseDto, ToolResultSummaryDto,
+        WebToolResultContentKindDto, WebToolResultSummaryDto,
     },
     db::project_store::{
         self, AgentEventRecord, AgentRunEventKind, AgentRunStatus, RuntimeRunSnapshotRecord,
@@ -1256,6 +1256,8 @@ fn owned_agent_event_runtime_item(
         answer_shape: None,
         options: None,
         allow_multiple: None,
+        sensitive_fields: None,
+        intended_use: None,
         title: None,
         detail: None,
         plan_id: None,
@@ -1626,6 +1628,8 @@ fn owned_agent_event_runtime_item(
             item.allow_multiple = payload
                 .get("allowMultiple")
                 .and_then(serde_json::Value::as_bool);
+            item.sensitive_fields = sensitive_input_fields_from_payload(&payload);
+            item.intended_use = payload_string(&payload, "intendedUse");
             item.text = item.detail.clone();
         }
         AgentRunEventKind::ToolPermissionGrant => {
@@ -2527,6 +2531,7 @@ fn runtime_action_answer_shape_from_str(value: &str) -> Option<RuntimeActionAnsw
         "long_text" => Some(RuntimeActionAnswerShape::LongText),
         "number" => Some(RuntimeActionAnswerShape::Number),
         "date" => Some(RuntimeActionAnswerShape::Date),
+        "sensitive_fields" => Some(RuntimeActionAnswerShape::SensitiveFields),
         _ => None,
     }
 }
@@ -2543,6 +2548,28 @@ fn action_required_options_from_payload(
             id,
             label,
             description: payload_string(option, "description"),
+        });
+    }
+    (!projected.is_empty()).then_some(projected)
+}
+
+fn sensitive_input_fields_from_payload(
+    payload: &serde_json::Value,
+) -> Option<Vec<RuntimeSensitiveInputFieldDto>> {
+    let fields = payload.get("sensitiveFields")?.as_array()?;
+    let mut projected = Vec::with_capacity(fields.len());
+    for field in fields {
+        let key = payload_string(field, "key")?;
+        let label = payload_string(field, "label").unwrap_or_else(|| key.clone());
+        projected.push(RuntimeSensitiveInputFieldDto {
+            key,
+            label,
+            description: payload_string(field, "description"),
+            required: field
+                .get("required")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            validation_hint: payload_string(field, "validationHint"),
         });
     }
     (!projected.is_empty()).then_some(projected)

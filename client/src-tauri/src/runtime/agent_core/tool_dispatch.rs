@@ -1547,7 +1547,8 @@ fn persist_tool_dispatch_success(
     timeout_error: Option<&ToolExecutionError>,
     budget: &ToolBudget,
 ) -> CommandResult<AgentToolResult> {
-    let result_json = serde_json::to_string(&success.output).map_err(|error| {
+    let persisted_output = redacted_sensitive_tool_result_json_for_persistence(&success.output)?;
+    let result_json = serde_json::to_string(&persisted_output).map_err(|error| {
         CommandError::system_fault(
             "agent_tool_result_serialize_failed",
             format!("Xero could not persist owned-agent tool output: {error}"),
@@ -1578,7 +1579,7 @@ fn persist_tool_dispatch_success(
             "toolName": success.tool_name.clone(),
             "ok": true,
             "summary": success.summary.clone(),
-            "output": success.output.clone(),
+            "output": persisted_output.clone(),
             "dispatch": dispatch,
     });
     if let Some(object) = payload.as_object_mut() {
@@ -1601,7 +1602,7 @@ fn persist_tool_dispatch_success(
         run_id,
         &success.tool_call_id,
         &success.tool_name,
-        &success.output,
+        &persisted_output,
     )?;
 
     Ok(AgentToolResult {
@@ -1620,6 +1621,37 @@ fn persist_tool_dispatch_success(
         }),
         parent_assistant_message_id: None,
     })
+}
+
+pub(crate) fn redacted_sensitive_tool_result_json_for_persistence(
+    output: &JsonValue,
+) -> CommandResult<JsonValue> {
+    let Ok(mut result) = serde_json::from_value::<AutonomousToolResult>(output.clone()) else {
+        return Ok(output.clone());
+    };
+    result.output = redacted_sensitive_tool_output_for_persistence(&result.output);
+    serde_json::to_value(result).map_err(|error| {
+        CommandError::system_fault(
+            "agent_tool_result_serialize_failed",
+            format!("Xero could not serialize redacted owned-agent tool output: {error}"),
+        )
+    })
+}
+
+fn redacted_sensitive_tool_output_for_persistence(
+    output: &AutonomousToolOutput,
+) -> AutonomousToolOutput {
+    match output {
+        AutonomousToolOutput::SensitiveInput(output) => {
+            let mut redacted = output.clone();
+            redacted.redacted = true;
+            for field in &mut redacted.fields {
+                field.value = "[redacted]".into();
+            }
+            AutonomousToolOutput::SensitiveInput(redacted)
+        }
+        other => other.clone(),
+    }
 }
 
 fn record_command_output_event_from_dispatch_success(
@@ -2217,6 +2249,39 @@ mod tests {
             result.output["dispatch"]["groupMode"],
             json!("parallel_read_only")
         );
+    }
+
+    #[test]
+    fn sensitive_tool_result_json_is_redacted_for_persistence() {
+        let raw = json!({
+            "toolName": AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
+            "summary": "Received 1 sensitive field(s): 1 required, 0 optional.",
+            "commandResult": null,
+            "output": {
+                "kind": "sensitive_input",
+                "actionId": "sensitive-input-1234",
+                "status": "approved",
+                "purpose": "Configure a provider token for this run.",
+                "intendedUse": "Write the token into the requested environment file.",
+                "allowPartial": false,
+                "fields": [{
+                    "key": "api_key",
+                    "label": "API key",
+                    "required": true,
+                    "value": "sk-live-secret"
+                }],
+                "redacted": false,
+                "summary": "Received 1 sensitive field(s): 1 required, 0 optional."
+            }
+        });
+
+        let redacted = redacted_sensitive_tool_result_json_for_persistence(&raw)
+            .expect("redacted sensitive result");
+
+        assert_eq!(raw["output"]["fields"][0]["value"], "sk-live-secret");
+        assert_eq!(redacted["output"]["fields"][0]["value"], "[redacted]");
+        assert_eq!(redacted["output"]["redacted"], true);
+        assert!(!redacted.to_string().contains("sk-live-secret"));
     }
 
     #[test]

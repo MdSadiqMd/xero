@@ -614,14 +614,7 @@ pub(crate) fn drive_provider_loop(
                     cancellation.check_cancelled()?;
                     result.parent_assistant_message_id = Some(parent_assistant_message_id.clone());
                     let provider_content = serialize_model_visible_tool_result(&result)?;
-                    let transcript_content = serde_json::to_string(&result).map_err(|error| {
-                        CommandError::system_fault(
-                            "agent_tool_result_serialize_failed",
-                            format!(
-                                "Xero could not serialize owned-agent tool result for transcript persistence: {error}"
-                            ),
-                        )
-                    })?;
+                    let transcript_content = serialize_transcript_tool_result(&result)?;
                     record_plan_artifact_from_tool_result(repo_root, project_id, run_id, &result)?;
                     append_message(
                         repo_root,
@@ -878,6 +871,20 @@ pub(crate) fn serialize_model_visible_tool_result(
         CommandError::system_fault(
             "agent_tool_result_serialize_failed",
             format!("Xero could not serialize compact owned-agent tool result: {error}"),
+        )
+    })
+}
+
+fn serialize_transcript_tool_result(result: &AgentToolResult) -> CommandResult<String> {
+    let mut transcript_result = result.clone();
+    transcript_result.output =
+        redacted_sensitive_tool_result_json_for_persistence(&transcript_result.output)?;
+    serde_json::to_string(&transcript_result).map_err(|error| {
+        CommandError::system_fault(
+            "agent_tool_result_serialize_failed",
+            format!(
+                "Xero could not serialize owned-agent tool result for transcript persistence: {error}"
+            ),
         )
     })
 }

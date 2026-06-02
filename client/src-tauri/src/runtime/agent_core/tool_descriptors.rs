@@ -2871,6 +2871,18 @@ fn add_startup_surface(plan: &mut ToolExposurePlan, options: &ToolRegistryOption
             "Selected agent may use model-visible planning state.",
         );
     }
+    if tool_allowed_for_runtime_agent_with_policy(
+        options.runtime_agent_id,
+        AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
+        options.agent_tool_policy.as_ref(),
+    ) {
+        plan.add_tool(
+            AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
+            "startup_core",
+            "sensitive_input_allowed_for_agent",
+            "Selected agent may request user-provided secrets through Xero's redacted sensitive-input flow.",
+        );
+    }
     if options.runtime_agent_id == RuntimeAgentIdDto::Plan
         && tool_allowed_for_runtime_agent_with_policy(
             options.runtime_agent_id,
@@ -3172,6 +3184,9 @@ fn explicit_tool_names_from_prompt(prompt: &str) -> BTreeSet<String> {
             }
             line if line.starts_with("tool:subagent ") => {
                 names.insert(AUTONOMOUS_TOOL_SUBAGENT.into());
+            }
+            line if line.starts_with("tool:request_sensitive_input ") => {
+                names.insert(AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT.into());
             }
             line if line.starts_with("tool:todo_") => {
                 names.insert(AUTONOMOUS_TOOL_TODO.into());
@@ -4374,6 +4389,70 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                         "maxCostMicros",
                         integer_schema(
                             "Optional delegated cost budget in micros for a spawned child run.",
+                        ),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
+            "Request secrets or sensitive configuration from the user through Xero's dedicated redacted input flow. Use only when the task cannot proceed without user-provided sensitive values.",
+            object_schema(
+                &["purpose", "intendedUse", "fields"],
+                &[
+                    (
+                        "purpose",
+                        string_schema(
+                            "User-visible reason for requesting sensitive input. Describe the task without including secret values.",
+                        ),
+                    ),
+                    (
+                        "intendedUse",
+                        string_schema(
+                            "User-visible explanation of how the approved values will be used, for example which env keys or local config entries will be written.",
+                        ),
+                    ),
+                    (
+                        "fields",
+                        json!({
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 12,
+                            "description": "Sensitive fields requested from the user. Values are entered by the user in Xero UI, hidden by default, and redacted from persisted metadata.",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["key", "label"],
+                                "properties": {
+                                    "key": {
+                                        "type": "string",
+                                        "pattern": "^[a-z0-9_]{1,80}$",
+                                        "description": "Stable lowercase snake_case identifier for this secret field."
+                                    },
+                                    "label": {
+                                        "type": "string",
+                                        "description": "Short user-visible field label."
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": "Optional user-visible field description."
+                                    },
+                                    "required": {
+                                        "type": "boolean",
+                                        "description": "Whether this field is required. Defaults to true."
+                                    },
+                                    "validationHint": {
+                                        "type": "string",
+                                        "description": "Optional non-secret validation hint, such as expected prefix or format."
+                                    }
+                                }
+                            }
+                        }),
+                    ),
+                    (
+                        "allowPartial",
+                        boolean_schema(
+                            "Set true when optional fields may be omitted and the agent can continue with a partial response.",
                         ),
                     ),
                 ],

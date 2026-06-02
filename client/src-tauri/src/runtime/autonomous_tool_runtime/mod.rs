@@ -23,7 +23,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use serde::{Deserialize, Serialize};
@@ -193,6 +193,7 @@ pub const AUTONOMOUS_TOOL_MCP_READ_RESOURCE: &str = "mcp_read_resource";
 pub const AUTONOMOUS_TOOL_MCP_GET_PROMPT: &str = "mcp_get_prompt";
 pub const AUTONOMOUS_TOOL_MCP_CALL_TOOL: &str = "mcp_call_tool";
 pub const AUTONOMOUS_TOOL_SUBAGENT: &str = "subagent";
+pub const AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT: &str = "request_sensitive_input";
 pub const AUTONOMOUS_TOOL_TODO: &str = "todo";
 pub const AUTONOMOUS_TOOL_NOTEBOOK_EDIT: &str = "notebook_edit";
 pub const AUTONOMOUS_TOOL_CODE_INTEL: &str = "code_intel";
@@ -215,6 +216,26 @@ pub const AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX: &str = "mcp__";
 pub const AUTONOMOUS_TOOL_STALE_FILE_ERROR_CODE: &str = "autonomous_tool_stale_file";
 pub const AUTONOMOUS_TOOL_EXPECTED_HASH_REQUIRED_CODE: &str =
     "autonomous_tool_expected_hash_required";
+
+static SENSITIVE_INPUT_APPROVALS: OnceLock<Mutex<BTreeMap<String, JsonValue>>> = OnceLock::new();
+
+pub(crate) fn store_sensitive_input_approval(action_id: &str, values: JsonValue) {
+    let Ok(mut approvals) = sensitive_input_approvals().lock() else {
+        return;
+    };
+    approvals.insert(action_id.to_string(), values);
+}
+
+fn take_sensitive_input_approval(action_id: &str) -> Option<JsonValue> {
+    sensitive_input_approvals()
+        .lock()
+        .ok()
+        .and_then(|mut approvals| approvals.remove(action_id))
+}
+
+fn sensitive_input_approvals() -> &'static Mutex<BTreeMap<String, JsonValue>> {
+    SENSITIVE_INPUT_APPROVALS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
 
 pub(super) fn stale_file_error(
     operation: &str,
@@ -1872,6 +1893,7 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
         | AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE => AutonomousToolEffectClass::Observe,
         AUTONOMOUS_TOOL_TOOL_ACCESS
         | AUTONOMOUS_TOOL_TODO
+        | AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT
         | AUTONOMOUS_TOOL_AGENT_COORDINATION
         | AUTONOMOUS_TOOL_AGENT_DEFINITION
         | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION
@@ -2477,6 +2499,26 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
                 "Record Debug symptom, hypothesis, experiment, root_cause, fix, and verification evidence.",
             ],
             "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
+            "core",
+            "Request secrets or sensitive configuration from the user through the dedicated redacted input flow.",
+            &[
+                "secret",
+                "sensitive input",
+                "credentials",
+                "env",
+                "api key",
+                "token",
+                "user input",
+            ],
+            &["purpose", "intendedUse", "fields", "allowPartial"],
+            &[
+                "Ask for an API key before creating an env file.",
+                "Request optional local-service credentials without putting values in chat.",
+            ],
+            "runtime_state",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_LIST,
@@ -3261,6 +3303,7 @@ fn computer_use_default_tool_names() -> BTreeSet<&'static str> {
         AUTONOMOUS_TOOL_DIRECTORY_DIGEST,
         AUTONOMOUS_TOOL_HASH,
         AUTONOMOUS_TOOL_TODO,
+        AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
         AUTONOMOUS_TOOL_DESKTOP_OBSERVE,
         AUTONOMOUS_TOOL_DESKTOP_CONTROL,
         AUTONOMOUS_TOOL_DESKTOP_STREAM,
@@ -4964,6 +5007,9 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::DesktopStream(request) => self.desktop_stream(request),
             AutonomousToolRequest::Mcp(request) => self.mcp(request),
             AutonomousToolRequest::Subagent(request) => self.subagent(request),
+            AutonomousToolRequest::RequestSensitiveInput(request) => {
+                self.request_sensitive_input(request)
+            }
             AutonomousToolRequest::Todo(request) => self.todo(request),
             AutonomousToolRequest::NotebookEdit(request) => self.notebook_edit(request),
             AutonomousToolRequest::CodeIntel(request) => self.code_intel(request),
@@ -5095,6 +5141,58 @@ impl AutonomousToolRuntime {
         }
         *remaining -= 1;
         Ok(())
+    }
+
+    fn request_sensitive_input(
+        &self,
+        request: AutonomousSensitiveInputRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        validate_sensitive_input_request(&request)?;
+        let action_id = sensitive_input_action_id(&request)?;
+        let required_count = request.fields.iter().filter(|field| field.required).count();
+        let optional_count = request.fields.len().saturating_sub(required_count);
+        let approved_values = take_sensitive_input_approval(&action_id);
+        let approved = approved_values.is_some();
+        let summary = format!(
+            "{} {} sensitive field(s): {required_count} required, {optional_count} optional.",
+            if approved { "Received" } else { "Requested" },
+            request.fields.len()
+        );
+
+        Ok(AutonomousToolResult {
+            tool_name: AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT.into(),
+            summary: summary.clone(),
+            command_result: None,
+            output: AutonomousToolOutput::SensitiveInput(AutonomousSensitiveInputOutput {
+                action_id,
+                status: if approved {
+                    "approved".into()
+                } else {
+                    "pending_user_review".into()
+                },
+                purpose: request.purpose,
+                intended_use: request.intended_use,
+                allow_partial: request.allow_partial,
+                fields: request
+                    .fields
+                    .into_iter()
+                    .map(|field| AutonomousSensitiveInputFieldOutput {
+                        value: approved_values
+                            .as_ref()
+                            .and_then(|values| values.get(&field.key))
+                            .map(sensitive_input_value_to_string)
+                            .unwrap_or_else(|| "[redacted]".into()),
+                        key: field.key,
+                        label: field.label,
+                        description: field.description,
+                        required: field.required,
+                        validation_hint: field.validation_hint,
+                    })
+                    .collect(),
+                redacted: !approved,
+                summary,
+            }),
+        })
     }
 
     pub fn execute_approved(
@@ -5676,6 +5774,7 @@ pub enum AutonomousToolRequest {
     DesktopStream(AutonomousDesktopStreamRequest),
     Mcp(AutonomousMcpRequest),
     Subagent(AutonomousSubagentRequest),
+    RequestSensitiveInput(AutonomousSensitiveInputRequest),
     Todo(AutonomousTodoRequest),
     NotebookEdit(AutonomousNotebookEditRequest),
     CodeIntel(AutonomousCodeIntelRequest),
@@ -5716,6 +5815,162 @@ pub enum AutonomousToolRequest {
     SolanaClusterDrift(AutonomousSolanaDriftRequest),
     SolanaCost(AutonomousSolanaCostRequest),
     SolanaDocs(AutonomousSolanaDocsRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSensitiveInputFieldRequest {
+    pub key: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default = "default_sensitive_input_field_required")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSensitiveInputRequest {
+    pub purpose: String,
+    pub intended_use: String,
+    pub fields: Vec<AutonomousSensitiveInputFieldRequest>,
+    #[serde(default)]
+    pub allow_partial: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSensitiveInputFieldOutput {
+    pub key: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_hint: Option<String>,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSensitiveInputOutput {
+    pub action_id: String,
+    pub status: String,
+    pub purpose: String,
+    pub intended_use: String,
+    pub allow_partial: bool,
+    pub fields: Vec<AutonomousSensitiveInputFieldOutput>,
+    pub redacted: bool,
+    pub summary: String,
+}
+
+const fn default_sensitive_input_field_required() -> bool {
+    true
+}
+
+fn validate_sensitive_input_request(
+    request: &AutonomousSensitiveInputRequest,
+) -> CommandResult<()> {
+    validate_sensitive_input_text(&request.purpose, "purpose", 20, 500)?;
+    validate_sensitive_input_text(&request.intended_use, "intendedUse", 10, 500)?;
+    if request.fields.is_empty() || request.fields.len() > 12 {
+        return Err(CommandError::user_fixable(
+            "sensitive_input_fields_invalid",
+            "Sensitive input requests must include between 1 and 12 fields.",
+        ));
+    }
+
+    let mut keys = BTreeSet::new();
+    for field in &request.fields {
+        validate_sensitive_input_key(&field.key)?;
+        validate_sensitive_input_text(&field.label, "field.label", 1, 120)?;
+        if let Some(description) = field.description.as_deref() {
+            validate_sensitive_input_text(description, "field.description", 1, 300)?;
+        }
+        if let Some(validation_hint) = field.validation_hint.as_deref() {
+            validate_sensitive_input_text(validation_hint, "field.validationHint", 1, 300)?;
+        }
+        if !keys.insert(field.key.clone()) {
+            return Err(CommandError::user_fixable(
+                "sensitive_input_field_duplicate",
+                format!(
+                    "Sensitive input request contains duplicate field key `{}`.",
+                    field.key
+                ),
+            ));
+        }
+    }
+
+    if !request.allow_partial && request.fields.iter().any(|field| !field.required) {
+        return Err(CommandError::user_fixable(
+            "sensitive_input_partial_policy_invalid",
+            "Sensitive input requests with optional fields must set allowPartial=true.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_sensitive_input_text(
+    value: &str,
+    field: &'static str,
+    min_chars: usize,
+    max_chars: usize,
+) -> CommandResult<()> {
+    let trimmed = value.trim();
+    if trimmed.len() < min_chars || trimmed.len() > max_chars {
+        return Err(CommandError::user_fixable(
+            "sensitive_input_request_invalid",
+            format!(
+                "`{field}` must be between {min_chars} and {max_chars} UTF-8 bytes after trimming."
+            ),
+        ));
+    }
+    if find_prohibited_persistence_content(trimmed).is_some() {
+        return Err(CommandError::user_fixable(
+            "sensitive_input_metadata_secret_like",
+            format!("`{field}` must describe the request without embedding secret values."),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sensitive_input_key(key: &str) -> CommandResult<()> {
+    let valid = !key.is_empty()
+        && key.len() <= 80
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    if valid {
+        Ok(())
+    } else {
+        Err(CommandError::user_fixable(
+            "sensitive_input_field_key_invalid",
+            "Sensitive input field keys must be lowercase snake_case identifiers up to 80 bytes.",
+        ))
+    }
+}
+
+fn sensitive_input_action_id(request: &AutonomousSensitiveInputRequest) -> CommandResult<String> {
+    let bytes = serde_json::to_vec(request).map_err(|error| {
+        CommandError::system_fault(
+            "sensitive_input_hash_failed",
+            format!("Xero could not hash sensitive input request metadata: {error}"),
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = format!("{:x}", hasher.finalize());
+    Ok(format!("sensitive-input-{}", &digest[..16]))
+}
+
+fn sensitive_input_value_to_string(value: &JsonValue) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 impl AutonomousToolRequest {
@@ -5761,6 +6016,7 @@ impl AutonomousToolRequest {
             Self::DesktopStream(_) => AUTONOMOUS_TOOL_DESKTOP_STREAM,
             Self::Mcp(_) => AUTONOMOUS_TOOL_MCP,
             Self::Subagent(_) => AUTONOMOUS_TOOL_SUBAGENT,
+            Self::RequestSensitiveInput(_) => AUTONOMOUS_TOOL_REQUEST_SENSITIVE_INPUT,
             Self::Todo(_) => AUTONOMOUS_TOOL_TODO,
             Self::NotebookEdit(_) => AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
             Self::CodeIntel(_) => AUTONOMOUS_TOOL_CODE_INTEL,
@@ -7395,6 +7651,7 @@ pub enum AutonomousToolOutput {
     DesktopStream(AutonomousDesktopToolOutput),
     Mcp(AutonomousMcpOutput),
     Subagent(AutonomousSubagentOutput),
+    SensitiveInput(AutonomousSensitiveInputOutput),
     Todo(AutonomousTodoOutput),
     NotebookEdit(AutonomousNotebookEditOutput),
     CodeIntel(AutonomousCodeIntelOutput),

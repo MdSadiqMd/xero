@@ -42,6 +42,7 @@ import type {
   CodePatchTextHunkDto,
   RuntimeActionAnswerShapeDto,
   RuntimeActionRequiredOptionDto,
+  RuntimeSensitiveInputFieldDto,
   RuntimeAgentIdDto,
   RuntimeRunView,
   RuntimeStreamCompleteItemView,
@@ -175,6 +176,8 @@ export type ConversationTurn =
       shape: RuntimeActionAnswerShapeDto
       options: RuntimeActionRequiredOptionDto[] | null
       allowMultiple: boolean
+      sensitiveFields?: RuntimeSensitiveInputFieldDto[] | null
+      intendedUse?: string | null
       pendingDecision: 'approve' | 'reject' | 'resume' | null
       isResolved: boolean
     }
@@ -942,6 +945,8 @@ function ConversationTurnRow({
         shape={turn.shape}
         options={turn.options}
         allowMultiple={turn.allowMultiple}
+        sensitiveFields={turn.sensitiveFields ?? null}
+        intendedUse={turn.intendedUse ?? null}
         resolved={turn.isResolved}
       />
     )

@@ -173,6 +173,63 @@ describe('runtime stream contracts', () => {
     expect(planItem.planItems?.[0]?.phaseTitle).toBe('Foundation')
   })
 
+  it('preserves sensitive action-required metadata without values', () => {
+    const item = runtimeStreamItemSchema.parse({
+      kind: 'action_required',
+      runId: 'run-secret-1',
+      sequence: 1,
+      actionId: 'session:run-secret-1:sensitive_input_request',
+      actionType: 'sensitive_input_request',
+      answerShape: 'sensitive_fields',
+      title: 'Sensitive input requested',
+      detail: 'Need local API credentials.',
+      intendedUse: 'Write approved values into .env.local.',
+      sensitiveFields: [
+        {
+          key: 'api_key',
+          label: 'API key',
+          description: 'Used for local setup.',
+          required: true,
+          validationHint: 'Starts with sk-',
+        },
+      ],
+      createdAt: '2026-05-06T12:00:00Z',
+    })
+
+    const stream = mergeRuntimeStreamEvent(createRuntimeStreamView({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-secret-1',
+      sessionId: 'owned-agent:run-secret-1',
+      flowId: null,
+      subscribedItemKinds: ['action_required'],
+    }), {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-secret-1',
+      sessionId: 'owned-agent:run-secret-1',
+      flowId: null,
+      subscribedItemKinds: ['action_required'],
+      item,
+    })
+
+    expect(stream.actionRequired[0]).toMatchObject({
+      kind: 'action_required',
+      answerShape: 'sensitive_fields',
+      intendedUse: 'Write approved values into .env.local.',
+      sensitiveFields: [
+        {
+          key: 'api_key',
+          label: 'API key',
+          required: true,
+        },
+      ],
+    })
+    expect(JSON.stringify(stream.actionRequired[0])).not.toContain('sk-live')
+  })
+
   it('preserves phase-aware plan item metadata in the runtime stream view', () => {
     const base = createRuntimeStreamView({
       projectId: 'project-1',

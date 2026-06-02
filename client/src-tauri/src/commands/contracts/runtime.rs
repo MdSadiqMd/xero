@@ -1554,6 +1554,7 @@ pub enum RuntimeActionAnswerShape {
     LongText,
     Number,
     Date,
+    SensitiveFields,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1563,6 +1564,18 @@ pub struct RuntimeActionRequiredOptionDto {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeSensitiveInputFieldDto {
+    pub key: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1682,6 +1695,10 @@ pub struct RuntimeStreamItemDto {
     pub options: Option<Vec<RuntimeActionRequiredOptionDto>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_multiple: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensitive_fields: Option<Vec<RuntimeSensitiveInputFieldDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intended_use: Option<String>,
     pub title: Option<String>,
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,5 +1,8 @@
 use super::*;
-use crate::runtime::{AutonomousFsTransactionRequest, AutonomousSubagentWriteScope};
+use crate::runtime::{
+    autonomous_tool_runtime::AutonomousSensitiveInputOutput, AutonomousFsTransactionRequest,
+    AutonomousSubagentWriteScope,
+};
 use std::{
     collections::{BTreeSet, HashMap},
     path::PathBuf,
@@ -3895,10 +3898,74 @@ pub(crate) fn record_command_output_event(
                 record_desktop_action_required(repo_root, project_id, run_id, output)?;
             }
         }
+        AutonomousToolOutput::SensitiveInput(output) => {
+            let created_at = now_timestamp();
+            if output.status == "approved" {
+                return Ok(());
+            }
+            let approval = project_store::upsert_pending_operator_approval_with_action_id(
+                repo_root,
+                project_id,
+                run_id,
+                None,
+                "sensitive_input_request",
+                &output.action_id,
+                "Sensitive input requested",
+                &output.purpose,
+                &created_at,
+            )?;
+            record_action_request(
+                repo_root,
+                project_id,
+                run_id,
+                &approval.action_id,
+                "sensitive_input_request",
+                "Sensitive input requested",
+                &output.purpose,
+            )?;
+            append_event(
+                repo_root,
+                project_id,
+                run_id,
+                AgentRunEventKind::ActionRequired,
+                json!({
+                    "actionId": approval.action_id,
+                    "actionType": "sensitive_input_request",
+                    "answerShape": "sensitive_fields",
+                    "title": "Sensitive input requested",
+                    "detail": output.purpose,
+                    "purpose": output.purpose,
+                    "intendedUse": output.intended_use,
+                    "allowPartial": output.allow_partial,
+                    "sensitiveFields": sensitive_input_field_metadata(output),
+                    "redacted": true,
+                }),
+            )?;
+        }
         _ => {}
     }
 
     Ok(())
+}
+
+fn sensitive_input_field_metadata(output: &AutonomousSensitiveInputOutput) -> Vec<JsonValue> {
+    output
+        .fields
+        .iter()
+        .map(|field| {
+            let mut metadata = JsonMap::new();
+            metadata.insert("key".into(), json!(field.key));
+            metadata.insert("label".into(), json!(field.label));
+            metadata.insert("required".into(), json!(field.required));
+            if let Some(description) = &field.description {
+                metadata.insert("description".into(), json!(description));
+            }
+            if let Some(validation_hint) = &field.validation_hint {
+                metadata.insert("validationHint".into(), json!(validation_hint));
+            }
+            JsonValue::Object(metadata)
+        })
+        .collect()
 }
 
 pub(crate) fn record_command_output_chunk_event(

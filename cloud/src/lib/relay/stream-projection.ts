@@ -641,6 +641,8 @@ function remoteActionRequiredToTurn(
 		shape: "plain_text",
 		options: null,
 		allowMultiple: false,
+		sensitiveFields: null,
+		intendedUse: null,
 		pendingDecision: null,
 		isResolved: false,
 	};
@@ -763,6 +765,8 @@ function mapAction(item: RuntimeStreamItemDto): ConversationTurn | null {
 		shape: item.answerShape,
 		options: item.options ?? null,
 		allowMultiple: item.allowMultiple ?? false,
+		sensitiveFields: item.sensitiveFields ?? null,
+		intendedUse: item.intendedUse ?? null,
 		pendingDecision: null,
 		isResolved: false,
 	};

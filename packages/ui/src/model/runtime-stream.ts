@@ -73,12 +73,22 @@ export const runtimeActionAnswerShapeSchema = z.enum([
   'long_text',
   'number',
   'date',
+  'sensitive_fields',
 ])
 export const runtimeActionRequiredOptionSchema = z
   .object({
     id: z.string().trim().min(1),
     label: z.string().trim().min(1),
     description: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+export const runtimeSensitiveInputFieldSchema = z
+  .object({
+    key: z.string().regex(/^[a-z0-9_]{1,80}$/),
+    label: z.string().trim().min(1),
+    description: nonEmptyOptionalTextSchema,
+    required: z.boolean(),
+    validationHint: nonEmptyOptionalTextSchema,
   })
   .strict()
 export const runtimeStreamPlanItemStatusSchema = z.enum(['pending', 'in_progress', 'completed'])
@@ -198,6 +208,13 @@ export const runtimeStreamItemSchema = z
       .nullable()
       .optional(),
     allowMultiple: z.boolean().nullable().optional(),
+    sensitiveFields: z
+      .array(runtimeSensitiveInputFieldSchema)
+      .min(1)
+      .max(12)
+      .nullable()
+      .optional(),
+    intendedUse: nonEmptyOptionalTextSchema,
     title: nonEmptyOptionalTextSchema,
     detail: nonEmptyOptionalTextSchema,
     planId: nonEmptyOptionalTextSchema,
@@ -412,6 +429,28 @@ export const runtimeStreamItemSchema = z
             code: z.ZodIssueCode.custom,
             path: ['options'],
             message: 'Only single_choice and multi_choice action-required items may include options.',
+          })
+        }
+        if (item.answerShape === 'sensitive_fields') {
+          if (!item.sensitiveFields || item.sensitiveFields.length === 0) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['sensitiveFields'],
+              message: 'Sensitive input action-required items must include sensitiveFields metadata.',
+            })
+          }
+          if (!item.intendedUse) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['intendedUse'],
+              message: 'Sensitive input action-required items must include intendedUse.',
+            })
+          }
+        } else if (item.sensitiveFields) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['sensitiveFields'],
+            message: 'Only sensitive_fields action-required items may include sensitiveFields.',
           })
         }
         return
@@ -637,6 +676,7 @@ export interface RuntimeStreamActivityItemView extends RuntimeStreamBaseItemView
 
 export type RuntimeActionAnswerShapeDto = z.infer<typeof runtimeActionAnswerShapeSchema>
 export type RuntimeActionRequiredOptionDto = z.infer<typeof runtimeActionRequiredOptionSchema>
+export type RuntimeSensitiveInputFieldDto = z.infer<typeof runtimeSensitiveInputFieldSchema>
 export type RuntimeStreamPlanItemStatusDto = z.infer<typeof runtimeStreamPlanItemStatusSchema>
 export type RuntimeStreamPlanItemDto = z.infer<typeof runtimeStreamPlanItemSchema>
 
@@ -650,6 +690,8 @@ export interface RuntimeStreamActionRequiredItemView extends RuntimeStreamBaseIt
   answerShape: RuntimeActionAnswerShapeDto | null
   options: RuntimeActionRequiredOptionDto[] | null
   allowMultiple: boolean | null
+  sensitiveFields: RuntimeSensitiveInputFieldDto[] | null
+  intendedUse: string | null
 }
 
 export interface RuntimeStreamPlanItemView extends RuntimeStreamBaseItemView {
@@ -1287,6 +1329,11 @@ function normalizeRuntimeStreamItem(event: RuntimeStreamEventDto): RuntimeStream
           : null,
         allowMultiple:
           typeof event.item.allowMultiple === 'boolean' ? event.item.allowMultiple : null,
+        sensitiveFields:
+          event.item.sensitiveFields && event.item.sensitiveFields.length > 0
+            ? event.item.sensitiveFields
+            : null,
+        intendedUse: normalizeOptionalText(event.item.intendedUse),
       }
     }
     case 'plan': {

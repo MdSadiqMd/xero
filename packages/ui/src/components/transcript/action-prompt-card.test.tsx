@@ -74,4 +74,45 @@ describe('ActionPromptCard', () => {
       userAnswer: 'large',
     })
   })
+
+  it('keeps sensitive values hidden by default and submits only entered fields', () => {
+    const { resolveActionPrompt } = renderPrompt({
+      actionType: 'sensitive_input_request',
+      shape: 'sensitive_fields',
+      detail: 'Need local API credentials.',
+      intendedUse: 'Write the provided key into .env.local.',
+      sensitiveFields: [
+        {
+          key: 'api_key',
+          label: 'API key',
+          description: 'Used only for local setup.',
+          required: true,
+          validationHint: 'Starts with sk-',
+        },
+        {
+          key: 'webhook_secret',
+          label: 'Webhook secret',
+          description: null,
+          required: false,
+          validationHint: null,
+        },
+      ],
+    })
+
+    const approve = screen.getByRole('button', { name: 'Approve' })
+    const apiKey = screen.getByLabelText('API key')
+
+    expect(apiKey).toHaveAttribute('type', 'password')
+    expect(approve).toBeDisabled()
+
+    fireEvent.change(apiKey, { target: { value: 'sk-live-secret-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal API key' }))
+    expect(apiKey).toHaveAttribute('type', 'text')
+
+    fireEvent.click(approve)
+
+    expect(resolveActionPrompt).toHaveBeenCalledWith('question-1', 'approve', {
+      userAnswer: JSON.stringify({ api_key: 'sk-live-secret-value' }),
+    })
+  })
 })

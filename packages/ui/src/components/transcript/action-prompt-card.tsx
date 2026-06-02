@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
-import { CheckCircle2, CircleHelp, ListChecks, Loader2, MessageSquare, X } from 'lucide-react'
+import { CheckCircle2, CircleHelp, Eye, EyeOff, KeyRound, ListChecks, Loader2, MessageSquare, X } from 'lucide-react'
 
 import type {
   RuntimeActionAnswerShapeDto,
   RuntimeActionRequiredOptionDto,
+  RuntimeSensitiveInputFieldDto,
 } from '../../model'
 import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
@@ -59,6 +60,8 @@ interface ActionPromptCardProps {
   shape: RuntimeActionAnswerShapeDto
   options: RuntimeActionRequiredOptionDto[] | null
   allowMultiple: boolean
+  sensitiveFields?: RuntimeSensitiveInputFieldDto[] | null
+  intendedUse?: string | null
   resolved?: boolean
 }
 
@@ -70,6 +73,8 @@ export function ActionPromptCard({
   shape,
   options,
   allowMultiple,
+  sensitiveFields,
+  intendedUse,
   resolved = false,
 }: ActionPromptCardProps) {
   const dispatch = useActionPromptDispatch()
@@ -78,6 +83,7 @@ export function ActionPromptCard({
   const isLockedOut = resolved || isPendingForThis
 
   const Icon = useMemo(() => {
+    if (shape === 'sensitive_fields') return KeyRound
     if (shape === 'single_choice') return CircleHelp
     if (shape === 'multi_choice') return ListChecks
     return MessageSquare
@@ -138,6 +144,21 @@ export function ActionPromptCard({
               userAnswer: JSON.stringify(optionIds),
             })
           }
+        />
+      ) : null}
+
+      {shape === 'sensitive_fields' && sensitiveFields ? (
+        <SensitiveFieldsBody
+          actionId={actionId}
+          fields={sensitiveFields}
+          intendedUse={intendedUse ?? null}
+          disabled={isLockedOut || !dispatch}
+          onApprove={(values) =>
+            dispatch?.resolveActionPrompt(actionId, 'approve', {
+              userAnswer: JSON.stringify(values),
+            })
+          }
+          onReject={() => dispatch?.resolveActionPrompt(actionId, 'reject')}
         />
       ) : null}
 
@@ -324,6 +345,123 @@ function MultiChoiceBody({
   )
 }
 
+function SensitiveFieldsBody({
+  actionId,
+  fields,
+  intendedUse,
+  disabled,
+  onApprove,
+  onReject,
+}: {
+  actionId: string
+  fields: RuntimeSensitiveInputFieldDto[]
+  intendedUse: string | null
+  disabled: boolean
+  onApprove: (values: Record<string, string>) => void
+  onReject: () => void
+}) {
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({})
+  const requiredMissing = fields.some((field) => field.required && !values[field.key]?.trim())
+
+  return (
+    <div className="flex flex-col gap-2">
+      {intendedUse ? (
+        <div className="rounded-md border border-border/40 bg-background/40 px-2.5 py-2 text-[11.5px] text-muted-foreground">
+          {intendedUse}
+        </div>
+      ) : null}
+      <div className="flex flex-col gap-2">
+        {fields.map((field) => {
+          const inputId = `${actionId}:${field.key}`
+          const isRevealed = revealed[field.key] === true
+          const value = values[field.key] ?? ''
+          return (
+            <div key={field.key} className="flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor={inputId} className="truncate text-[12px] font-medium text-foreground">
+                  {field.label}
+                </label>
+                <span className="shrink-0 text-[10.5px] text-muted-foreground">
+                  {field.required ? 'Required' : 'Optional'}
+                </span>
+              </div>
+              {field.description ? (
+                <span className="text-[11px] text-muted-foreground">{field.description}</span>
+              ) : null}
+              <div className="flex items-center gap-1.5">
+                <Input
+                  id={inputId}
+                  aria-label={field.label}
+                  autoComplete="off"
+                  className="h-8 border-border/50 bg-background/40 text-[12px]"
+                  disabled={disabled}
+                  onChange={(event) =>
+                    setValues((current) => ({
+                      ...current,
+                      [field.key]: event.target.value,
+                    }))
+                  }
+                  placeholder={field.validationHint ?? 'Enter sensitive value'}
+                  type={isRevealed ? 'text' : 'password'}
+                  value={value}
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  disabled={disabled || value.length === 0}
+                  onClick={() =>
+                    setRevealed((current) => ({
+                      ...current,
+                      [field.key]: !isRevealed,
+                    }))
+                  }
+                  className="h-8 w-8 shrink-0"
+                  aria-label={isRevealed ? `Hide ${field.label}` : `Reveal ${field.label}`}
+                >
+                  {isRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex justify-end gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={disabled}
+          onClick={() => onReject()}
+          className="h-7 px-2 text-[12px] text-muted-foreground hover:text-destructive"
+        >
+          <X className="mr-1 h-3 w-3" />
+          Deny
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={disabled || requiredMissing}
+          onClick={() => {
+            const submitted = Object.fromEntries(
+              Object.entries(values)
+                .map(([key, value]) => [key, value.trim()] as const)
+                .filter(([, value]) => value.length > 0),
+            )
+            onApprove(submitted)
+          }}
+          className="h-7 px-2.5 text-[12px]"
+          data-action-id={actionId}
+        >
+          Approve
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function FreeformBody({
   actionId,
   shape,
@@ -407,6 +545,8 @@ function getFreeformPlaceholder(shape: RuntimeActionAnswerShapeDto): string {
       return 'Enter a number.'
     case 'date':
       return 'Choose a date.'
+    case 'sensitive_fields':
+      return 'Enter sensitive values.'
     case 'plain_text':
     case 'single_choice':
     case 'multi_choice':
