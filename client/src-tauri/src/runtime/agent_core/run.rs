@@ -2415,6 +2415,7 @@ fn handoff_control_input_for_target(
     RuntimeRunControlInputDto {
         runtime_agent_id: target.runtime_agent_id,
         agent_definition_id: Some(target.agent_definition_id.clone()),
+        agent_definition_version: Some(target.agent_definition_version),
         provider_profile_id: requested.and_then(|controls| controls.provider_profile_id.clone()),
         model_id: requested
             .map(|controls| controls.model_id.trim().to_string())
@@ -3427,6 +3428,7 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
             controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id: self.controls.active.runtime_agent_id,
                 agent_definition_id: self.controls.active.agent_definition_id.clone(),
+                agent_definition_version: self.controls.active.agent_definition_version,
                 provider_profile_id: self.controls.active.provider_profile_id.clone(),
                 model_id,
                 thinking_effort: self.controls.active.thinking_effort.clone(),
@@ -3587,6 +3589,7 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
             controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id: child_snapshot.run.runtime_agent_id,
                 agent_definition_id: Some(child_snapshot.run.agent_definition_id.clone()),
+                agent_definition_version: Some(child_snapshot.run.agent_definition_version),
                 provider_profile_id: self.controls.active.provider_profile_id.clone(),
                 model_id: model_id.clone(),
                 thinking_effort: self.controls.active.thinking_effort.clone(),
@@ -4401,6 +4404,7 @@ mod tests {
         RuntimeRunControlInputDto {
             runtime_agent_id,
             agent_definition_id: Some(definition_id.into()),
+            agent_definition_version: None,
             provider_profile_id: Some(FAKE_PROVIDER_ID.into()),
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,

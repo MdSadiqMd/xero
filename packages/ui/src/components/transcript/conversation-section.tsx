@@ -33,6 +33,7 @@ import {
   User,
   XCircle,
 } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 
 import { cn } from '../../lib/utils'
@@ -441,17 +442,19 @@ export const ConversationSection = memo(function ConversationSection({
             aria-label="Agent conversation turns"
             className="flex flex-col gap-2"
           >
-            {visibleTurns.map((turn) => (
-              <DenseTurnItem
-                key={turn.id}
-                turn={turn}
-                codeUndoStates={codeUndoStates}
-                returnSessionToHereStates={returnSessionToHereStates}
-                onUndoChangeGroup={onUndoChangeGroup}
-                onReturnSessionToHere={onReturnSessionToHere}
-                onOpenHandoffSummary={onOpenHandoffSummary}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {visibleTurns.map((turn) => (
+                <DenseTurnItem
+                  key={turn.id}
+                  turn={turn}
+                  codeUndoStates={codeUndoStates}
+                  returnSessionToHereStates={returnSessionToHereStates}
+                  onUndoChangeGroup={onUndoChangeGroup}
+                  onReturnSessionToHere={onReturnSessionToHere}
+                  onOpenHandoffSummary={onOpenHandoffSummary}
+                />
+              ))}
+            </AnimatePresence>
           </ol>
         ) : null}
         {showActivityIndicator ? <AgentActivityIndicator /> : null}
@@ -535,30 +538,34 @@ export const ConversationSection = memo(function ConversationSection({
           aria-label="Agent conversation turns"
           className="flex flex-col gap-5"
         >
-          {visibleTurns.map((turn, index) => {
-            const prev = index > 0 ? visibleTurns[index - 1] : null
-            const next =
-              index < visibleTurns.length - 1 ? visibleTurns[index + 1] : null
-            return (
-              <ConversationTurnItem
-                key={turn.id}
-                turn={turn}
-                accountAvatarUrl={accountAvatarUrl}
-                accountLogin={accountLogin}
-                isStreaming={
-                  index === visibleTurns.length - 1 &&
-                  isLastTurnStreamingAssistant
-                }
-                connectsTop={isToolTurnKind(prev)}
-                connectsBottom={isToolTurnKind(next)}
-                codeUndoStates={codeUndoStates}
-                returnSessionToHereStates={returnSessionToHereStates}
-                onUndoChangeGroup={onUndoChangeGroup}
-                onReturnSessionToHere={onReturnSessionToHere}
-                onOpenHandoffSummary={onOpenHandoffSummary}
-              />
-            )
-          })}
+          <AnimatePresence initial={false}>
+            {visibleTurns.map((turn, index) => {
+              const prev = index > 0 ? visibleTurns[index - 1] : null
+              const next =
+                index < visibleTurns.length - 1
+                  ? visibleTurns[index + 1]
+                  : null
+              return (
+                <ConversationTurnItem
+                  key={turn.id}
+                  turn={turn}
+                  accountAvatarUrl={accountAvatarUrl}
+                  accountLogin={accountLogin}
+                  isStreaming={
+                    index === visibleTurns.length - 1 &&
+                    isLastTurnStreamingAssistant
+                  }
+                  connectsTop={isToolTurnKind(prev)}
+                  connectsBottom={isToolTurnKind(next)}
+                  codeUndoStates={codeUndoStates}
+                  returnSessionToHereStates={returnSessionToHereStates}
+                  onUndoChangeGroup={onUndoChangeGroup}
+                  onReturnSessionToHere={onReturnSessionToHere}
+                  onOpenHandoffSummary={onOpenHandoffSummary}
+                />
+              )
+            })}
+          </AnimatePresence>
         </ol>
       ) : null}
 
@@ -712,7 +719,7 @@ function CopyTextButton({
 }
 
 function NoticeListItem({ children }: { children: React.ReactNode }) {
-  return <li className={TURN_ENTRY_CLASS}>{children}</li>
+  return <AnimatedTranscriptListItem>{children}</AnimatedTranscriptListItem>
 }
 
 /**
@@ -771,12 +778,80 @@ interface ConversationTurnItemProps {
   }) => void
 }
 
-// Custom keyframes (see globals.css `.agent-turn-soft-enter`) give each new
-// turn a softer landing — a small upward drift, micro scale, longer ease —
-// than tailwind's stock `animate-in fade-in-0 slide-in-from-bottom-1`.
-// Reduced motion is honoured globally by the `prefers-reduced-motion` rule
-// at the bottom of globals.css.
-const TURN_ENTRY_CLASS = 'agent-turn-soft-enter'
+const TRANSCRIPT_MOTION_TRANSITION = {
+  duration: 0.24,
+  ease: [0.22, 1, 0.36, 1],
+}
+const TRANSCRIPT_INSTANT_TRANSITION = { duration: 0 }
+
+function useTranscriptMotionTransition() {
+  return useReducedMotion()
+    ? TRANSCRIPT_INSTANT_TRANSITION
+    : TRANSCRIPT_MOTION_TRANSITION
+}
+
+function AnimatedTranscriptListItem({
+  children,
+  className,
+  style,
+}: {
+  children: React.ReactNode
+  className?: string
+  style?: React.CSSProperties
+}) {
+  const shouldReduceMotion = useReducedMotion()
+  const transition = useTranscriptMotionTransition()
+
+  return (
+    <motion.li
+      layout="position"
+      initial={
+        shouldReduceMotion ? false : { opacity: 0, y: 6, scale: 0.985 }
+      }
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={
+        shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, scale: 0.99 }
+      }
+      transition={transition}
+      className={className}
+      style={style}
+    >
+      {children}
+    </motion.li>
+  )
+}
+
+function AnimatedTranscriptPanel({
+  children,
+  className,
+}: {
+  children: React.ReactNode
+  className?: string
+}) {
+  const shouldReduceMotion = useReducedMotion()
+  const transition = useTranscriptMotionTransition()
+
+  return (
+    <motion.div
+      layout
+      initial={
+        shouldReduceMotion
+          ? false
+          : { opacity: 0, height: 0, y: -4, scale: 0.995 }
+      }
+      animate={{ opacity: 1, height: 'auto', y: 0, scale: 1 }}
+      exit={
+        shouldReduceMotion
+          ? { opacity: 0, height: 0 }
+          : { opacity: 0, height: 0, y: -3, scale: 0.995 }
+      }
+      transition={transition}
+      className={cn('overflow-hidden', className)}
+    >
+      {children}
+    </motion.div>
+  )
+}
 
 function ConversationTurnItem({
   turn,
@@ -792,7 +867,7 @@ function ConversationTurnItem({
   onOpenHandoffSummary,
 }: ConversationTurnItemProps) {
   return (
-    <li className={TURN_ENTRY_CLASS}>
+    <AnimatedTranscriptListItem>
       <ConversationTurnRow
         turn={turn}
         accountAvatarUrl={accountAvatarUrl}
@@ -806,7 +881,7 @@ function ConversationTurnItem({
         onReturnSessionToHere={onReturnSessionToHere}
         onOpenHandoffSummary={onOpenHandoffSummary}
       />
-    </li>
+    </AnimatedTranscriptListItem>
   )
 }
 
@@ -1724,12 +1799,9 @@ function ActionCard({
   const hasDetails = detailRows.length > 0 || Boolean(mediaAttachments?.length)
   const [open, setOpen] = useState(() => defaultOpen && hasDetails)
   const isFailed = state === 'failed'
-  const isRunning = state === 'running'
   const rowClass = cn(
     'flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors',
-    'hover:bg-foreground/[0.03]',
-    isRunning && 'bg-primary/[0.025] agent-tool-running-row',
-    isFailed && 'bg-destructive/[0.04]',
+    isFailed && 'text-destructive',
   )
 
   useEffect(() => {
@@ -1780,21 +1852,18 @@ function ActionCard({
           </div>
         )}
         {hasDetails ? (
-          <CollapsibleContent
-            className={cn(
-              'overflow-hidden',
-              'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
-              'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
-              'data-[state=open]:duration-200 data-[state=closed]:duration-150',
-            )}
-          >
-            <div className="ml-[22px] pl-3 pr-1 pb-1.5 pt-1">
-              <ToolDetailRows
-                rows={detailRows}
-                mediaAttachments={mediaAttachments}
-              />
-            </div>
-          </CollapsibleContent>
+          <AnimatePresence initial={false}>
+            {open ? (
+              <AnimatedTranscriptPanel>
+                <div className="ml-[22px] pl-3 pr-1 pb-1.5 pt-1">
+                  <ToolDetailRows
+                    rows={detailRows}
+                    mediaAttachments={mediaAttachments}
+                  />
+                </div>
+              </AnimatedTranscriptPanel>
+            ) : null}
+          </AnimatePresence>
         ) : null}
       </Collapsible>
     </div>
@@ -2177,82 +2246,83 @@ function SubagentGroupCard({
           />
         </button>
       </CollapsibleTrigger>
-      <CollapsibleContent
-        className={cn(
-          'overflow-hidden',
-          'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
-          'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
-          'data-[state=open]:duration-200 data-[state=closed]:duration-150',
-        )}
-      >
-        <div className="ml-[22px] mt-1 flex flex-col gap-2 border-l border-border/25 pl-3">
-          {turn.prompt ? (
-            <div className="rounded-md border border-border/40 bg-muted/15 px-2 py-1.5 text-[12px] text-muted-foreground">
-              <span className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground/80">
-                <GitBranch aria-hidden="true" className="h-2.5 w-2.5" />
-                Subagent prompt
-              </span>
-              <div className="whitespace-pre-wrap break-words">
-                {turn.prompt}
-              </div>
-            </div>
-          ) : null}
-          {hasChildren ? (
-            <ul
-              aria-label={`${turn.roleLabel} subagent transcript`}
-              className="flex flex-col gap-2"
-            >
-              {turn.children.map((childTurn, index) => (
-                <li
-                  key={childTurn.id}
-                  className="agent-stagger-child"
-                  style={{ ['--stagger-index' as string]: index }}
+      <AnimatePresence initial={false}>
+        {open ? (
+          <AnimatedTranscriptPanel>
+            <div className="ml-[22px] mt-1 flex flex-col gap-2 border-l border-border/25 pl-3">
+              {turn.prompt ? (
+                <div className="rounded-md border border-border/40 bg-muted/15 px-2 py-1.5 text-[12px] text-muted-foreground">
+                  <span className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground/80">
+                    <GitBranch aria-hidden="true" className="h-2.5 w-2.5" />
+                    Subagent prompt
+                  </span>
+                  <div className="whitespace-pre-wrap break-words">
+                    {turn.prompt}
+                  </div>
+                </div>
+              ) : null}
+              {hasChildren ? (
+                <ul
+                  aria-label={`${turn.roleLabel} subagent transcript`}
+                  className="flex flex-col gap-2"
                 >
-                  <ConversationTurnRow
-                    turn={childTurn}
-                    accountAvatarUrl={accountAvatarUrl}
-                    accountLogin={accountLogin}
-                    isStreaming={isStreaming && !isTerminal}
-                    connectsTop={false}
-                    connectsBottom={false}
-                    codeUndoStates={codeUndoStates}
-                    returnSessionToHereStates={returnSessionToHereStates}
-                    onUndoChangeGroup={onUndoChangeGroup}
-                    onReturnSessionToHere={onReturnSessionToHere}
-                    onOpenHandoffSummary={onOpenHandoffSummary}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-[11.5px] italic text-muted-foreground/70">
-              {isActive
-                ? 'Subagent is starting up; transcript will appear here.'
-                : 'Subagent produced no transcript items.'}
-            </div>
-          )}
-          {turn.resultSummary ? (
-            <div
-              className={cn(
-                'rounded-md border px-2 py-1.5 text-[12px]',
-                turn.status === 'failed' || turn.status === 'budget_exhausted'
-                  ? 'border-destructive/30 bg-destructive/[0.04] text-destructive'
-                  : 'border-border/40 bg-muted/15 text-muted-foreground',
+                  <AnimatePresence initial={false}>
+                    {turn.children.map((childTurn, index) => (
+                      <AnimatedTranscriptListItem
+                        key={childTurn.id}
+                        className="agent-stagger-child"
+                        style={{ ['--stagger-index' as string]: index }}
+                      >
+                        <ConversationTurnRow
+                          turn={childTurn}
+                          accountAvatarUrl={accountAvatarUrl}
+                          accountLogin={accountLogin}
+                          isStreaming={isStreaming && !isTerminal}
+                          connectsTop={false}
+                          connectsBottom={false}
+                          codeUndoStates={codeUndoStates}
+                          returnSessionToHereStates={returnSessionToHereStates}
+                          onUndoChangeGroup={onUndoChangeGroup}
+                          onReturnSessionToHere={onReturnSessionToHere}
+                          onOpenHandoffSummary={onOpenHandoffSummary}
+                        />
+                      </AnimatedTranscriptListItem>
+                    ))}
+                  </AnimatePresence>
+                </ul>
+              ) : (
+                <div className="text-[11.5px] italic text-muted-foreground/70">
+                  {isActive
+                    ? 'Subagent is starting up; transcript will appear here.'
+                    : 'Subagent produced no transcript items.'}
+                </div>
               )}
-            >
-              <span className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide opacity-80">
-                <Info aria-hidden="true" className="h-2.5 w-2.5" />
-                {turn.status === 'failed' || turn.status === 'budget_exhausted'
-                  ? 'Failure'
-                  : 'Result summary'}
-              </span>
-              <div className="whitespace-pre-wrap break-words">
-                {turn.resultSummary}
-              </div>
+              {turn.resultSummary ? (
+                <div
+                  className={cn(
+                    'rounded-md border px-2 py-1.5 text-[12px]',
+                    turn.status === 'failed' ||
+                      turn.status === 'budget_exhausted'
+                      ? 'border-destructive/30 bg-destructive/[0.04] text-destructive'
+                      : 'border-border/40 bg-muted/15 text-muted-foreground',
+                  )}
+                >
+                  <span className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide opacity-80">
+                    <Info aria-hidden="true" className="h-2.5 w-2.5" />
+                    {turn.status === 'failed' ||
+                    turn.status === 'budget_exhausted'
+                      ? 'Failure'
+                      : 'Result summary'}
+                  </span>
+                  <div className="whitespace-pre-wrap break-words">
+                    {turn.resultSummary}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-      </CollapsibleContent>
+          </AnimatedTranscriptPanel>
+        ) : null}
+      </AnimatePresence>
     </Collapsible>
   )
 }
@@ -2290,7 +2360,6 @@ function ActionGroupCard({
   connectsBottom = false,
 }: ActionGroupCardProps) {
   const [open, setOpen] = useState(false)
-  const isRunning = state === 'running'
   const hasDetail = detail.trim().length > 0
 
   return (
@@ -2315,8 +2384,6 @@ function ActionGroupCard({
           aria-label={`${open ? 'Hide' : 'Show'} grouped tool details for ${title}`}
           className={cn(
             'flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors',
-            'hover:bg-foreground/[0.03]',
-            isRunning && 'bg-primary/[0.025] agent-tool-running-row',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
           )}
         >
@@ -2347,20 +2414,23 @@ function ActionGroupCard({
           />
         </button>
       </CollapsibleTrigger>
-      <CollapsibleContent
-        className={cn(
-          'overflow-hidden',
-          'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
-          'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
-          'data-[state=open]:duration-200 data-[state=closed]:duration-150',
-        )}
-      >
-        <ol className="ml-[12px] mt-0.5 flex flex-col gap-0.5 pl-3">
-          {actions.map((action, index) => (
-            <ActionGroupItem key={action.id} action={action} index={index} />
-          ))}
-        </ol>
-      </CollapsibleContent>
+      <AnimatePresence initial={false}>
+        {open ? (
+          <AnimatedTranscriptPanel>
+            <ol className="ml-[12px] mt-0.5 flex flex-col gap-0.5 pl-3">
+              <AnimatePresence initial={false}>
+                {actions.map((action, index) => (
+                  <ActionGroupItem
+                    key={action.id}
+                    action={action}
+                    index={index}
+                  />
+                ))}
+              </AnimatePresence>
+            </ol>
+          </AnimatedTranscriptPanel>
+        ) : null}
+      </AnimatePresence>
     </Collapsible>
   )
 }
@@ -2377,13 +2447,11 @@ function ActionGroupItem({
     action.detailRows.length > 0 || Boolean(action.mediaAttachments?.length)
   const rowClass = cn(
     'flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors',
-    'hover:bg-foreground/[0.03]',
-    action.state === 'running' && 'bg-primary/[0.025] agent-tool-running-row',
-    action.state === 'failed' && 'bg-destructive/[0.04]',
+    action.state === 'failed' && 'text-destructive',
   )
 
   return (
-    <li
+    <AnimatedTranscriptListItem
       className="group/sub agent-stagger-child relative"
       style={{ ['--stagger-index' as string]: index }}
     >
@@ -2413,24 +2481,21 @@ function ActionGroupItem({
           </div>
         )}
         {hasDetails ? (
-          <CollapsibleContent
-            className={cn(
-              'overflow-hidden',
-              'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
-              'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
-              'data-[state=open]:duration-150 data-[state=closed]:duration-100',
-            )}
-          >
-            <div className="ml-[20px] pb-1.5 pl-3 pr-1 pt-1">
-              <ToolDetailRows
-                rows={action.detailRows}
-                mediaAttachments={action.mediaAttachments}
-              />
-            </div>
-          </CollapsibleContent>
+          <AnimatePresence initial={false}>
+            {open ? (
+              <AnimatedTranscriptPanel>
+                <div className="ml-[20px] pb-1.5 pl-3 pr-1 pt-1">
+                  <ToolDetailRows
+                    rows={action.detailRows}
+                    mediaAttachments={action.mediaAttachments}
+                  />
+                </div>
+              </AnimatedTranscriptPanel>
+            ) : null}
+          </AnimatePresence>
         ) : null}
       </Collapsible>
-    </li>
+    </AnimatedTranscriptListItem>
   )
 }
 
@@ -3560,7 +3625,7 @@ function DenseActionItem({
     Boolean(mediaAttachments?.length)
 
   return (
-    <li className="px-1">
+    <AnimatedTranscriptListItem className="px-1">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
@@ -3596,21 +3661,20 @@ function DenseActionItem({
           />
         ) : null}
       </button>
-      {open && hasDetails ? (
-        <div
-          className={cn(
-            'ml-3 mt-1.5 border-l border-border/30 pl-2.5',
-            'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1 motion-safe:duration-150',
-          )}
-        >
-          <DenseToolDetails
-            detail={detail}
-            detailRows={detailRows}
-            mediaAttachments={mediaAttachments}
-          />
-        </div>
-      ) : null}
-    </li>
+      <AnimatePresence initial={false}>
+        {open && hasDetails ? (
+          <AnimatedTranscriptPanel>
+            <div className="ml-3 mt-1.5 border-l border-border/30 pl-2.5">
+              <DenseToolDetails
+                detail={detail}
+                detailRows={detailRows}
+                mediaAttachments={mediaAttachments}
+              />
+            </div>
+          </AnimatedTranscriptPanel>
+        ) : null}
+      </AnimatePresence>
+    </AnimatedTranscriptListItem>
   )
 }
 
@@ -3638,7 +3702,7 @@ function DenseActionGroupItem({
   const hasChildren = actions.length > 0
 
   return (
-    <li className="px-1">
+    <AnimatedTranscriptListItem className="px-1">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
@@ -3674,26 +3738,27 @@ function DenseActionGroupItem({
           />
         ) : null}
       </button>
-      {open && hasChildren ? (
-        <ol
-          className={cn(
-            'ml-3 mt-1.5 flex flex-col gap-1.5 border-l border-border/30 pl-2.5',
-            'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1 motion-safe:duration-150',
-          )}
-        >
-          {actions.map((action) => (
-            <DenseActionItem
-              key={action.id}
-              title={action.title}
-              detail={action.detail}
-              detailRows={action.detailRows}
-              mediaAttachments={action.mediaAttachments}
-              state={action.state}
-            />
-          ))}
-        </ol>
-      ) : null}
-    </li>
+      <AnimatePresence initial={false}>
+        {open && hasChildren ? (
+          <AnimatedTranscriptPanel>
+            <ol className="ml-3 mt-1.5 flex flex-col gap-1.5 border-l border-border/30 pl-2.5">
+              <AnimatePresence initial={false}>
+                {actions.map((action) => (
+                  <DenseActionItem
+                    key={action.id}
+                    title={action.title}
+                    detail={action.detail}
+                    detailRows={action.detailRows}
+                    mediaAttachments={action.mediaAttachments}
+                    state={action.state}
+                  />
+                ))}
+              </AnimatePresence>
+            </ol>
+          </AnimatedTranscriptPanel>
+        ) : null}
+      </AnimatePresence>
+    </AnimatedTranscriptListItem>
   )
 }
 

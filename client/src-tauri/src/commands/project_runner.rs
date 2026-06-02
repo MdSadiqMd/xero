@@ -919,6 +919,7 @@ fn suggest_project_start_targets_blocking<R: Runtime + 'static>(
     let controls = RuntimeRunControlInputDto {
         runtime_agent_id,
         agent_definition_id: None,
+        agent_definition_version: None,
         provider_profile_id,
         model_id: model_id.clone(),
         thinking_effort: request.thinking_effort.clone(),
@@ -2134,6 +2135,7 @@ fn suggest_terminal_ai_fallback<R: Runtime + 'static>(
     let controls = RuntimeRunControlInputDto {
         runtime_agent_id: runtime_agent_id.clone(),
         agent_definition_id: None,
+        agent_definition_version: None,
         provider_profile_id,
         model_id: request.model_id.unwrap_or_default(),
         thinking_effort: request.thinking_effort,

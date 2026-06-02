@@ -572,6 +572,8 @@ pub struct RuntimeRunControlInputDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_definition_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_definition_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1366,6 +1368,7 @@ mod tests {
         let input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: "test-model".into(),
             thinking_effort: None,

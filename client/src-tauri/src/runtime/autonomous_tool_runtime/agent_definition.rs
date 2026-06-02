@@ -4571,6 +4571,7 @@ mod tests {
         let controls = runtime_controls_from_request(Some(&RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::AgentCreate,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: Some(FAKE_PROVIDER_ID.into()),
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,

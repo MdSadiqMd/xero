@@ -286,11 +286,14 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
         project_id,
         requested_agent_id,
     )?;
-    let definition_selection = project_store::resolve_agent_definition_for_run(
+    let definition_selection = project_store::resolve_agent_definition_version_for_run(
         &repo_root,
         requested_controls
             .as_ref()
             .and_then(|controls| controls.agent_definition_id.as_deref()),
+        requested_controls
+            .as_ref()
+            .and_then(|controls| controls.agent_definition_version),
         requested_agent_id,
     )?;
     project_store::ensure_runtime_agent_allowed_for_project(
@@ -1323,6 +1326,7 @@ fn resolve_agent_default_model_controls(
     Some(RuntimeRunControlInputDto {
         runtime_agent_id: definition_selection.runtime_agent_id,
         agent_definition_id: Some(definition_selection.definition_id.clone()),
+        agent_definition_version: Some(definition_selection.version),
         provider_profile_id,
         model_id: model_id.to_owned(),
         thinking_effort,
@@ -1398,6 +1402,7 @@ fn runtime_control_input_from_active(
     RuntimeRunControlInputDto {
         runtime_agent_id: active.runtime_agent_id,
         agent_definition_id: active.agent_definition_id.clone(),
+        agent_definition_version: active.agent_definition_version,
         provider_profile_id: active.provider_profile_id.clone(),
         model_id: active.model_id.clone(),
         thinking_effort: active.thinking_effort.clone(),
@@ -1450,9 +1455,10 @@ pub(crate) fn update_owned_runtime_run_controls(
     let base_pending = snapshot.controls.pending.as_ref();
     let requested_definition = match controls.as_ref() {
         Some(controls) => {
-            let selection = project_store::resolve_agent_definition_for_run(
+            let selection = project_store::resolve_agent_definition_version_for_run(
                 repo_root,
                 controls.agent_definition_id.as_deref(),
+                controls.agent_definition_version,
                 controls.runtime_agent_id,
             )?;
             ensure_agent_matches_session_kind(&agent_session, selection.runtime_agent_id)?;
@@ -2055,6 +2061,7 @@ mod tests {
         let requested = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("custom_engineer".into()),
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: String::new(),
             thinking_effort: None,
@@ -2094,6 +2101,7 @@ mod tests {
         let requested = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("custom_engineer".into()),
+            agent_definition_version: None,
             provider_profile_id: Some("openai-work".into()),
             model_id: "gpt-5.5".into(),
             thinking_effort: None,

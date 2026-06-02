@@ -1550,6 +1550,7 @@ mod removed_test_agent_ci_runtime {
         RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,

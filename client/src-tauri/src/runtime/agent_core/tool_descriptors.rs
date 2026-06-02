@@ -852,7 +852,7 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "",
             "Agent design workflow: clarify the agent's purpose, scope, risk tolerance, expected outputs, project specificity, example tasks, and whether it should support same-agent continuation only or cross-agent routing suggestions. Draft schema-first definitions with schemaVersion 3, an explicit `attachedSkills` array, and a `handoffPolicy` using `{ enabled, routingMode, allowedTargets, preserveDefinitionVersion, carrySummary, includeDurableContext }`; custom-agent routing targets may include built-in Ask, Engineer, Debug, Generalist, or custom refs, but not Plan, Computer Use, Crawl, or Agent Create. Validate drafts with `agent_definition`, and use validation diagnostics as the authority for denied tools, attached-skill repair actions, effect classes, profile boundaries, and handoff targets. When the user asks to attach skills, call `agent_definition` with action `list_attachable_skills` and copy only the returned catalog attachment object into `attachedSkills`; attached skills are always-injected lower-priority context, not callable tools, and must not set `skillRuntimeAllowed` by themselves. Prefer narrow agents over broad do-everything agents, and call out safety limits before presenting a draft.",
             "",
-            "Workflow design workflow: clarify the workflow goal, trigger/input expectations, participating agents, handoff artifacts, branch conditions, human checkpoints, terminal outcomes, and run safety. Draft schema-first Workflow definitions with schema `xero.workflow_definition.v1`, validate them with `workflow_definition`, and use validation diagnostics as the authority for graph repairs. Prefer small readable pipelines with explicit artifact contracts over hidden behavior.",
+            "Workflow design workflow: clarify the workflow goal, trigger/input expectations, participating agents, handoff artifacts, branch conditions, human checkpoints, terminal outcomes, and run safety. If participating agent refs are not already known, call `agent_definition` list/get or the Workflow agent catalog tools before composing agent nodes, then pin the selected `agentRef.version`. Draft schema-first Workflow definitions with schema `xero.workflow_definition.v1`, validate them with `workflow_definition` before asking for save/update approval, and use validation diagnostics as the authority for graph repairs. Prefer small readable pipelines with explicit artifact contracts over hidden behavior.",
             "",
             "Persistence and retrieval contract: Xero provides durable project context, approved memory, project records, handoffs, and the current context manifest as lower-priority data. Use read-only retrieval only when the requested definition depends on project-specific context. Save definitions only to app-data-backed registry state through `agent_definition` or `workflow_definition`; never write `.xero/` or repository files.",
             "",
@@ -1397,7 +1397,7 @@ fn tool_policy_fragment(
             "Available repository reconnaissance tools: {tool_names}\n\nUse repository read/read_many/result_page/stat/search/find/list/list_tree/directory_digest/hash, safe git status/diff, workspace index, code intelligence, environment context, and system diagnostics only for local repository mapping. `project_context` is read-only for Crawl; do not record/update/refresh durable context with that tool. `command` is available only for short, bounded, approval-gated local discovery. `tool_search` and `tool_access` are filtered to Crawl-safe reconnaissance capabilities; do not ask for mutation, browser-control, MCP, skill, subagent, device, network, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::AgentCreate => format!(
-            "Available definition-design tools: {tool_names}\n\nUse tools only for read-only project context, tool-catalog inspection, or controlled agent-definition and Workflow-definition registry actions. `agent_definition` and `workflow_definition` are the only persistence tools Agent Create may use. Agent save/update/archive/clone and Workflow save/update require explicit operator approval. Present a reviewable agent-definition draft with validation diagnostics before asking the user to approve persistence. Do not ask for repository mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
+            "Available definition-design tools: {tool_names}\n\nUse tools only for read-only project context, tool-catalog inspection, or controlled agent-definition and Workflow-definition registry actions. `agent_definition` and `workflow_definition` are the only persistence tools Agent Create may use. When drafting Workflows and agent refs are not already known, list/get existing agents before composing nodes, pin the selected version, and run `workflow_definition` validation before asking for save/update approval. Agent save/update/archive/clone and Workflow save/update require explicit operator approval. Present a reviewable agent or Workflow draft with validation diagnostics before asking the user to approve persistence. Do not ask for repository mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::Generalist => format!(
             "Available tools: {tool_names}\n\nYou have the full engineering toolset. When the request fits a specialist's scope (Ask, Plan, Engineer, or Debug), emit the `<xero-routing-suggestion …/>` marker in your assistant message instead of starting the work. Use `project_context` to retrieve durable context before acting when prior decisions, constraints, or handoffs may matter. If a relevant capability is not currently available, first call `tool_search` and then `tool_access` before proceeding. Use `todo` for meaningful multi-step planning state.{tool_application_guidance}{browser_control_guidance}"
@@ -7919,6 +7919,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8022,6 +8023,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("custom-s51".into()),
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8148,6 +8150,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("output-surgeon".into()),
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8230,6 +8233,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("db-scribe".into()),
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8301,6 +8305,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("handoff-engineer".into()),
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8426,6 +8431,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Plan,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8625,6 +8631,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Debug,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8672,6 +8679,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::AgentCreate,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -8728,6 +8736,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9032,6 +9041,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Ask,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9073,6 +9083,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9107,6 +9118,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9143,6 +9155,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::ComputerUse,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9248,6 +9261,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::ComputerUse,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9293,6 +9307,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::ComputerUse,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,
@@ -9331,6 +9346,7 @@ mod tests {
         let controls_input = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Crawl,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,

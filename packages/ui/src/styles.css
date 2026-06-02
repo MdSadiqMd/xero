@@ -817,31 +817,6 @@
     }
   }
 
-  /* Subtle breathing tint on the row of a currently-running tool. Layered
-   * over the existing `bg-primary/[0.025]` so the row keeps its soft primary
-   * wash even when motion is disabled. */
-  .agent-tool-running-row {
-    background-image: linear-gradient(
-      90deg,
-      transparent 0%,
-      color-mix(in oklab, var(--primary) 4%, transparent) 50%,
-      transparent 100%
-    );
-    background-size: 220% 100%;
-    background-repeat: no-repeat;
-    animation: agent-tool-running-shimmer 2600ms ease-in-out infinite;
-  }
-
-  @keyframes agent-tool-running-shimmer {
-    0%,
-    100% {
-      background-position: 0% 0;
-    }
-    50% {
-      background-position: 100% 0;
-    }
-  }
-
   /* When `<html>` carries `data-layout-shifting`, the harness is in the
    * middle of a tab switch (or another change that shifts multiple sidebars
    * + the main content at once). Snap sidebar widths instead of animating

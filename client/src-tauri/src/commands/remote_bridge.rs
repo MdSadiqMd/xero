@@ -3679,6 +3679,7 @@ fn remote_run_controls_from_payload(
     Ok(Some(RuntimeRunControlInputDto {
         runtime_agent_id,
         agent_definition_id: Some(runtime_agent_id.as_str().to_string()),
+        agent_definition_version: None,
         provider_profile_id: payload_string(payload, &["providerProfileId", "provider_profile_id"])
             .map(ToOwned::to_owned)
             .or_else(|| fallback.and_then(|controls| controls.provider_profile_id.clone())),
@@ -3704,6 +3705,7 @@ fn selected_runtime_run_controls(
         return RuntimeRunControlInputDto {
             runtime_agent_id: pending.runtime_agent_id,
             agent_definition_id: pending.agent_definition_id.clone(),
+            agent_definition_version: pending.agent_definition_version,
             provider_profile_id: pending.provider_profile_id.clone(),
             model_id: pending.model_id.clone(),
             thinking_effort: pending.thinking_effort.clone(),
@@ -3716,6 +3718,7 @@ fn selected_runtime_run_controls(
     RuntimeRunControlInputDto {
         runtime_agent_id: snapshot.controls.active.runtime_agent_id,
         agent_definition_id: snapshot.controls.active.agent_definition_id.clone(),
+        agent_definition_version: snapshot.controls.active.agent_definition_version,
         provider_profile_id: snapshot.controls.active.provider_profile_id.clone(),
         model_id: snapshot.controls.active.model_id.clone(),
         thinking_effort: snapshot.controls.active.thinking_effort.clone(),
@@ -4021,6 +4024,7 @@ mod tests {
         RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: Some("engineer".into()),
+            agent_definition_version: None,
             provider_profile_id: Some("profile-openai".into()),
             model_id: model_id.into(),
             thinking_effort: None,
@@ -4190,6 +4194,7 @@ mod tests {
         let controls = RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Debug,
             agent_definition_id: Some("debug".into()),
+            agent_definition_version: None,
             provider_profile_id: Some("xai-default".into()),
             model_id: "grok-4.3".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::Low),
