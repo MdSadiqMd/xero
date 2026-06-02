@@ -178,6 +178,7 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
             provider_id: PROVIDER_ID.into(),
             model_id: MODEL_ID.into(),
             input_tokens: 120,
+            billable_input_tokens: 120,
             output_tokens: 40,
             total_tokens: 160,
             cache_read_tokens: 0,

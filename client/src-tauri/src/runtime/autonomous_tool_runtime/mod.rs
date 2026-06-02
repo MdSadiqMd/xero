@@ -9780,6 +9780,118 @@ mod tests {
         assert_eq!(fetch.schema_fields, &["url", "maxChars", "timeoutMs"]);
     }
 
+    #[test]
+    fn domain_tool_pack_tools_are_cataloged_and_requestable_through_tool_access() {
+        let catalog_tools = deferred_tool_catalog(true)
+            .into_iter()
+            .map(|entry| entry.tool_name)
+            .collect::<BTreeSet<_>>();
+        let access_groups = TOOL_ACCESS_GROUP_DEFINITIONS
+            .iter()
+            .map(|definition| definition.name)
+            .collect::<BTreeSet<_>>();
+
+        for manifest in domain_tool_pack_manifests() {
+            for group in &manifest.tool_groups {
+                assert!(
+                    access_groups.contains(group.as_str()),
+                    "pack `{}` declares unknown activation group `{group}`",
+                    manifest.pack_id
+                );
+            }
+
+            for tool in &manifest.tools {
+                assert!(
+                    catalog_tools.contains(tool.as_str()),
+                    "pack `{}` declares `{tool}` but the tool is absent from the agent catalog",
+                    manifest.pack_id
+                );
+
+                let activation_groups = tool_catalog_activation_groups(tool);
+                assert!(
+                    !activation_groups.is_empty(),
+                    "pack `{}` tool `{tool}` has no tool_access activation group",
+                    manifest.pack_id
+                );
+                assert!(
+                    activation_groups
+                        .iter()
+                        .any(|group| manifest.tool_groups.contains(group)),
+                    "pack `{}` tool `{tool}` activation groups {:?} do not overlap declared pack groups {:?}",
+                    manifest.pack_id,
+                    activation_groups,
+                    manifest.tool_groups
+                );
+
+                let metadata = tool_catalog_metadata_for_tool(tool, true)
+                    .expect("cataloged pack tool should expose metadata");
+                let pack_ids = metadata["toolPackIds"]
+                    .as_array()
+                    .expect("tool metadata pack ids")
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .collect::<BTreeSet<_>>();
+                assert!(
+                    pack_ids.contains(manifest.pack_id.as_str()),
+                    "catalog metadata for `{tool}` should include declaring pack `{}`",
+                    manifest.pack_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_entries_have_policy_classification_and_activation_metadata() {
+        let access_tools = tool_access_all_known_tools();
+        let computer_use_default_tools = computer_use_default_tool_names();
+        let mut seen = BTreeSet::new();
+
+        for entry in deferred_tool_catalog(true) {
+            let active_by_default = computer_use_default_tools.contains(entry.tool_name);
+            assert!(
+                seen.insert(entry.tool_name),
+                "tool catalog declares duplicate tool `{}`",
+                entry.tool_name
+            );
+            assert!(
+                !entry.description.trim().is_empty(),
+                "tool `{}` needs a prompt-visible description",
+                entry.tool_name
+            );
+            assert!(
+                !entry.tags.is_empty(),
+                "tool `{}` needs searchable catalog tags",
+                entry.tool_name
+            );
+            assert!(
+                !entry.examples.is_empty(),
+                "tool `{}` needs prompt-visible examples",
+                entry.tool_name
+            );
+            assert_ne!(
+                tool_effect_class(entry.tool_name),
+                AutonomousToolEffectClass::Unknown,
+                "tool `{}` needs an effect-class policy mapping",
+                entry.tool_name
+            );
+            assert!(
+                !allowed_runtime_agent_labels(entry.tool_name).is_empty(),
+                "tool `{}` should be allowed for at least one runtime agent",
+                entry.tool_name
+            );
+            assert!(
+                !tool_catalog_activation_groups(entry.tool_name).is_empty() || active_by_default,
+                "tool `{}` should have at least one activation group or be active by default",
+                entry.tool_name
+            );
+            assert!(
+                access_tools.contains(entry.tool_name) || active_by_default,
+                "tool `{}` is cataloged but absent from tool_access groups and default activation",
+                entry.tool_name
+            );
+        }
+    }
+
     #[derive(Debug, Default)]
     struct FixtureSolanaExecutor {
         deny_mutations: bool,

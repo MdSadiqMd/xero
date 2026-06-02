@@ -361,6 +361,7 @@ fn yolo_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
         runtime_agent_id: RuntimeAgentIdDto::Generalist,
         agent_definition_id: None,
+        agent_definition_version: None,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
@@ -374,6 +375,7 @@ fn suggest_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
         runtime_agent_id: RuntimeAgentIdDto::Generalist,
         agent_definition_id: None,
+        agent_definition_version: None,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
@@ -3542,6 +3544,7 @@ fn owned_agent_plan_mode_allows_read_only_tool_call() {
         controls: Some(RuntimeRunControlInputDto {
             runtime_agent_id: RuntimeAgentIdDto::Engineer,
             agent_definition_id: None,
+            agent_definition_version: None,
             provider_profile_id: None,
             model_id: "fake-model".into(),
             thinking_effort: None,
@@ -5050,6 +5053,7 @@ fn update_runtime_run_controls_queues_runtime_agent_switch_for_next_boundary() {
             initial_controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id: RuntimeAgentIdDto::Ask,
                 agent_definition_id: None,
+                agent_definition_version: None,
                 provider_profile_id: None,
                 model_id: "test-model".into(),
                 thinking_effort: None,
@@ -5073,6 +5077,7 @@ fn update_runtime_run_controls_queues_runtime_agent_switch_for_next_boundary() {
             controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id: RuntimeAgentIdDto::Engineer,
                 agent_definition_id: None,
+                agent_definition_version: None,
                 provider_profile_id: None,
                 model_id: "test-model".into(),
                 thinking_effort: None,
@@ -5141,6 +5146,7 @@ fn update_runtime_run_controls_queues_provider_profile_switch_for_next_prompt() 
             initial_controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id: RuntimeAgentIdDto::Ask,
                 agent_definition_id: None,
+                agent_definition_version: None,
                 provider_profile_id: Some("xai-default".into()),
                 model_id: "grok-4.3".into(),
                 thinking_effort: None,
@@ -5172,6 +5178,7 @@ fn update_runtime_run_controls_queues_provider_profile_switch_for_next_prompt() 
             controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id: RuntimeAgentIdDto::Ask,
                 agent_definition_id: None,
+                agent_definition_version: None,
                 provider_profile_id: Some("openai_codex-default".into()),
                 model_id: "gpt-5.4".into(),
                 thinking_effort: None,

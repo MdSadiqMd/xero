@@ -1241,6 +1241,7 @@ fn handle_agent_exec_command(state_dir: &Path, args: &[String]) -> Result<JsonVa
             controls: Some(RuntimeRunControlInputDto {
                 runtime_agent_id,
                 agent_definition_id,
+                agent_definition_version: None,
                 provider_profile_id: Some(provider_profile_id),
                 model_id,
                 thinking_effort,

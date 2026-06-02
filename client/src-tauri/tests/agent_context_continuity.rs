@@ -271,6 +271,7 @@ fn controls_for_agent(runtime_agent_id: RuntimeAgentIdDto) -> RuntimeRunControlI
     RuntimeRunControlInputDto {
         runtime_agent_id,
         agent_definition_id: None,
+        agent_definition_version: None,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
