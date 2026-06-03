@@ -454,14 +454,19 @@ function VcsSidebarBody({
   }, [allEntries, selectedPath])
 
   const runAction = useCallback(
-    async <T,>(kind: ActionKind, fn: () => Promise<T>, successLabel?: string): Promise<T | null> => {
+    async <T,>(
+      kind: ActionKind,
+      fn: () => Promise<T>,
+      successLabel?: string,
+      refreshStatus = true,
+    ): Promise<T | null> => {
       setActionKind(kind)
       setActionError(null)
       setActionMessage(null)
       try {
         const result = await fn()
         if (successLabel) setActionMessage(successLabel)
-        await onRefreshStatus()
+        if (refreshStatus) await onRefreshStatus()
         return result
       } catch (error) {
         setActionError(error instanceof Error ? error.message : "Action failed.")
@@ -518,14 +523,11 @@ function VcsSidebarBody({
     void runAction(
       "generate-commit-message",
       () => onGenerateCommitMessage(projectId, commitMessageModel),
+      undefined,
+      false,
     ).then((result) => {
       if (!result) return
       setCommitMessage(result.message)
-      setActionMessage(
-        result.diffTruncated
-          ? "Commit message generated from truncated staged diff."
-          : "Commit message generated.",
-      )
     })
   }, [commitMessageModel, onGenerateCommitMessage, projectId, runAction, stagedFiles.length])
   const handleFetch = useCallback(() => {
@@ -675,34 +677,34 @@ function VcsSidebarBody({
               placeholder="Commit message (⌘⏎ to commit)"
               value={commitMessage}
             />
-            <div className="mt-1.5 flex items-center justify-between gap-2">
+            <div className="mt-2 flex items-center justify-between gap-2">
               <span className="text-[10.5px] text-muted-foreground">
                 {stagedFiles.length} staged · {unstagedFiles.length} unstaged
               </span>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex items-center gap-1.5">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       aria-label={generateCommitMessageLabel}
-                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      className="size-[22px] text-muted-foreground hover:text-foreground"
                       disabled={!canGenerateCommitMessage}
                       onClick={handleGenerateCommitMessage}
-                      size="icon-sm"
+                      size="icon-xs"
                       title={generateCommitMessageLabel}
                       type="button"
                       variant="ghost"
                     >
                       {actionKind === "generate-commit-message" ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
                       ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
+                        <Sparkles className="h-2.5 w-2.5" />
                       )}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="top">{generateCommitMessageLabel}</TooltipContent>
                 </Tooltip>
                 <Button
-                  className="h-7 gap-1.5 px-2.5 text-[11.5px]"
+                  className="h-6 gap-1 px-2 text-[11px]"
                   disabled={
                     isBusy || !projectId || stagedFiles.length === 0 || commitMessage.trim().length === 0
                   }
@@ -711,14 +713,11 @@ function VcsSidebarBody({
                   type="button"
                 >
                   {actionKind === "commit" ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
                   ) : (
-                    <GitCommit className="h-3 w-3" />
+                    <GitCommit className="h-2.5 w-2.5" />
                   )}
                   Commit
-                  <kbd className="ml-0.5 hidden rounded border border-primary-foreground/20 bg-primary-foreground/10 px-1 py-px font-mono text-[9px] sm:inline-flex">
-                    ⌘⏎
-                  </kbd>
                 </Button>
               </div>
             </div>

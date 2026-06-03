@@ -276,6 +276,90 @@ function getRuntimeStreamPayloadItem(payload: RuntimeStreamChannelPayload) {
   return payload.item
 }
 
+function runtimeStreamPayloadUpdateSequence(payload: RuntimeStreamChannelPayload): number {
+  const item = getRuntimeStreamPayloadItem(payload)
+  return typeof item.updatedSequence === 'number'
+    ? Math.max(item.sequence, item.updatedSequence)
+    : item.sequence
+}
+
+function canAggregateRuntimeTranscriptDelta(
+  previous: RuntimeStreamEventDto,
+  next: RuntimeStreamEventDto,
+): boolean {
+  const previousItem = previous.item
+  const nextItem = next.item
+  return previous.projectId === next.projectId &&
+    previous.agentSessionId === next.agentSessionId &&
+    previous.runtimeKind === next.runtimeKind &&
+    previous.runId === next.runId &&
+    previous.sessionId === next.sessionId &&
+    previous.flowId === next.flowId &&
+    previous.subscribedItemKinds.join('\u0000') === next.subscribedItemKinds.join('\u0000') &&
+    previousItem.kind === 'transcript' &&
+    nextItem.kind === 'transcript' &&
+    (previousItem.transcriptRole ?? 'assistant') === 'assistant' &&
+    (nextItem.transcriptRole ?? 'assistant') === 'assistant' &&
+    typeof previousItem.text === 'string' &&
+    typeof nextItem.text === 'string' &&
+    previousItem.text.length > 0 &&
+    nextItem.text.length > 0 &&
+    !previousItem.mediaAttachments?.length &&
+    !nextItem.mediaAttachments?.length &&
+    !previousItem.codeChangeGroupId &&
+    !nextItem.codeChangeGroupId &&
+    !previousItem.codeCommitId &&
+    !nextItem.codeCommitId &&
+    runtimeStreamPayloadUpdateSequence(previous) + 1 === nextItem.sequence
+}
+
+function aggregateRuntimeTranscriptDeltas(
+  events: RuntimeStreamChannelPayload[],
+): RuntimeStreamChannelPayload[] {
+  if (events.length < 2) {
+    return events
+  }
+
+  const aggregated: RuntimeStreamChannelPayload[] = []
+  for (const event of events) {
+    const previous = aggregated.at(-1)
+    if (
+      previous &&
+      !isRuntimeStreamPatch(previous) &&
+      !isRuntimeStreamPatch(event) &&
+      canAggregateRuntimeTranscriptDelta(previous, event)
+    ) {
+      previous.item = {
+        ...previous.item,
+        text: `${previous.item.text ?? ''}${event.item.text ?? ''}`,
+        updatedSequence: runtimeStreamPayloadUpdateSequence(event),
+        createdAt: event.item.createdAt,
+      }
+      continue
+    }
+
+    aggregated.push(
+      !isRuntimeStreamPatch(event) && event.item.kind === 'transcript'
+        ? cloneRuntimeStreamEventForAggregation(event)
+        : event,
+    )
+  }
+  return aggregated
+}
+
+function cloneRuntimeStreamEventForAggregation(event: RuntimeStreamEventDto): RuntimeStreamEventDto {
+  return {
+    ...event,
+    subscribedItemKinds: [...event.subscribedItemKinds],
+    item: {
+      ...event.item,
+      mediaAttachments: event.item.mediaAttachments
+        ? [...event.item.mediaAttachments]
+        : event.item.mediaAttachments,
+    },
+  }
+}
+
 export function isUrgentRuntimeStreamEvent(event: RuntimeStreamChannelPayload): boolean {
   const item = getRuntimeStreamPayloadItem(event)
   return (
@@ -310,7 +394,7 @@ export function mergeRuntimeStreamEvents(
 ): RuntimeStreamView | null {
   let nextStream = currentStream
 
-  for (const event of events) {
+  for (const event of aggregateRuntimeTranscriptDeltas(events)) {
     try {
       nextStream = isRuntimeStreamPatch(event)
         ? createRuntimeStreamViewFromSnapshot(event.snapshot)

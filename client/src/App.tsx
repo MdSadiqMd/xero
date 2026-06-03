@@ -155,6 +155,11 @@ import { useGitHubAuth } from '@/src/lib/github-auth'
 import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
 import { SHORTCUT_DEFINITIONS, type ShortcutId } from '@/src/features/shortcuts/shortcuts-definitions'
 import { useShortcutListener } from '@/src/features/shortcuts/use-shortcut-listener'
+import {
+  loadSourceControlSettings,
+  subscribeSourceControlSettings,
+  type SourceControlModelSelection,
+} from '@/components/xero/source-control-settings'
 import { startLayoutShiftGuard } from '@/lib/layout-shift-guard'
 import {
   SIDEBAR_WIDTH_DURATION_MS,
@@ -275,18 +280,9 @@ const AGENT_DOCK_WIDTH_STORAGE_KEY = 'xero.agentDock.width'
 const AGENT_DOCK_MIN_WIDTH = 320
 const AGENT_DOCK_DEFAULT_WIDTH = 560
 const AGENT_DOCK_MAX_WIDTH = 720
-const STARTUP_SURFACE_PREWARM_SETTLE_MS = 320
+const STARTUP_SURFACE_PREWARM_SETTLE_MS = 120
 const HEAVY_SURFACE_MOUNT_AFTER_REVEAL_MS = 180
-const BASE_STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = [
-  'agent-dock',
-  'browser',
-  'solana',
-  'settings',
-  'terminal',
-  'usage',
-  'vcs',
-  'workflows',
-]
+const BASE_STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = []
 
 type BrowserComposerInsertTarget = 'agent-view' | 'agent-dock'
 
@@ -488,21 +484,7 @@ async function preloadStartupSurfaceChunks(): Promise<void> {
   const preloads: Array<Promise<unknown>> = [
     loadAgentRuntime(),
     loadExecutionView(),
-    loadBrowserSidebar(),
-    preloadSolanaWorkbenchSurface(),
-    loadSettingsDialog().then((module) => {
-      void module.preloadSettingsSectionChunks().catch(() => undefined)
-    }),
-    loadTerminalSidebar(),
-    loadUsageStatsSidebar(),
-    loadVcsSidebar(),
-    loadWorkflowsSidebar(),
-    loadAgentDockSidebar(),
   ]
-
-  if (shouldIncludeIosSurface()) {
-    preloads.push(loadIosEmulatorSidebar())
-  }
 
   await Promise.all(preloads)
   withPlatformSurfacePreloads(BASE_STARTUP_SURFACE_PRELOAD_TARGETS).forEach((target) =>
@@ -644,24 +626,34 @@ function preloadViewChunk(view: View): void {
 function getVcsCommitMessageModel(
   agent: AgentPaneView | null,
   composerControls: RuntimeRunControlInputDto | null,
+  sourceControlModelSelection: SourceControlModelSelection | null = null,
 ): VcsCommitMessageModel | null {
-  const modelId = composerControls?.modelId?.trim() || agent?.selectedModelId?.trim() || null
+  const configuredModelId = sourceControlModelSelection?.modelId?.trim() || null
+  const modelId =
+    configuredModelId || composerControls?.modelId?.trim() || agent?.selectedModelId?.trim() || null
   if (!agent || !modelId) {
     return null
   }
 
-  const providerId = agent.selectedModel?.providerId ?? agent.selectedProviderId ?? null
+  const providerId =
+    sourceControlModelSelection?.providerId ??
+    agent.selectedModel?.providerId ??
+    agent.selectedProviderId ??
+    null
   const selectedModelOption =
     agent.providerModelCatalog.models.find(
       (model) =>
         model.modelId === modelId &&
-        (!composerControls?.providerProfileId || model.profileId === composerControls.providerProfileId),
+        (!sourceControlModelSelection?.providerProfileId ||
+          model.profileId === sourceControlModelSelection.providerProfileId) &&
+        (!composerControls?.providerProfileId || configuredModelId || model.profileId === composerControls.providerProfileId),
     ) ??
     agent.providerModelCatalog.models.find(
       (model) => model.modelId === modelId || model.selectionKey === `${providerId}:${modelId}`,
-    ) ?? agent.selectedModelOption
+    ) ?? (configuredModelId ? null : agent.selectedModelOption)
   const providerProfileId =
-    composerControls?.providerProfileId ??
+    sourceControlModelSelection?.providerProfileId ??
+    (configuredModelId ? selectedModelOption?.profileId : composerControls?.providerProfileId) ??
     agent.runtimeRunActiveControls?.providerProfileId ??
     agent.runtimeRunPendingControls?.providerProfileId ??
     selectedModelOption?.profileId ??
@@ -671,11 +663,12 @@ function getVcsCommitMessageModel(
   return {
     providerProfileId,
     modelId,
-    thinkingEffort:
-      composerControls?.thinkingEffort ??
-      agent.selectedThinkingEffort ??
-      agent.selectedModelDefaultThinkingEffort ??
-      null,
+    thinkingEffort: configuredModelId
+      ? sourceControlModelSelection?.thinkingEffort ?? null
+      : composerControls?.thinkingEffort ??
+        agent.selectedThinkingEffort ??
+        agent.selectedModelDefaultThinkingEffort ??
+        null,
     label: selectedModelOption?.label ?? modelId,
   }
 }
@@ -1670,6 +1663,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [pendingPaneCloseId, setPendingPaneCloseId] = useState<string | null>(null)
   const [agentComposerControls, setAgentComposerControls] =
     useState<RuntimeRunControlInputDto | null>(null)
+  const [sourceControlSettings, setSourceControlSettings] = useState(
+    loadSourceControlSettings,
+  )
   const persistComposerSettings = useCallback(
     (controls: RuntimeRunControlInputDto | null) => {
       const value = composerSettingsValueFromControls(controls)
@@ -1702,6 +1698,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
       disposed = true
     }
   }, [resolvedAdapter])
+  useEffect(
+    () =>
+      subscribeSourceControlSettings((nextSettings) => {
+        setSourceControlSettings(nextSettings)
+      }),
+    [],
+  )
   useEffect(() => {
     if (!isTauri()) return
     let disposed = false
@@ -3061,8 +3064,13 @@ export function XeroApp({ adapter }: XeroAppProps) {
       : undefined,
   }
   const vcsCommitMessageModel = useMemo(
-    () => getVcsCommitMessageModel(agentView, agentComposerControls),
-    [agentComposerControls, agentView],
+    () =>
+      getVcsCommitMessageModel(
+        agentView,
+        agentComposerControls,
+        sourceControlSettings.commitMessageModelSelection,
+      ),
+    [agentComposerControls, agentView, sourceControlSettings.commitMessageModelSelection],
   )
   const projectRunnerModelOptions = useMemo(
     () => getProjectRunnerModelOptions(agentView),

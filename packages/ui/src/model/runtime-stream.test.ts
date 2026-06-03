@@ -570,4 +570,61 @@ describe('runtime stream contracts', () => {
       'media-browser-screenshot-2',
     ])
   })
+
+  it('advances merged transcript metadata with updatedSequence', () => {
+    let stream = createRuntimeStreamView({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-updated-sequence',
+      sessionId: 'owned-agent:run-updated-sequence',
+      subscribedItemKinds: ['transcript'],
+    })
+
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-updated-sequence',
+      sessionId: 'owned-agent:run-updated-sequence',
+      flowId: null,
+      subscribedItemKinds: ['transcript'],
+      item: {
+        kind: 'transcript',
+        runId: 'run-updated-sequence',
+        sequence: 1,
+        sessionId: 'owned-agent:run-updated-sequence',
+        text: 'Hello ',
+        transcriptRole: 'assistant',
+        createdAt: '2026-05-06T12:03:00Z',
+      },
+    })
+
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-updated-sequence',
+      sessionId: 'owned-agent:run-updated-sequence',
+      flowId: null,
+      subscribedItemKinds: ['transcript'],
+      item: {
+        kind: 'transcript',
+        runId: 'run-updated-sequence',
+        sequence: 2,
+        updatedSequence: 10,
+        sessionId: 'owned-agent:run-updated-sequence',
+        text: 'world',
+        transcriptRole: 'assistant',
+        createdAt: '2026-05-06T12:03:01Z',
+      },
+    })
+
+    expect(stream.lastSequence).toBe(10)
+    expect(stream.transcriptItems[0]).toMatchObject({
+      sequence: 1,
+      updatedSequence: 10,
+      text: 'Hello world',
+    })
+  })
 })

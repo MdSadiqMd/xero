@@ -788,6 +788,21 @@ fn replay_owned_agent_events(
     replay_limit: Option<u16>,
     asset_state: &ProjectAssetState,
 ) -> CommandResult<(i64, bool)> {
+    let _perf = crate::perf::PerfSpan::new("runtime_stream_replay")
+        .field("projectId", project_id.to_owned())
+        .field("runId", run_id.to_owned())
+        .field(
+            "afterSequence",
+            after_sequence
+                .map(|sequence| sequence.to_string())
+                .unwrap_or_else(|| "none".into()),
+        )
+        .field(
+            "replayLimit",
+            replay_limit
+                .map(|limit| limit.to_string())
+                .unwrap_or_else(|| "default".into()),
+        );
     let started = Instant::now();
     let run = match project_store::load_agent_run_record(repo_root, project_id, run_id) {
         Ok(run) => run,
@@ -860,6 +875,15 @@ fn project_owned_agent_replay_events(
     after_event_id: i64,
     asset_state: &ProjectAssetState,
 ) -> OwnedAgentReplayProjectionResult {
+    let _perf = crate::perf::PerfSpan::new("runtime_stream_replay_projection")
+        .field("projectId", project_id.to_owned())
+        .field("eventCount", events.len().to_string())
+        .field(
+            "afterSequence",
+            after_sequence
+                .map(|sequence| sequence.to_string())
+                .unwrap_or_else(|| "none".into()),
+        );
     let mut last_event_id = after_event_id;
     let mut projected_count = 0;
     let mut last_deliverable_item: Option<RuntimeStreamItemDto> = None;
@@ -1282,6 +1306,14 @@ fn owned_agent_event_runtime_item_with_media(
         return Some(item);
     };
 
+    let _perf = crate::perf::PerfSpan::new("runtime_stream_media_extraction")
+        .field("projectId", project_id.to_owned())
+        .field("runId", item.run_id.clone())
+        .field("eventId", item.sequence.to_string())
+        .field(
+            "toolName",
+            item.tool_name.clone().unwrap_or_else(|| "unknown".into()),
+        );
     let media_attachments = extract_runtime_media_attachments(RuntimeMediaExtractionRequest {
         repo_root,
         project_id,

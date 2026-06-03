@@ -7,6 +7,7 @@ pub mod developer_tool_harness_tui;
 pub mod environment;
 pub mod global_db;
 pub mod mcp;
+pub mod perf;
 pub mod provider_credentials;
 pub mod provider_models;
 pub mod provider_preflight;

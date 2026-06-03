@@ -1313,14 +1313,17 @@ pub async fn browser_screenshot<R: Runtime + 'static>(
     state: State<'_, BrowserState>,
 ) -> CommandResult<String> {
     let webview = state.tabs().active_webview(&app)?;
-    tauri::async_runtime::spawn_blocking(move || screenshot::capture_webview(&webview))
-        .await
-        .map_err(|error| {
-            CommandError::system_fault(
-                "browser_screenshot_task_failed",
-                format!("Xero could not capture the browser in the background: {error}"),
-            )
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _perf = crate::perf::PerfSpan::new("browser_screenshot");
+        screenshot::capture_webview(&webview)
+    })
+    .await
+    .map_err(|error| {
+        CommandError::system_fault(
+            "browser_screenshot_task_failed",
+            format!("Xero could not capture the browser in the background: {error}"),
+        )
+    })?
 }
 
 #[tauri::command]

@@ -64,7 +64,7 @@ import type {
   GitHubAuthStatus,
   GitHubSessionView,
 } from "@/src/lib/github-auth"
-import { Activity, ArrowLeft, Bot, Brain, Cloud, Code2, Database, Globe, HardDrive, Heart, Keyboard, KeyRound, Mic, Monitor, Palette, PlaySquare, Plug, PlugZap, Power, RadioTower, Search, Terminal, UserRound, WandSparkles, Wrench } from "lucide-react"
+import { Activity, ArrowLeft, Bot, Brain, Cloud, Code2, Database, GitBranch, Globe, HardDrive, Heart, Keyboard, KeyRound, Mic, Monitor, Palette, PlaySquare, Plug, PlugZap, Power, RadioTower, Search, Terminal, UserRound, WandSparkles, Wrench } from "lucide-react"
 import { BaseDialog } from "@xero/ui/components/base-dialog"
 import {
   DialogDescription,
@@ -92,6 +92,7 @@ export type SettingsSection =
   | "power"
   | "workspaceIndex"
   | "projectState"
+  | "sourceControl"
   | "projectRunner"
   | "terminal"
   | "themes"
@@ -118,6 +119,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   "power",
   "workspaceIndex",
   "projectState",
+  "sourceControl",
   "projectRunner",
   "terminal",
   "themes",
@@ -213,6 +215,10 @@ const loadProjectStateSection = () =>
   import("@/components/xero/settings-dialog/project-state-section").then((module) => ({
     default: module.ProjectStateSection,
   }))
+const loadSourceControlSection = () =>
+  import("@/components/xero/settings-dialog/source-control-section").then((module) => ({
+    default: module.SourceControlSection,
+  }))
 const loadProjectRunnerSection = () =>
   import("@/components/xero/settings-dialog/project-runner-section").then((module) => ({
     default: module.ProjectRunnerSection,
@@ -244,6 +250,7 @@ const LazySoulSection = lazy(loadSoulSection)
 const LazyThemesSection = lazy(loadThemesSection)
 const LazyWorkspaceIndexSection = lazy(loadWorkspaceIndexSection)
 const LazyProjectStateSection = lazy(loadProjectStateSection)
+const LazySourceControlSection = lazy(loadSourceControlSection)
 const LazyProjectRunnerSection = lazy(loadProjectRunnerSection)
 const LazyTerminalSection = lazy(loadTerminalSection)
 
@@ -267,6 +274,7 @@ const SETTINGS_SECTION_LOADERS: Record<SettingsSection, () => Promise<unknown>> 
   power: loadPowerSection,
   workspaceIndex: loadWorkspaceIndexSection,
   projectState: loadProjectStateSection,
+  sourceControl: loadSourceControlSection,
   projectRunner: loadProjectRunnerSection,
   terminal: loadTerminalSection,
   themes: loadThemesSection,
@@ -334,6 +342,7 @@ const WORKSPACE_GROUP: NavGroup = {
     { id: "power", label: "Power", icon: Power },
     { id: "workspaceIndex", label: "Workspace Index", icon: Database },
     { id: "projectState", label: "Project State", icon: HardDrive },
+    { id: "sourceControl", label: "Source Control", icon: GitBranch },
     { id: "projectRunner", label: "Project Runner", icon: PlaySquare },
     { id: "terminal", label: "Terminal", icon: Terminal },
   ],
@@ -895,6 +904,10 @@ export function SettingsDialog({
           adapter={projectStateAdapter}
         />
       )
+    }
+
+    if (renderedSection === "sourceControl") {
+      return <LazySourceControlSection modelOptions={projectRunnerModelOptions} />
     }
 
     if (renderedSection === "projectRunner") {

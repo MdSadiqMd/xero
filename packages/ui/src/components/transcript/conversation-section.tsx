@@ -52,6 +52,7 @@ import type {
   RuntimeStreamMediaSourceDto,
   RuntimeStreamToolItemView,
 } from '../../model'
+import { getRuntimeAgentLabel } from '../../model'
 import { AppLogo } from '../app-logo'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -354,6 +355,77 @@ function isHandoffCompletion(
   )
 }
 
+function visibleConversationCopyText(turns: readonly ConversationTurn[]): string {
+  return turns
+    .flatMap((turn) => conversationTurnCopySections(turn))
+    .map((section) => section.trim())
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function conversationTurnCopySections(turn: ConversationTurn): string[] {
+  switch (turn.kind) {
+    case 'message': {
+      if (turn.role === 'user') {
+        return turn.text.trim().length > 0 ? [`You:\n${turn.text.trim()}`] : []
+      }
+
+      return splitAssistantText(turn.text).flatMap((segment) => {
+        const text = segment.text.trim()
+        if (text.length === 0) return []
+        return segment.kind === 'thinking' ? [`Thoughts:\n${text}`] : [`Agent:\n${text}`]
+      })
+    }
+    case 'thinking':
+      return turn.text.trim().length > 0 ? [`Thoughts:\n${turn.text.trim()}`] : []
+    case 'action':
+      return [formatCopyTitleAndDetail(turn.title, turn.detail)]
+    case 'action_group':
+      return [formatCopyTitleAndDetail(turn.title, turn.detail)]
+    case 'file_change':
+      return [formatCopyTitleAndDetail(turn.title, turn.detail)]
+    case 'failure':
+      return [formatCopyTitleAndDetail('Failure', turn.message)]
+    case 'action_prompt':
+      return [formatCopyTitleAndDetail(turn.title, turn.detail)]
+    case 'handoff_notice':
+      return ['Run continued in a fresh session']
+    case 'routing_suggestion': {
+      const label = turn.targetLabel ?? turn.targetAgentDefinitionId ?? getRuntimeAgentLabel(turn.targetAgentId)
+      const targetDescription = turn.targetKind === 'custom' ? label : `the ${label} agent`
+      const visibleLines = [`This task may be better suited for ${targetDescription}.`]
+      const resolvedTargetLabel =
+        turn.acceptedTargetLabel?.trim() ||
+        (turn.acceptedTargetAgentDefinitionId ? 'custom agent' : null) ||
+        (turn.acceptedTarget ? getRuntimeAgentLabel(turn.acceptedTarget) : null)
+
+      if (turn.isResolved) {
+        visibleLines.push(
+          turn.acceptedTarget
+            ? `${turn.routingResolutionMode === 'automatic' ? 'Auto-switched' : 'Switched'} to ${
+                resolvedTargetLabel ?? getRuntimeAgentLabel(turn.acceptedTarget)
+              } and continued.`
+            : 'Continued with Agent.',
+        )
+      }
+
+      return [`Routing suggestion:\n${visibleLines.join('\n')}`]
+    }
+    case 'subagent_group':
+      return [formatCopyTitleAndDetail(turn.roleLabel, turn.resultSummary ?? turn.prompt ?? turn.status)]
+    default:
+      return []
+  }
+}
+
+function formatCopyTitleAndDetail(title: string, detail: string | null | undefined): string {
+  const normalizedTitle = title.trim()
+  const normalizedDetail = detail?.trim() ?? ''
+  if (!normalizedTitle) return normalizedDetail
+  if (!normalizedDetail) return normalizedTitle
+  return `${normalizedTitle}:\n${normalizedDetail}`
+}
+
 export const ConversationSection = memo(function ConversationSection({
   runtimeRun,
   visibleTurns,
@@ -430,6 +502,10 @@ export const ConversationSection = memo(function ConversationSection({
       lastTurn.kind === 'message' &&
       lastTurn.role === 'assistant' &&
       lastTurn.text.trim().length > 0,
+  )
+  const copyableVisibleConversationText = useMemo(
+    () => visibleConversationCopyText(visibleTurns),
+    [visibleTurns],
   )
 
   if (variant === 'dense') {
@@ -563,6 +639,12 @@ export const ConversationSection = memo(function ConversationSection({
                   onUndoChangeGroup={onUndoChangeGroup}
                   onReturnSessionToHere={onReturnSessionToHere}
                   onOpenHandoffSummary={onOpenHandoffSummary}
+                  isLastTurn={index === visibleTurns.length - 1}
+                  nextTurn={next}
+                  hideCopyBeforeFooterNotice={
+                    showHandoffNotice && index === visibleTurns.length - 1
+                  }
+                  visibleConversationCopyText={copyableVisibleConversationText}
                 />
               )
             })}
@@ -760,11 +842,19 @@ function isToolTurnKind(turn: ConversationTurn | null): boolean {
   )
 }
 
+function isHandoffBoundaryTurn(turn: ConversationTurn | null): boolean {
+  return turn?.kind === 'routing_suggestion' || turn?.kind === 'handoff_notice'
+}
+
 interface ConversationTurnItemProps {
   turn: ConversationTurn
   accountAvatarUrl: string | null
   accountLogin: string | null
   isStreaming: boolean
+  isLastTurn: boolean
+  nextTurn: ConversationTurn | null
+  hideCopyBeforeFooterNotice: boolean
+  visibleConversationCopyText: string
   /** Previous visible turn is also a tool call; render a connector up to it. */
   connectsTop: boolean
   /** Next visible turn is also a tool call; render a connector down to it. */
@@ -848,6 +938,10 @@ function ConversationTurnItem({
   accountAvatarUrl,
   accountLogin,
   isStreaming,
+  isLastTurn,
+  nextTurn,
+  hideCopyBeforeFooterNotice,
+  visibleConversationCopyText,
   connectsTop,
   connectsBottom,
   codeUndoStates,
@@ -859,13 +953,17 @@ function ConversationTurnItem({
   return (
     <AnimatedTranscriptListItem
       turn={turn}
-      className={turn.kind === 'routing_suggestion' ? '-mt-5 mb-1' : undefined}
+      className={turn.kind === 'routing_suggestion' ? 'mt-1 mb-1' : undefined}
     >
       <ConversationTurnRow
         turn={turn}
         accountAvatarUrl={accountAvatarUrl}
         accountLogin={accountLogin}
         isStreaming={isStreaming}
+        isLastTurn={isLastTurn}
+        nextTurn={nextTurn}
+        hideCopyBeforeFooterNotice={hideCopyBeforeFooterNotice}
+        visibleConversationCopyText={visibleConversationCopyText}
         connectsTop={connectsTop}
         connectsBottom={connectsBottom}
         codeUndoStates={codeUndoStates}
@@ -883,6 +981,10 @@ interface ConversationTurnRowProps {
   accountAvatarUrl: string | null
   accountLogin: string | null
   isStreaming: boolean
+  isLastTurn: boolean
+  nextTurn: ConversationTurn | null
+  hideCopyBeforeFooterNotice: boolean
+  visibleConversationCopyText: string
   connectsTop: boolean
   connectsBottom: boolean
   codeUndoStates: Record<string, CodeUndoUiState>
@@ -900,6 +1002,10 @@ function ConversationTurnRow({
   accountAvatarUrl,
   accountLogin,
   isStreaming,
+  isLastTurn,
+  nextTurn,
+  hideCopyBeforeFooterNotice,
+  visibleConversationCopyText,
   connectsTop,
   connectsBottom,
   codeUndoStates,
@@ -922,6 +1028,20 @@ function ConversationTurnRow({
         text={turn.text}
         attachments={turn.attachments}
         isStreaming={isStreaming}
+        hideCopyButton={
+          isHandoffBoundaryTurn(nextTurn) ||
+          (isLastTurn && hideCopyBeforeFooterNotice)
+        }
+        copyAction={
+          isLastTurn
+            ? {
+                text: visibleConversationCopyText,
+                label: 'Copy visible conversation',
+                copiedLabel: 'Copied visible conversation',
+                tooltip: 'Copy visible conversation',
+              }
+            : null
+        }
       />
     )
   }
@@ -2261,27 +2381,35 @@ function SubagentGroupCard({
                   className="flex flex-col gap-2"
                 >
                   <AnimatePresence initial={false}>
-                    {turn.children.map((childTurn, index) => (
-                      <AnimatedTranscriptListItem
-                        key={childTurn.id}
-                        className="agent-stagger-child"
-                        style={{ ['--stagger-index' as string]: index }}
-                      >
-                        <ConversationTurnRow
-                          turn={childTurn}
-                          accountAvatarUrl={accountAvatarUrl}
-                          accountLogin={accountLogin}
-                          isStreaming={isStreaming && !isTerminal}
-                          connectsTop={false}
-                          connectsBottom={false}
-                          codeUndoStates={codeUndoStates}
-                          returnSessionToHereStates={returnSessionToHereStates}
-                          onUndoChangeGroup={onUndoChangeGroup}
-                          onReturnSessionToHere={onReturnSessionToHere}
-                          onOpenHandoffSummary={onOpenHandoffSummary}
-                        />
-                      </AnimatedTranscriptListItem>
-                    ))}
+                    {turn.children.map((childTurn, index) => {
+                      const nextChildTurn =
+                        index < turn.children.length - 1 ? turn.children[index + 1] : null
+                      return (
+                        <AnimatedTranscriptListItem
+                          key={childTurn.id}
+                          className="agent-stagger-child"
+                          style={{ ['--stagger-index' as string]: index }}
+                        >
+                          <ConversationTurnRow
+                            turn={childTurn}
+                            accountAvatarUrl={accountAvatarUrl}
+                            accountLogin={accountLogin}
+                            isStreaming={isStreaming && !isTerminal}
+                            isLastTurn={false}
+                            nextTurn={nextChildTurn}
+                            hideCopyBeforeFooterNotice={false}
+                            visibleConversationCopyText=""
+                            connectsTop={false}
+                            connectsBottom={false}
+                            codeUndoStates={codeUndoStates}
+                            returnSessionToHereStates={returnSessionToHereStates}
+                            onUndoChangeGroup={onUndoChangeGroup}
+                            onReturnSessionToHere={onReturnSessionToHere}
+                            onOpenHandoffSummary={onOpenHandoffSummary}
+                          />
+                        </AnimatedTranscriptListItem>
+                      )
+                    })}
                   </AnimatePresence>
                 </ul>
               ) : (
@@ -2757,11 +2885,20 @@ function AssistantMessage({
   text,
   attachments,
   isStreaming,
+  hideCopyButton,
+  copyAction,
 }: {
   messageId: string
   text: string
   attachments?: ConversationMessageAttachment[]
   isStreaming: boolean
+  hideCopyButton?: boolean
+  copyAction?: {
+    text: string
+    label: string
+    copiedLabel: string
+    tooltip: string
+  } | null
 }) {
   const segments = useMemo(() => splitAssistantText(text), [text])
   const hasAttachments = Boolean(attachments?.length)
@@ -2781,6 +2918,12 @@ function AssistantMessage({
     }
     return -1
   })()
+  const resolvedCopyAction = copyAction ?? {
+    text: responseCopyText,
+    label: 'Copy agent response',
+    copiedLabel: 'Copied agent response',
+    tooltip: 'Copy',
+  }
 
   return (
     <div className="group/agent flex min-w-0 flex-col items-start gap-1.5">
@@ -2810,7 +2953,7 @@ function AssistantMessage({
           />
         ) : null}
       </div>
-      {responseCopyText.length > 0 ? (
+      {!hideCopyButton && resolvedCopyAction.text.length > 0 ? (
         <div
           className={cn(
             'mt-2 flex h-4 items-center pl-0.5 transition-opacity duration-150',
@@ -2820,10 +2963,10 @@ function AssistantMessage({
           )}
         >
           <CopyTextButton
-            text={responseCopyText}
-            label="Copy agent response"
-            copiedLabel="Copied agent response"
-            tooltip="Copy"
+            text={resolvedCopyAction.text}
+            label={resolvedCopyAction.label}
+            copiedLabel={resolvedCopyAction.copiedLabel}
+            tooltip={resolvedCopyAction.tooltip}
             className="h-4 w-4 text-muted-foreground/60 hover:text-foreground"
           />
         </div>

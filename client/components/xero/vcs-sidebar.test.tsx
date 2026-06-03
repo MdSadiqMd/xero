@@ -571,9 +571,9 @@ describe('VcsSidebar', () => {
       message: 'fix: tighten source control actions',
       providerId: 'openai_api',
       modelId: 'gpt-5.4',
-      diffTruncated: false,
+      diffTruncated: true,
     }))
-    renderVcsSidebar('', {
+    const { props } = renderVcsSidebar('', {
       status: makeStatus({
         stagedCount: 1,
         unstagedCount: 0,
@@ -599,5 +599,7 @@ describe('VcsSidebar', () => {
       'project-1',
       expect.objectContaining({ modelId: 'gpt-5.4' }),
     )
+    expect(props.onRefreshStatus).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Commit message generated/i)).not.toBeInTheDocument()
   })
 })

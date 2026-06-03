@@ -1181,6 +1181,7 @@ describe('AgentRuntime current UI', () => {
     expect(
       screen.getByText(/handed this conversation off to a new same-type run/i),
     ).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Copy visible conversation' })).not.toBeInTheDocument()
     expect(screen.queryByText('Latest saved run failed')).not.toBeInTheDocument()
   })
 
@@ -1250,6 +1251,71 @@ describe('AgentRuntime current UI', () => {
     expect(firstReplyIdx).toBeGreaterThan(firstPromptIdx)
     expect(noticeIdx).toBeGreaterThan(firstReplyIdx)
     expect(continuationIdx).toBeGreaterThan(noticeIdx)
+  })
+
+  it('copies the visible terminal conversation across handoff history', async () => {
+    const writeText = installClipboardWriteMock()
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            runId: 'run-2',
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-06-02T19:00:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            {
+              id: 'transcript:run-2:1',
+              kind: 'transcript',
+              runId: 'run-2',
+              sequence: 1,
+              createdAt: '2026-04-29T00:48:10Z',
+              mediaAttachments: [],
+              role: 'assistant',
+              text: 'Continuing in a fresh run.',
+            },
+          ],
+        })}
+        historicalConversationTurns={[
+          {
+            id: 'history:run-1:1',
+            kind: 'message',
+            role: 'user',
+            sequence: 1,
+            text: 'First-run prompt',
+          },
+          {
+            id: 'history:run-1:2',
+            kind: 'message',
+            role: 'assistant',
+            sequence: 2,
+            text: 'First-run reply',
+          },
+          {
+            id: 'handoff_notice:run-1->run-2',
+            kind: 'handoff_notice',
+            sequence: 3,
+            sourceRunId: 'run-1',
+            targetRunId: 'run-2',
+          },
+        ]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy visible conversation' }))
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    const copied = writeText.mock.calls[0]?.[0] ?? ''
+    expect(copied).toContain('You:\nFirst-run prompt')
+    expect(copied).toContain('Agent:\nFirst-run reply')
+    expect(copied).toContain('Run continued in a fresh session')
+    expect(copied).toContain('Agent:\nContinuing in a fresh run.')
   })
 
   it('dedupes replayed raw live fragments when historical messages already cover that run', () => {
@@ -2061,7 +2127,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByText('Affected paths')).not.toBeInTheDocument()
   })
 
-  it('copies user prompts and agent responses without a conversation copy action', async () => {
+  it('copies user prompts individually and copies the visible thread from the bottom response', async () => {
     const writeText = installClipboardWriteMock()
     renderRuntimeStreamItems([
       makeTranscriptItem({ sequence: 2, role: 'user', text: 'Please inspect the renderer.' }),
@@ -2075,10 +2141,18 @@ describe('AgentRuntime current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy your prompt' }))
     await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('Please inspect the renderer.'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy agent response' }))
-    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('The renderer is selectable now.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy visible conversation' }))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenLastCalledWith(
+        [
+          'You:\nPlease inspect the renderer.',
+          'Thoughts:\nChecking the transcript controls.',
+          'Agent:\nThe renderer is selectable now.',
+        ].join('\n\n'),
+      ),
+    )
 
-    expect(screen.queryByRole('button', { name: 'Copy visible conversation' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copy agent response' })).not.toBeInTheDocument()
   })
 
   it('heals routing markers emitted inside reasoning activity', () => {
@@ -2118,6 +2192,40 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('Switching to Ask will give a more direct answer.')).toBeVisible()
     expect(screen.getByText('This task may be better suited for the Ask agent')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Switch to Ask' })).toBeVisible()
+    const routingSuggestionItem = screen.getByText('This task may be better suited for the Ask agent').closest('li')
+    expect(routingSuggestionItem).toHaveClass('mt-1')
+    expect(routingSuggestionItem).not.toHaveClass('-mt-5')
+    expect(screen.queryByRole('button', { name: 'Copy agent response' })).not.toBeInTheDocument()
+  })
+
+  it('copies visible routing choice context from the bottom response', async () => {
+    const writeText = installClipboardWriteMock()
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, role: 'user', text: 'What is this project about?' }),
+      makeTranscriptItem({
+        sequence: 3,
+        role: 'assistant',
+        text: [
+          '<xero-routing-suggestion target="ask" reason="Question-only project overview request" summary="User wants a high-level description."/>',
+          'Switching to Ask will give a more direct answer.',
+        ].join('\n\n'),
+      }),
+      makeTranscriptItem({
+        sequence: 4,
+        role: 'assistant',
+        text: 'Xero is a Tauri desktop application for running autonomous agents.',
+      }),
+    ])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy visible conversation' }))
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    const copied = writeText.mock.calls[0]?.[0] ?? ''
+    expect(copied).toContain('You:\nWhat is this project about?')
+    expect(copied).toContain('Agent:\nSwitching to Ask will give a more direct answer.')
+    expect(copied).toContain('Routing suggestion:\nThis task may be better suited for the Ask agent.')
+    expect(copied).toContain('Agent:\nXero is a Tauri desktop application for running autonomous agents.')
+    expect(screen.queryByRole('button', { name: 'Copy agent response' })).not.toBeInTheDocument()
   })
 
   it('continues the current agent when a completed-run routing suggestion is declined', async () => {

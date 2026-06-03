@@ -1009,7 +1009,7 @@ function mergeRuntimeTimelineToolItem(
     id: existingItem.id,
     sequence: existingItem.sequence,
     createdAt: existingItem.createdAt,
-    updatedSequence: nextItem.sequence,
+    updatedSequence: runtimeTimelineUpdateSequence(nextItem),
     mediaAttachments: mergeRuntimeMediaAttachments(
       existingItem.mediaAttachments,
       nextItem.mediaAttachments,
@@ -1113,7 +1113,7 @@ function mergeReasoningActivityTimelineItem(
     index === previousItemIndex
       ? {
           ...previousItem,
-          updatedSequence: nextItem.sequence,
+          updatedSequence: runtimeTimelineUpdateSequence(nextItem),
           text: mergedText,
           detail: mergedText.trim().length > 0
             ? mergedText.trim()
@@ -1173,7 +1173,7 @@ function mergeRuntimeTranscriptItems(
   const mergedItem: RuntimeStreamTranscriptItemView = {
     ...previousItem,
     id: previousItem.id,
-    updatedSequence: nextItem.sequence,
+    updatedSequence: runtimeTimelineUpdateSequence(nextItem),
     text: `${previousItem.text}${nextItem.text}`,
     mediaAttachments: mergeRuntimeMediaAttachments(
       previousItem.mediaAttachments,
@@ -1791,12 +1791,17 @@ export function mergeRuntimeStreamEvent(
       status: 'subscribing',
     })
 
-  if (event.item.sequence < 1) {
+  const eventUpdateSequence =
+    typeof event.item.updatedSequence === 'number'
+      ? Math.max(event.item.sequence, event.item.updatedSequence)
+      : event.item.sequence
+
+  if (event.item.sequence < 1 || eventUpdateSequence < 1) {
     throw new Error(`non-monotonic runtime stream sequence ${event.item.sequence}`)
   }
 
   if (base.lastSequence !== null) {
-    if (event.item.sequence <= base.lastSequence) {
+    if (eventUpdateSequence <= base.lastSequence) {
       return mergeRuntimeStreamMetadata(base, event, getRecoveredRuntimeStreamStatus(base))
     }
   }
@@ -1887,7 +1892,7 @@ export function mergeRuntimeStreamEvent(
           ? base.lastIssue
           : null,
     lastItemAt: nextItem.createdAt,
-    lastSequence: nextItem.sequence,
+    lastSequence: eventUpdateSequence,
   })
 }
 

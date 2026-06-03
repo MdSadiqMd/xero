@@ -154,7 +154,7 @@ export {
   type XeroHighChurnStore,
 } from './use-xero-desktop-state/high-churn-store'
 
-const REPOSITORY_STATUS_POLL_MS = 5_000
+const REPOSITORY_STATUS_FALLBACK_POLL_MS = 60_000
 const PREFETCH_FALLBACK_DELAY_MS = 250
 const RUNTIME_STREAM_SESSION_CACHE_MAX_BYTES = 3 * 1024 * 1024
 const RUNTIME_STREAM_SESSION_CACHE_MAX_ENTRIES = 24
@@ -2584,7 +2584,7 @@ export function useXeroDesktopState(
       void syncRepositoryStatus()
     }
 
-    const pollHandle = window.setInterval(refreshIfVisible, REPOSITORY_STATUS_POLL_MS)
+    const pollHandle = window.setInterval(refreshIfVisible, REPOSITORY_STATUS_FALLBACK_POLL_MS)
     window.addEventListener('focus', refreshIfVisible)
     document.addEventListener('visibilitychange', refreshIfVisible)
 
