@@ -33,4 +33,12 @@ describe('client stylesheet', () => {
     expect(styles).toMatch(/::-webkit-scrollbar-thumb\s*\{[^}]*z-index:\s*var\(--scrollbar-z-index\)/)
     expect(styles).toMatch(/::-webkit-scrollbar-corner\s*\{[^}]*z-index:\s*var\(--scrollbar-z-index\)/)
   })
+
+  it('animates newly loaded agent session surfaces', () => {
+    const styles = readFileSync(sharedStylesPath, 'utf8')
+
+    expect(styles).toContain('.agent-session-surface-enter')
+    expect(styles).toContain('@keyframes xero-agent-session-surface-enter')
+    expect(styles).toContain('translate3d(0, 6px, 0)')
+  })
 })

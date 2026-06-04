@@ -1137,6 +1137,23 @@
     contain-intrinsic-size: 360px 320px;
   }
 
+  .agent-session-surface-enter {
+    animation: xero-agent-session-surface-enter var(--motion-duration-standard) var(--motion-ease-out) both;
+    transform-origin: 50% 36%;
+    will-change: opacity, transform;
+  }
+
+  @keyframes xero-agent-session-surface-enter {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 6px, 0) scale(0.996);
+    }
+    to {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
   /* Background pane that has an actively working agent — pulsing glow draws
    * the eye without being noisy. Applied via className only on non-focused
    * panes, so the focused pane keeps its calmer selected style. */

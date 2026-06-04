@@ -3382,6 +3382,11 @@ export const AgentRuntime = memo(function AgentRuntime({
       !showEmptySessionState &&
       hasSessionActivity,
   )
+  const conversationSurfaceKey = [
+    agent.project.id,
+    selectedAgentSessionId ?? 'none',
+    'conversation',
+  ].join(':')
   const projectLabel =
     agent.project.repository?.displayName ?? agent.project.name ?? 'this project'
   const sessionLabel = agent.project.selectedAgentSession?.title?.trim() || 'New Chat'
@@ -4392,8 +4397,9 @@ export const AgentRuntime = memo(function AgentRuntime({
               />
             ) : (
               <div
+                key={conversationSurfaceKey}
                 className={cn(
-                  'mx-auto flex w-full flex-col',
+                  'agent-session-surface-enter mx-auto flex w-full flex-col',
                   isDense ? 'max-w-full gap-1' : 'max-w-[720px] gap-4',
                 )}
               >

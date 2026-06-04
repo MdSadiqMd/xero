@@ -3583,6 +3583,72 @@ describe('AgentRuntime current UI', () => {
     }
   })
 
+  it('remounts the conversation surface when switching selected sessions', () => {
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-04-29T00:49:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            makeTranscriptItem({ sequence: 1, role: 'user', text: 'Summarize this session.' }),
+            makeTranscriptItem({ sequence: 2, text: 'This is the first session.' }),
+          ],
+        })}
+      />,
+    )
+
+    const initialSurface = screen
+      .getByText('This is the first session.')
+      .closest('.agent-session-surface-enter')
+    expect(initialSurface).not.toBeNull()
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          project: makeProject({
+            selectedAgentSessionId: 'agent-session-other',
+          }),
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            agentSessionId: 'agent-session-other',
+            runId: 'run-2',
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-04-29T00:50:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          runtimeStreamItems: [
+            makeTranscriptItem({
+              runId: 'run-2',
+              sequence: 1,
+              role: 'user',
+              text: 'Summarize the next session.',
+            }),
+            makeTranscriptItem({ runId: 'run-2', sequence: 2, text: 'This is the next session.' }),
+          ],
+        })}
+      />,
+    )
+
+    const nextSurface = screen
+      .getByText('This is the next session.')
+      .closest('.agent-session-surface-enter')
+    expect(nextSurface).not.toBeNull()
+    expect(nextSurface).not.toBe(initialSurface)
+    expect(screen.queryByText('This is the first session.')).not.toBeInTheDocument()
+  })
+
   it('scrolls restored conversations to latest when switching projects', () => {
     const { rerender } = render(
       <AgentRuntime
@@ -3614,6 +3680,10 @@ describe('AgentRuntime current UI', () => {
     fireEvent.scroll(viewport)
 
     expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible()
+    const initialSurface = screen
+      .getByText('This project is Xero.')
+      .closest('.agent-session-surface-enter')
+    expect(initialSurface).not.toBeNull()
 
     rerender(
       <AgentRuntime
@@ -3665,6 +3735,11 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(screen.getByText('Fresh project overview.')).toBeVisible()
+    const nextSurface = screen
+      .getByText('Fresh project overview.')
+      .closest('.agent-session-surface-enter')
+    expect(nextSurface).not.toBeNull()
+    expect(nextSurface).not.toBe(initialSurface)
     expect(screen.queryByText('This project is Xero.')).not.toBeInTheDocument()
     expect(viewport.scrollTop).toBe(1_200)
     expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument()

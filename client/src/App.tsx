@@ -132,6 +132,8 @@ import type {
 import {
   useXeroDesktopState,
   type AgentPaneView,
+  type AgentWorkspaceLayoutState,
+  type AgentWorkspacePaneView,
   type OperatorActionErrorView,
   type RefreshSource,
   type RuntimeRunActionKind,
@@ -178,6 +180,13 @@ import { checkAttachmentModelCompatibility } from '@/lib/agent-attachments'
 
 export interface XeroAppProps {
   adapter?: XeroDesktopAdapter
+}
+
+interface AgentWorkspaceDisplaySnapshot {
+  project: ProjectDetailView
+  agentView: AgentPaneView | null
+  layout: AgentWorkspaceLayoutState | null
+  panes: AgentWorkspacePaneView[]
 }
 
 const loadAgentRuntime = () => import('@/components/xero/agent-runtime')
@@ -3185,22 +3194,61 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [isLoading, onboardingDismissed, projects.length])
 
   const selectedAgentSessionId = activeProject?.selectedAgentSessionId ?? null
+  const currentAgentWorkspaceDisplay = useMemo<AgentWorkspaceDisplaySnapshot | null>(() => {
+    if (!activeProject) {
+      return null
+    }
+
+    return {
+      project: activeProject,
+      agentView,
+      layout: agentWorkspaceLayout,
+      panes: agentWorkspacePanes,
+    }
+  }, [activeProject, agentView, agentWorkspaceLayout, agentWorkspacePanes])
+  const shouldHoldAgentWorkspaceForProjectSelection =
+    activeView === 'agent' && pendingProjectSelectionId !== null
+  const lastStableAgentWorkspaceDisplayRef = useRef<AgentWorkspaceDisplaySnapshot | null>(
+    currentAgentWorkspaceDisplay,
+  )
+
+  useEffect(() => {
+    if (shouldHoldAgentWorkspaceForProjectSelection || !currentAgentWorkspaceDisplay) {
+      return
+    }
+
+    lastStableAgentWorkspaceDisplayRef.current = currentAgentWorkspaceDisplay
+  }, [currentAgentWorkspaceDisplay, shouldHoldAgentWorkspaceForProjectSelection])
+
+  const displayedAgentWorkspace =
+    shouldHoldAgentWorkspaceForProjectSelection &&
+      lastStableAgentWorkspaceDisplayRef.current
+      ? lastStableAgentWorkspaceDisplayRef.current
+      : currentAgentWorkspaceDisplay
+  const displayedActiveProject = displayedAgentWorkspace?.project ?? activeProject
+  const displayedAgentView = displayedAgentWorkspace?.agentView ?? agentView
+  const displayedAgentWorkspaceLayout =
+    displayedAgentWorkspace?.layout ?? agentWorkspaceLayout
+  const displayedAgentWorkspacePanes =
+    displayedAgentWorkspace?.panes ?? agentWorkspacePanes
+  const displayedSelectedAgentSessionId =
+    displayedActiveProject?.selectedAgentSessionId ?? selectedAgentSessionId
   const visibleAgentSessionIds = useMemo(() => {
     if (activeView !== 'agent') {
       return []
     }
 
     const paneSessionIds =
-      agentWorkspaceLayout?.paneSlots
+      displayedAgentWorkspaceLayout?.paneSlots
         .map((slot) => slot.agentSessionId)
         .filter((agentSessionId): agentSessionId is string => Boolean(agentSessionId)) ?? []
 
     return paneSessionIds.length > 0
       ? Array.from(new Set(paneSessionIds))
-      : selectedAgentSessionId
-        ? [selectedAgentSessionId]
+      : displayedSelectedAgentSessionId
+        ? [displayedSelectedAgentSessionId]
         : []
-  }, [activeView, agentWorkspaceLayout, selectedAgentSessionId])
+  }, [activeView, displayedAgentWorkspaceLayout, displayedSelectedAgentSessionId])
   useEffect(() => {
     if (visibleAgentSessionIds.length === 0) {
       return
@@ -3251,10 +3299,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
     },
     [activeProjectId, resolvePaneAgentSessionId, selectAgentSession, selectedAgentSessionId],
   )
-  const paneCount = agentWorkspaceLayout?.paneSlots.length ?? 1
+  const paneCount = displayedAgentWorkspaceLayout?.paneSlots.length ?? 1
   const isMultiPane = paneCount > 1
   useEffect(() => {
-    const livePaneIds = new Set(agentWorkspaceLayout?.paneSlots.map((slot) => slot.id) ?? [])
+    const livePaneIds = new Set(displayedAgentWorkspaceLayout?.paneSlots.map((slot) => slot.id) ?? [])
     setPaneCloseStates((current) => {
       let changed = false
       const next: Record<string, AgentPaneCloseState> = {}
@@ -3268,23 +3316,23 @@ export function XeroApp({ adapter }: XeroAppProps) {
       return changed ? next : current
     })
     setPendingPaneCloseId((current) => (current && livePaneIds.has(current) ? current : null))
-  }, [agentWorkspaceLayout])
+  }, [displayedAgentWorkspaceLayout])
   const sessionPaneAssignments = useMemo<Record<string, number>>(() => {
     const map: Record<string, number> = {}
-    if (!agentWorkspaceLayout) return map
-    agentWorkspaceLayout.paneSlots.forEach((slot, index) => {
+    if (!displayedAgentWorkspaceLayout) return map
+    displayedAgentWorkspaceLayout.paneSlots.forEach((slot, index) => {
       if (slot.agentSessionId) {
         map[slot.agentSessionId] = index + 1
       }
     })
     return map
-  }, [agentWorkspaceLayout])
+  }, [displayedAgentWorkspaceLayout])
   const dndPaneSlots = useMemo(() => {
-    if (!agentWorkspaceLayout || !activeProject) return []
-    const projectLabel = activeProject.name ?? null
-    return agentWorkspaceLayout.paneSlots.map((slot, index) => {
+    if (!displayedAgentWorkspaceLayout || !displayedActiveProject) return []
+    const projectLabel = displayedActiveProject.name ?? null
+    return displayedAgentWorkspaceLayout.paneSlots.map((slot, index) => {
       const session = slot.agentSessionId
-        ? activeProject.agentSessions.find(
+        ? displayedActiveProject.agentSessions.find(
             (entry) => entry.agentSessionId === slot.agentSessionId,
           ) ?? null
         : null
@@ -3296,21 +3344,21 @@ export function XeroApp({ adapter }: XeroAppProps) {
         index,
       }
     })
-  }, [activeProject, agentWorkspaceLayout])
+  }, [displayedActiveProject, displayedAgentWorkspaceLayout])
   const agentCommandPalettePanes = useMemo(() => {
-    if (!agentWorkspaceLayout || !activeProject) return []
-    return agentWorkspaceLayout.paneSlots.map((slot, index) => {
-      const session = activeProject.agentSessions.find(
+    if (!displayedAgentWorkspaceLayout || !displayedActiveProject) return []
+    return displayedAgentWorkspaceLayout.paneSlots.map((slot, index) => {
+      const session = displayedActiveProject.agentSessions.find(
         (candidate) => candidate.agentSessionId === slot.agentSessionId,
       )
       return {
         paneId: slot.id,
         paneNumber: index + 1,
         sessionTitle: session?.title ?? 'Untitled',
-        isFocused: slot.id === agentWorkspaceLayout.focusedPaneId,
+        isFocused: slot.id === displayedAgentWorkspaceLayout.focusedPaneId,
       }
     })
-  }, [activeProject, agentWorkspaceLayout])
+  }, [displayedActiveProject, displayedAgentWorkspaceLayout])
   const preSpawnExplorerModeRef = useRef<'pinned' | 'collapsed' | null>(null)
   useEffect(() => {
     if (activeView !== 'agent') return
@@ -3355,7 +3403,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         return reportedState
       }
 
-      const pane = agentWorkspacePanes.find((candidate) => candidate.paneId === paneId)
+      const pane = displayedAgentWorkspacePanes.find((candidate) => candidate.paneId === paneId)
       if (!pane) {
         return null
       }
@@ -3366,7 +3414,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         sessionTitle: pane.agent?.project.selectedAgentSession?.title?.trim() || 'New Chat',
       }
     },
-    [agentWorkspacePanes, paneCloseStates],
+    [displayedAgentWorkspacePanes, paneCloseStates],
   )
   const handleClosePane = useCallback(
     (paneId: string) => {
@@ -4777,6 +4825,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
             ),
         !options.heavySwitchSurface && visible ? 'translate-x-0' : null,
       )
+    const agentRenderProject = displayedActiveProject ?? activeProject
+    const agentRenderView = displayedAgentView
+    const agentRenderWorkspaceLayout = displayedAgentWorkspaceLayout
+    const agentRenderWorkspacePanes = displayedAgentWorkspacePanes
     const sessionsPeekAvailable = activeView === 'agent' && explorerMode === 'collapsed'
     const agentUsesHeavySwitchSurface = paneCount >= 3
 
@@ -4787,9 +4839,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
         onOpenSessionInNewPane={openSessionInNewPane}
       >
         <AgentSessionsSidebar
-          projectId={activeProject.id}
-          sessions={activeProject.agentSessions}
-          selectedSessionId={activeProject.selectedAgentSessionId}
+          projectId={agentRenderProject.id}
+          sessions={agentRenderProject.agentSessions}
+          selectedSessionId={agentRenderProject.selectedAgentSessionId}
           onSelectSession={handleSelectAgentSession}
           onCreateSession={handleCreateAgentSession}
           onArchiveSession={handleArchiveAgentSession}
@@ -4820,7 +4872,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           sessionPaneAssignments={isMultiPane ? sessionPaneAssignments : undefined}
         />
         <AgentCommandPalette
-          enabled={activeView === 'agent' && Boolean(agentWorkspaceLayout)}
+          enabled={activeView === 'agent' && Boolean(agentRenderWorkspaceLayout)}
           panes={agentCommandPalettePanes}
           spawnDisabled={paneCount >= 6}
           onSpawnPane={handleSpawnPane}
@@ -4926,7 +4978,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
             </LazyActivityPane>
           ) : null}
 
-          {agentView ? (
+          {agentRenderView ? (
             <LazyActivityPane
               active={activeView === 'agent'}
               className={getViewPaneClassName(activeView === 'agent', {
@@ -4937,8 +4989,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
             >
               <AgentWorkspace
                 active={activeView === 'agent'}
-                layout={agentWorkspaceLayout}
-                panes={agentWorkspacePanes}
+                layout={agentRenderWorkspaceLayout}
+                panes={agentRenderWorkspacePanes}
                 highChurnStore={highChurnStore}
                 desktopAdapter={resolvedAdapter}
                 accountAvatarUrl={githubSession?.user.avatarUrl ?? null}

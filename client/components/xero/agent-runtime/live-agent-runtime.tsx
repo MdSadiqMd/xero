@@ -1,6 +1,6 @@
 "use client"
 
-import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { AgentRuntimeDesktopAdapter, AgentRuntimeProps } from '@/components/xero/agent-runtime'
 import type { ConversationTurn } from '@xero/ui/components/transcript/conversation-section'
@@ -199,6 +199,26 @@ interface LiveAgentRuntimeViewProps extends Omit<AgentRuntimeProps, 'agent'> {
   highChurnStore: XeroHighChurnStore
 }
 
+interface StableAgentRuntimeSnapshot {
+  identity: string
+  agent: AgentPaneView
+  historicalTurns: ConversationTurn[] | null
+}
+
+function getAgentRuntimeIdentity(agent: AgentPaneView | null): string | null {
+  if (!agent) return null
+  return `${agent.project.id}:${agent.project.selectedAgentSessionId ?? 'none'}`
+}
+
+function isAgentRuntimeProjectShell(agent: AgentPaneView | null): boolean {
+  return Boolean(
+    agent &&
+      !agent.repositoryPath &&
+      !agent.project.repository &&
+      !agent.project.selectedAgentSessionId,
+  )
+}
+
 export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
   agent,
   highChurnStore,
@@ -206,7 +226,54 @@ export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
 }: LiveAgentRuntimeViewProps) {
   const liveAgent = useAgentViewWithLiveRuntimeStream(agent, highChurnStore)
   const historicalConversationState = useHistoricalConversationTurnsState(liveAgent, props.desktopAdapter)
-  if (!liveAgent) {
+  const liveAgentIdentity = getAgentRuntimeIdentity(liveAgent)
+  const incomingLooksLikeProjectShell = isAgentRuntimeProjectShell(liveAgent)
+  const lastReadySnapshotRef = useRef<StableAgentRuntimeSnapshot | null>(null)
+
+  useEffect(() => {
+    if (
+      !liveAgent ||
+      !liveAgentIdentity ||
+      historicalConversationState.loading ||
+      incomingLooksLikeProjectShell
+    ) {
+      return
+    }
+
+    lastReadySnapshotRef.current = {
+      identity: liveAgentIdentity,
+      agent: liveAgent,
+      historicalTurns: historicalConversationState.turns,
+    }
+  }, [
+    historicalConversationState.loading,
+    historicalConversationState.turns,
+    incomingLooksLikeProjectShell,
+    liveAgent,
+    liveAgentIdentity,
+  ])
+
+  const lastReadySnapshot = lastReadySnapshotRef.current
+  const shouldHoldPreviousRuntime =
+    Boolean(
+      liveAgentIdentity &&
+        lastReadySnapshot &&
+        lastReadySnapshot.identity !== liveAgentIdentity,
+    ) && (
+      historicalConversationState.loading ||
+      incomingLooksLikeProjectShell
+    )
+  const renderedAgent = shouldHoldPreviousRuntime
+    ? lastReadySnapshot?.agent ?? liveAgent
+    : liveAgent
+  const renderedHistoricalTurns = shouldHoldPreviousRuntime
+    ? lastReadySnapshot?.historicalTurns ?? null
+    : historicalConversationState.turns
+  const renderedHistoricalLoading = shouldHoldPreviousRuntime
+    ? false
+    : historicalConversationState.loading
+
+  if (!renderedAgent) {
     return null
   }
 
@@ -214,9 +281,9 @@ export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
     <Suspense fallback={<AgentRuntimeLoadingShell />}>
       <LazyAgentRuntime
         {...props}
-        agent={liveAgent}
-        historicalConversationTurns={historicalConversationState.turns ?? undefined}
-        historicalConversationTurnsLoading={historicalConversationState.loading}
+        agent={renderedAgent}
+        historicalConversationTurns={renderedHistoricalTurns ?? undefined}
+        historicalConversationTurnsLoading={renderedHistoricalLoading}
       />
     </Suspense>
   )
