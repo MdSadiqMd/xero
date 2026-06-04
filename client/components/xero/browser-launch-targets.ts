@@ -65,6 +65,23 @@ export function browserLaunchTargetId(url: string): string {
   return `browser-app:${normalized.toLowerCase()}`
 }
 
+function browserLaunchOriginKey(value: string): string | null {
+  const normalized = normalizeBrowserLaunchUrl(value)
+  if (!normalized) return null
+  try {
+    const url = new URL(normalized)
+    return url.origin.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+export function browserLaunchTargetMatchesUrl(target: BrowserLaunchTarget, url: string): boolean {
+  const targetOrigin = browserLaunchOriginKey(target.url)
+  const unavailableOrigin = browserLaunchOriginKey(url)
+  return targetOrigin !== null && targetOrigin === unavailableOrigin
+}
+
 export function browserLaunchTargetLabel(url: string, source?: string | null): string {
   try {
     const parsed = new URL(url)

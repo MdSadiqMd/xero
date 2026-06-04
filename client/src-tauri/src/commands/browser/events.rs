@@ -8,6 +8,7 @@ pub const BROWSER_TAB_UPDATED_EVENT: &str = "browser:tab_updated";
 pub const BROWSER_DIALOG_EVENT: &str = "browser:dialog";
 pub const BROWSER_DOWNLOAD_EVENT: &str = "browser:download";
 pub const BROWSER_RESIZE_DRAG_EVENT: &str = "browser:resize_drag";
+pub const BROWSER_DEV_SERVER_UNAVAILABLE_EVENT: &str = "browser:dev_server_unavailable";
 pub const BROWSER_TOOL_CONTEXT_EVENT: &str = "browser:tool_context";
 pub const BROWSER_TOOL_CLOSED_EVENT: &str = "browser:tool_closed";
 pub const BROWSER_TOOL_STATE_EVENT: &str = "browser:tool_state";
@@ -43,6 +44,13 @@ pub struct BrowserConsolePayload {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserTabUpdatedPayload {
     pub tabs: Vec<super::tabs::BrowserTabMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserDevServerUnavailablePayload {
+    pub tab_id: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

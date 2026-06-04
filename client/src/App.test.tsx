@@ -129,6 +129,7 @@ import {
 } from './App'
 import { XeroDesktopError, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import {
+  PROVIDER_PREFLIGHT_CONTRACT_VERSION,
   createXeroDoctorReport,
   providerModelCatalogSchema,
 } from '@/src/lib/xero-model'
@@ -989,7 +990,7 @@ function buildProviderPreflightSnapshot(
   const status = profile.readiness.ready || profile.providerId === 'openai_codex' ? 'passed' : 'warning'
 
   return {
-    contractVersion: 1,
+    contractVersion: PROVIDER_PREFLIGHT_CONTRACT_VERSION,
     profileId: profile.profileId,
     providerId: profile.providerId,
     modelId,

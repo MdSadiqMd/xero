@@ -624,12 +624,9 @@ fn attachment_capability(
     }
 
     let image_supported = modalities.iter().any(|modality| modality == "image");
-    let document_supported = modalities.iter().any(|modality| {
-        matches!(
-            modality.as_str(),
-            "file" | "document" | "pdf" | "text_file"
-        )
-    });
+    let document_supported = modalities
+        .iter()
+        .any(|modality| matches!(modality.as_str(), "file" | "document" | "pdf" | "text_file"));
     let mut supported_types = Vec::new();
     if image_supported {
         supported_types.push("image/*".into());

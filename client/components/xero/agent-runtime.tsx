@@ -2618,8 +2618,12 @@ export const AgentRuntime = memo(function AgentRuntime({
         availability: 'available',
         availabilityLabel: 'Available',
         thinkingSupported: option.thinking.supported,
+        inputModalities: option.inputModalities ?? [],
         thinkingEffortOptions: option.thinkingEffortOptions,
         defaultThinkingEffort: option.defaultThinkingEffort,
+        contextWindowTokens: option.contextWindowTokens ?? null,
+        maxOutputTokens: option.maxOutputTokens ?? null,
+        capabilities: option.capabilities ?? null,
       })),
     [agent.composerModelOptions],
   )
@@ -2919,7 +2923,9 @@ export const AgentRuntime = memo(function AgentRuntime({
     if (hiddenPrompt) {
       controller.handleAppendHiddenDraftPrompt(hiddenPrompt, hiddenPromptId)
       const contextCard = pendingComposerInsert.contextCard
-      if (contextCard) {
+      const contextCardCoveredByImage =
+        contextCard?.kind === 'sketch' && Boolean(pendingComposerInsert.image)
+      if (contextCard && !contextCardCoveredByImage) {
         setPendingContextCards((prev) =>
           prev.some((context) => context.id === hiddenPromptId)
             ? prev
@@ -4448,6 +4454,7 @@ export const AgentRuntime = memo(function AgentRuntime({
           onSubmitDraftPrompt={handleSubmitDraftPrompt}
           pendingAttachments={pendingAttachments}
           pendingContexts={pendingContextCards}
+          attachmentCompatibility={selectedComposerModel}
           onAddFiles={handleAddFiles}
           onRemoveAttachment={handleRemoveAttachment}
           onRemoveContext={handleRemoveContextCard}

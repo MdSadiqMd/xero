@@ -170,6 +170,7 @@ export interface AgentProviderModelView {
   availability: AgentProviderModelAvailability
   availabilityLabel: string
   thinkingSupported: boolean
+  inputModalities?: string[]
   thinkingEffortOptions: ProviderModelThinkingEffortDto[]
   defaultThinkingEffort: ProviderModelThinkingEffortDto | null
   contextWindowTokens?: number | null

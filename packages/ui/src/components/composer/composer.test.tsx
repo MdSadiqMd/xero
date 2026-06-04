@@ -402,6 +402,76 @@ describe("Composer", () => {
 		expect(screen.getByRole("button", { name: "Add files" })).toBeVisible();
 	});
 
+	it("warns immediately when the selected model cannot accept an attached image", async () => {
+		const onAddFiles = vi.fn();
+		renderComposer({
+			onAddFiles,
+			attachmentCompatibility: {
+				label: "Text model",
+				inputModalities: ["text"],
+			},
+		});
+
+		const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+		const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+		fireEvent.change(input, { target: { files: [file] } });
+
+		await waitFor(() =>
+			expect(screen.getByRole("alert")).toHaveTextContent(
+				"Text model does not support image attachments",
+			),
+		);
+		expect(onAddFiles).not.toHaveBeenCalled();
+	});
+
+	it("adds files immediately when the selected model accepts the attachment kind", () => {
+		const onAddFiles = vi.fn();
+		renderComposer({
+			onAddFiles,
+			attachmentCompatibility: {
+				label: "Vision model",
+				inputModalities: ["text", "image"],
+			},
+		});
+
+		const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+		const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+		fireEvent.change(input, { target: { files: [file] } });
+
+		expect(onAddFiles).toHaveBeenCalledWith([file]);
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("blocks sending when a pending attachment is incompatible with the selected model", async () => {
+		const { onSubmit } = renderComposer({
+			initialDraft: "Describe this",
+			pendingAttachments: [
+				{
+					id: "attachment-1",
+					kind: "image",
+					originalName: "sketch.png",
+					mediaType: "image/png",
+					sizeBytes: 128,
+					status: "ready",
+				},
+			],
+			attachmentCompatibility: {
+				label: "Text model",
+				inputModalities: ["text"],
+			},
+		});
+
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			'Text model does not support image attachments. Choose a compatible model or remove "sketch.png".',
+		);
+
+		const sendButton = screen.getByRole("button", { name: "Send message" });
+		expect(sendButton).toBeDisabled();
+		fireEvent.click(sendButton);
+
+		await waitFor(() => expect(onSubmit).not.toHaveBeenCalled());
+	});
+
 	it("opens pending image attachments in the shared image preview", () => {
 		const previewUrl = "data:image/png;base64,aGVsbG8=";
 		renderComposer({

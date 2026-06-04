@@ -133,6 +133,68 @@ pub(crate) fn run_selected_provider_preflight<R: Runtime>(
     Ok(snapshot)
 }
 
+pub(crate) fn provider_catalog_preflight_snapshot_for_run<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    profile_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    required_features: ProviderPreflightRequiredFeatures,
+) -> CommandResult<ProviderPreflightSnapshot> {
+    refresh_xai_session_before_preflight_if_needed(app, state, profile_id)?;
+    let catalog = load_provider_model_catalog(app, state, profile_id, false)?;
+    let provider_profiles =
+        crate::commands::provider_credentials::load_provider_credentials_view(app, state)?;
+    let profile = provider_profiles
+        .profile(profile_id)
+        .or_else(|| {
+            provider_profiles
+                .profiles()
+                .iter()
+                .find(|profile| profile.provider_id == profile_id)
+        })
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_not_found",
+                format!("Xero could not find provider `{profile_id}` for cached preflight."),
+            )
+        })?;
+    if profile.provider_id != provider_id {
+        return Err(CommandError::user_fixable(
+            "provider_preflight_profile_mismatch",
+            format!(
+                "Provider profile `{profile_id}` resolves to `{}`, but the run requested `{provider_id}`.",
+                profile.provider_id
+            ),
+        ));
+    }
+
+    let selected_model_id = match model_id.trim() {
+        "" => catalog.configured_model_id.as_str(),
+        trimmed => trimmed,
+    };
+    let credential_ready = provider_credentials_ready_for_preflight(app, state, profile)?;
+    let catalog_snapshot = provider_preflight_from_catalog(
+        &catalog,
+        selected_model_id,
+        required_features.clone(),
+        credential_ready,
+    );
+    let snapshot = live_openai_codex_preflight_for_profile(
+        app,
+        state,
+        profile,
+        selected_model_id,
+        required_features,
+        &catalog,
+    )?
+    .unwrap_or(catalog_snapshot);
+    let snapshot =
+        bind_provider_preflight_cache_for_profile(state, &provider_profiles, profile, snapshot)?;
+    persist_provider_preflight_snapshot(&state.global_db_path(app)?, &snapshot)?;
+    Ok(snapshot)
+}
+
 pub(crate) fn current_provider_preflight_cache_binding<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
@@ -1025,6 +1087,47 @@ mod tests {
             check.code == "provider_preflight_tool_schema"
                 && check.status == xero_agent_core::ProviderPreflightStatus::Warning
         }));
+    }
+
+    #[test]
+    fn live_catalog_preflight_admits_supported_image_attachments_without_live_probe() {
+        let catalog = ProviderModelCatalog {
+            profile_id: "xai-default".into(),
+            provider_id: XAI_PROVIDER_ID.into(),
+            configured_model_id: "grok-4.3-latest".into(),
+            source: ProviderModelCatalogSource::Live,
+            fetched_at: Some("2026-06-04T16:06:35Z".into()),
+            last_success_at: Some("2026-06-04T16:06:35Z".into()),
+            last_refresh_error: None,
+            models: vec![ProviderModelRecord {
+                model_id: "grok-4.3-latest".into(),
+                display_name: "Grok 4.3 Latest".into(),
+                thinking: ProviderModelThinkingCapability {
+                    supported: true,
+                    effort_options: vec![ProviderModelThinkingEffort::Low],
+                    default_effort: Some(ProviderModelThinkingEffort::Low),
+                },
+                input_modalities: vec!["image".into(), "text".into()],
+                input_modalities_source: "xai_text_runtime_default".into(),
+                context_window_tokens: Some(1_000_000),
+                max_output_tokens: Some(4_096),
+                context_limit_source: Some(SessionContextLimitSourceDto::LiveCatalog),
+                context_limit_confidence: Some(SessionContextLimitConfidenceDto::High),
+                context_limit_fetched_at: Some("2026-06-04T16:06:35Z".into()),
+            }],
+        };
+        let mut required_features = ProviderPreflightRequiredFeatures::owned_agent_text_turn();
+        required_features.set_attachment_input_modalities(["image"]);
+
+        let snapshot =
+            provider_preflight_from_catalog(&catalog, "grok-4.3-latest", required_features, true);
+
+        assert_eq!(snapshot.source, ProviderPreflightSource::LiveCatalog);
+        assert_eq!(
+            snapshot.status,
+            xero_agent_core::ProviderPreflightStatus::Passed
+        );
+        assert!(xero_agent_core::provider_preflight_blockers(&snapshot).is_empty());
     }
 
     #[test]

@@ -875,6 +875,7 @@ function SessionView() {
 									isComputerUseSession ? undefined : handleApprovalModeChange
 								}
 								pendingAttachments={attachmentsHook.pendingAttachments}
+								attachmentCompatibility={resolvedModelOption}
 								onAddFiles={attachmentsHook.addFiles}
 								onRemoveAttachment={attachmentsHook.removeAttachment}
 								contextMeter={contextMeter}

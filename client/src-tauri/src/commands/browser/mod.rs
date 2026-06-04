@@ -11,7 +11,7 @@ pub mod settings;
 pub mod tabs;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::OpenOptions,
     io::Write,
     net::{IpAddr, TcpStream, ToSocketAddrs},
@@ -55,12 +55,14 @@ pub use diagnostics::{
     BrowserNetworkDiagnosticEntry,
 };
 pub use events::{
-    BrowserConsolePayload, BrowserDialogPayload, BrowserDownloadPayload, BrowserLoadStatePayload,
-    BrowserResizeDragPayload, BrowserTabUpdatedPayload, BrowserToolClosedPayload,
-    BrowserToolContextPayload, BrowserToolStatePayload, BrowserUrlChangedPayload,
-    BROWSER_CONSOLE_EVENT, BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT,
-    BROWSER_RESIZE_DRAG_EVENT, BROWSER_TAB_UPDATED_EVENT, BROWSER_TOOL_CLOSED_EVENT,
-    BROWSER_TOOL_CONTEXT_EVENT, BROWSER_TOOL_STATE_EVENT, BROWSER_URL_CHANGED_EVENT,
+    BrowserConsolePayload, BrowserDevServerUnavailablePayload, BrowserDialogPayload,
+    BrowserDownloadPayload, BrowserLoadStatePayload, BrowserResizeDragPayload,
+    BrowserTabUpdatedPayload, BrowserToolClosedPayload, BrowserToolContextPayload,
+    BrowserToolStatePayload, BrowserUrlChangedPayload, BROWSER_CONSOLE_EVENT,
+    BROWSER_DEV_SERVER_UNAVAILABLE_EVENT, BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT,
+    BROWSER_LOAD_STATE_EVENT, BROWSER_RESIZE_DRAG_EVENT, BROWSER_TAB_UPDATED_EVENT,
+    BROWSER_TOOL_CLOSED_EVENT, BROWSER_TOOL_CONTEXT_EVENT, BROWSER_TOOL_STATE_EVENT,
+    BROWSER_URL_CHANGED_EVENT,
 };
 pub use native_cdp::{NativeCdpActionResult, NativeCdpBrowserService};
 pub use screenshot::capture_webview as screenshot_webview;
@@ -82,7 +84,9 @@ const RESIZE_DRAG_MAX_DURATION: Duration = Duration::from_secs(30);
 const DEV_SERVER_MONITOR_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const DEV_SERVER_MONITOR_INTERVAL: Duration = Duration::from_secs(2);
 const DEV_SERVER_MONITOR_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
+const DEV_SERVER_LIVENESS_CONNECT_TIMEOUT: Duration = Duration::from_millis(180);
 const DEV_SERVER_MONITOR_FAILURE_THRESHOLD: u8 = 3;
+const DEV_SERVER_RECONCILER_INTERVAL: Duration = Duration::from_secs(2);
 const BROWSER_RESIZE_NUDGE_SCRIPT: &str = r#"
 (() => {
   try {
@@ -269,6 +273,7 @@ pub struct BrowserState {
     resize_coalescer: Arc<BrowserResizeCoalescer>,
     resize_drag: Arc<BrowserResizeDragState>,
     dev_server_monitor: Arc<BrowserDevServerMonitorState>,
+    dev_server_reconciler_started: AtomicBool,
     waiters: Arc<BridgeWaiters>,
     tabs: Arc<BrowserTabs>,
     diagnostics: Arc<BrowserDiagnostics>,
@@ -283,6 +288,7 @@ impl Default for BrowserState {
             resize_coalescer: Arc::new(BrowserResizeCoalescer::default()),
             resize_drag: Arc::new(BrowserResizeDragState::default()),
             dev_server_monitor: Arc::new(BrowserDevServerMonitorState::default()),
+            dev_server_reconciler_started: AtomicBool::new(false),
             waiters: Arc::new(BridgeWaiters::new()),
             tabs: Arc::new(BrowserTabs::new()),
             diagnostics: Arc::new(BrowserDiagnostics::default()),
@@ -478,6 +484,24 @@ impl BrowserState {
     pub fn native_cdp(&self) -> Arc<NativeCdpBrowserService> {
         Arc::clone(&self.native_cdp)
     }
+}
+
+pub fn start_browser_dev_server_reconciler<R: Runtime + 'static>(
+    app: AppHandle<R>,
+    state: &BrowserState,
+) {
+    if state
+        .dev_server_reconciler_started
+        .swap(true, Ordering::AcqRel)
+    {
+        return;
+    }
+
+    let tabs = state.tabs();
+    let monitor = state.dev_server_monitor();
+    thread::spawn(move || {
+        run_browser_dev_server_reconciler(app, tabs, monitor);
+    });
 }
 
 #[derive(Debug, Clone)]
@@ -1397,6 +1421,28 @@ pub fn browser_current_url<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn browser_dev_server_running(url: String) -> CommandResult<bool> {
+    let target = match actions::parse_url(&url) {
+        Ok(target) => target,
+        Err(_) => return Ok(false),
+    };
+    if browser_dev_server_origin_key(&target).is_none() {
+        return Ok(false);
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        browser_dev_server_accepts_connections(&target, DEV_SERVER_LIVENESS_CONNECT_TIMEOUT)
+    })
+    .await
+    .map_err(|error| {
+        CommandError::system_fault(
+            "browser_dev_server_liveness_task_failed",
+            format!("Xero could not check project app availability: {error}"),
+        )
+    })
+}
+
+#[tauri::command]
 pub async fn browser_screenshot<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: State<'_, BrowserState>,
@@ -1489,6 +1535,7 @@ pub fn browser_reload<R: Runtime + 'static>(
     {
         if let Some(tab_id) = tabs.find_by_label(&label) {
             state.dev_server_monitor.cancel(&tab_id);
+            emit_browser_dev_server_unavailable(&app, &tab_id, &current);
             close_browser_tab(&app, &tabs, &tab_id)?;
         }
         return Ok(());
@@ -1715,10 +1762,17 @@ pub fn browser_storage_clear<R: Runtime>(
 
 #[tauri::command]
 pub fn browser_tab_list<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, BrowserState>,
 ) -> CommandResult<Vec<BrowserTabMetadata>> {
-    state.tabs().list()
+    let tabs = state.tabs();
+    prune_unavailable_dev_server_tabs(
+        &app,
+        &tabs,
+        &state.dev_server_monitor,
+        DEV_SERVER_LIVENESS_CONNECT_TIMEOUT,
+    );
+    tabs.list()
 }
 
 #[tauri::command]
@@ -2055,6 +2109,188 @@ fn emit_tab_list<R: Runtime>(app: &AppHandle<R>, tabs: &BrowserTabs) {
     }
 }
 
+fn emit_browser_dev_server_unavailable<R: Runtime>(app: &AppHandle<R>, tab_id: &str, url: &Url) {
+    events::emit(
+        app,
+        BROWSER_DEV_SERVER_UNAVAILABLE_EVENT,
+        &BrowserDevServerUnavailablePayload {
+            tab_id: tab_id.to_string(),
+            url: url.to_string(),
+        },
+    );
+}
+
+#[derive(Debug, Clone)]
+struct BrowserDevServerTabSnapshot {
+    tab_id: String,
+    url: Url,
+}
+
+fn browser_dev_server_tab_snapshots(tabs: &BrowserTabs) -> Vec<BrowserDevServerTabSnapshot> {
+    let Ok(list) = tabs.list() else {
+        return Vec::new();
+    };
+
+    list.into_iter()
+        .filter_map(|tab| {
+            let url = tab.url.as_deref()?;
+            let url = actions::parse_url(url).ok()?;
+            browser_dev_server_origin_key(&url)?;
+            Some(BrowserDevServerTabSnapshot {
+                tab_id: tab.id,
+                url,
+            })
+        })
+        .collect()
+}
+
+fn record_browser_dev_server_probe_result(
+    failures: &mut HashMap<String, u8>,
+    tab_id: &str,
+    running: bool,
+    threshold: u8,
+) -> bool {
+    if running {
+        failures.remove(tab_id);
+        return false;
+    }
+
+    let count = failures.entry(tab_id.to_string()).or_insert(0);
+    *count = count.saturating_add(1);
+    *count >= threshold
+}
+
+fn prune_unavailable_dev_server_tabs<R: Runtime>(
+    app: &AppHandle<R>,
+    tabs: &Arc<BrowserTabs>,
+    monitor: &Arc<BrowserDevServerMonitorState>,
+    timeout: Duration,
+) {
+    for snapshot in browser_dev_server_tab_snapshots(tabs) {
+        if browser_dev_server_accepts_connections(&snapshot.url, timeout) {
+            continue;
+        }
+        close_unavailable_dev_server_tab(app, tabs, monitor, &snapshot.tab_id, &snapshot.url);
+    }
+}
+
+fn close_unavailable_dev_server_tab<R: Runtime>(
+    app: &AppHandle<R>,
+    tabs: &Arc<BrowserTabs>,
+    monitor: &Arc<BrowserDevServerMonitorState>,
+    tab_id: &str,
+    unavailable_url: &Url,
+) {
+    monitor.cancel(tab_id);
+    emit_browser_dev_server_unavailable(app, tab_id, unavailable_url);
+    let _ = close_browser_tab(app, tabs, tab_id);
+}
+
+fn close_dev_server_tab_if_current_url<R: Runtime>(
+    app: &AppHandle<R>,
+    tabs: &Arc<BrowserTabs>,
+    monitor: &Arc<BrowserDevServerMonitorState>,
+    tab_id: &str,
+    unavailable_url: &Url,
+) {
+    let Some(expected_origin) = browser_dev_server_origin_key(unavailable_url) else {
+        return;
+    };
+    let current_matches = tabs
+        .url_by_id(tab_id)
+        .and_then(|url| actions::parse_url(&url).ok())
+        .and_then(|url| browser_dev_server_origin_key(&url))
+        .as_deref()
+        == Some(expected_origin.as_str());
+    if !current_matches {
+        return;
+    }
+
+    close_unavailable_dev_server_tab(app, tabs, monitor, tab_id, unavailable_url);
+}
+
+fn run_browser_dev_server_reconciler<R: Runtime + 'static>(
+    app: AppHandle<R>,
+    tabs: Arc<BrowserTabs>,
+    monitor: Arc<BrowserDevServerMonitorState>,
+) {
+    let mut failures: HashMap<String, u8> = HashMap::new();
+    loop {
+        thread::sleep(DEV_SERVER_RECONCILER_INTERVAL);
+
+        let snapshots = browser_dev_server_tab_snapshots(&tabs);
+        let live_tab_ids = snapshots
+            .iter()
+            .map(|snapshot| snapshot.tab_id.as_str())
+            .collect::<HashSet<_>>();
+        failures.retain(|tab_id, _| live_tab_ids.contains(tab_id.as_str()));
+
+        for snapshot in snapshots {
+            let running = browser_dev_server_accepts_connections(
+                &snapshot.url,
+                DEV_SERVER_MONITOR_CONNECT_TIMEOUT,
+            );
+            if !record_browser_dev_server_probe_result(
+                &mut failures,
+                &snapshot.tab_id,
+                running,
+                DEV_SERVER_MONITOR_FAILURE_THRESHOLD,
+            ) {
+                continue;
+            }
+            failures.remove(&snapshot.tab_id);
+            close_dev_server_tab_from_background(
+                &app,
+                &tabs,
+                &monitor,
+                &snapshot.tab_id,
+                &snapshot.url,
+            );
+        }
+    }
+}
+
+fn close_dev_server_tab_from_background<R: Runtime + 'static>(
+    app: &AppHandle<R>,
+    tabs: &Arc<BrowserTabs>,
+    monitor: &Arc<BrowserDevServerMonitorState>,
+    tab_id: &str,
+    unavailable_url: &Url,
+) {
+    let app_for_main = app.clone();
+    let tabs_for_main = Arc::clone(tabs);
+    let monitor_for_main = Arc::clone(monitor);
+    let tab_id_for_main = tab_id.to_string();
+    let unavailable_url_for_main = unavailable_url.clone();
+
+    let app_for_fallback = app.clone();
+    let tabs_for_fallback = Arc::clone(tabs);
+    let monitor_for_fallback = Arc::clone(monitor);
+    let tab_id_for_fallback = tab_id.to_string();
+    let unavailable_url_for_fallback = unavailable_url.clone();
+
+    if app
+        .run_on_main_thread(move || {
+            close_dev_server_tab_if_current_url(
+                &app_for_main,
+                &tabs_for_main,
+                &monitor_for_main,
+                &tab_id_for_main,
+                &unavailable_url_for_main,
+            );
+        })
+        .is_err()
+    {
+        close_dev_server_tab_if_current_url(
+            &app_for_fallback,
+            &tabs_for_fallback,
+            &monitor_for_fallback,
+            &tab_id_for_fallback,
+            &unavailable_url_for_fallback,
+        );
+    }
+}
+
 fn sync_browser_dev_server_monitor<R: Runtime + 'static>(
     app: &AppHandle<R>,
     tabs: &Arc<BrowserTabs>,
@@ -2124,7 +2360,9 @@ fn monitor_browser_dev_server_tab<R: Runtime + 'static>(
 
         failures = failures.saturating_add(1);
         if failures >= DEV_SERVER_MONITOR_FAILURE_THRESHOLD {
-            close_browser_tab_if_monitor_current(&app, &tabs, &monitor, &tab_id, generation);
+            close_browser_tab_if_monitor_current(
+                &app, &tabs, &monitor, &tab_id, generation, &current,
+            );
             return;
         }
     }
@@ -2136,26 +2374,39 @@ fn close_browser_tab_if_monitor_current<R: Runtime + 'static>(
     monitor: &Arc<BrowserDevServerMonitorState>,
     tab_id: &str,
     generation: u64,
+    unavailable_url: &Url,
 ) {
     let app_for_main = app.clone();
     let tabs_for_main = Arc::clone(tabs);
     let monitor_for_main = Arc::clone(monitor);
     let tab_id_for_main = tab_id.to_string();
+    let unavailable_url_for_main = unavailable_url.clone();
 
     let app_for_fallback = app.clone();
     let tabs_for_fallback = Arc::clone(tabs);
     let monitor_for_fallback = Arc::clone(monitor);
     let tab_id_for_fallback = tab_id.to_string();
+    let unavailable_url_for_fallback = unavailable_url.clone();
 
     if app
         .run_on_main_thread(move || {
             if monitor_for_main.clear_if_current(&tab_id_for_main, generation) {
+                emit_browser_dev_server_unavailable(
+                    &app_for_main,
+                    &tab_id_for_main,
+                    &unavailable_url_for_main,
+                );
                 let _ = close_browser_tab(&app_for_main, &tabs_for_main, &tab_id_for_main);
             }
         })
         .is_err()
         && monitor_for_fallback.clear_if_current(&tab_id_for_fallback, generation)
     {
+        emit_browser_dev_server_unavailable(
+            &app_for_fallback,
+            &tab_id_for_fallback,
+            &unavailable_url_for_fallback,
+        );
         let _ = close_browser_tab(&app_for_fallback, &tabs_for_fallback, &tab_id_for_fallback);
     }
 }
@@ -2294,6 +2545,76 @@ mod tests {
         assert!(browser_dev_server_accepts_connections(
             &url,
             Duration::from_millis(100),
+        ));
+    }
+
+    #[test]
+    fn dev_server_tab_snapshots_include_only_loopback_http_tabs() {
+        let tabs = BrowserTabs::new();
+        let (local_id, local_label) = tabs.new_tab_label();
+        tabs.insert(local_id.clone(), local_label).unwrap();
+        tabs.record_page_state(
+            &local_id,
+            Some("http://localhost:5173/dashboard".to_string()),
+            None,
+            Some(false),
+        );
+        let (remote_id, remote_label) = tabs.new_tab_label();
+        tabs.insert(remote_id.clone(), remote_label).unwrap();
+        tabs.record_page_state(
+            &remote_id,
+            Some("https://example.com/".to_string()),
+            None,
+            Some(false),
+        );
+
+        let snapshots = browser_dev_server_tab_snapshots(&tabs);
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].tab_id, local_id);
+        assert_eq!(snapshots[0].url.as_str(), "http://127.0.0.1:5173/dashboard");
+    }
+
+    #[test]
+    fn dev_server_failure_tracker_waits_for_threshold_and_resets_on_success() {
+        let mut failures = HashMap::new();
+
+        assert!(!record_browser_dev_server_probe_result(
+            &mut failures,
+            "tab-1",
+            false,
+            3,
+        ));
+        assert!(!record_browser_dev_server_probe_result(
+            &mut failures,
+            "tab-1",
+            false,
+            3,
+        ));
+        assert!(!record_browser_dev_server_probe_result(
+            &mut failures,
+            "tab-1",
+            true,
+            3,
+        ));
+        assert!(!failures.contains_key("tab-1"));
+        assert!(!record_browser_dev_server_probe_result(
+            &mut failures,
+            "tab-1",
+            false,
+            3,
+        ));
+        assert!(!record_browser_dev_server_probe_result(
+            &mut failures,
+            "tab-1",
+            false,
+            3,
+        ));
+        assert!(record_browser_dev_server_probe_result(
+            &mut failures,
+            "tab-1",
+            false,
+            3,
         ));
     }
 

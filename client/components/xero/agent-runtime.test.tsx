@@ -5363,6 +5363,10 @@ describe('AgentRuntime current UI', () => {
         agent={makeAgent({
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
           runtimeRun: makeRuntimeRun(),
+          selectedModelSelectionKey: 'openai_codex:openai_codex',
+          composerModelOptions: [
+            makeComposerModelOption({ inputModalities: ['text', 'image'] }),
+          ],
         })}
         desktopAdapter={{
           ...dictation.adapter,
@@ -5373,6 +5377,11 @@ describe('AgentRuntime current UI', () => {
           id: 'browser-context-1',
           prompt: 'Tighten the hero spacing.',
           hiddenPrompt: 'Browser sketch context:\nPage: Local App\nDrawing: 1 stroke on the attached browser screenshot.',
+          contextCard: {
+            kind: 'sketch',
+            title: 'Browser sketch context',
+            subtitle: '1 stroke on browser screenshot',
+          },
           image: {
             bytes: imageBytes,
             mediaType: 'image/png',
@@ -5386,6 +5395,9 @@ describe('AgentRuntime current UI', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Agent input')).toHaveValue('Tighten the hero spacing.'),
     )
+    await waitFor(() => expect(screen.getByText('browser-pen.png')).toBeVisible())
+    expect(screen.queryByText('Browser sketch context')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
     expect(onUpdateRuntimeRunControls).not.toHaveBeenCalled()
     expect(onPendingComposerInsertConsumed).toHaveBeenCalledWith('browser-context-1')
     await waitFor(() =>
@@ -5398,7 +5410,9 @@ describe('AgentRuntime current UI', () => {
       }),
     )
 
-    fireEvent.keyDown(screen.getByLabelText('Agent input'), { key: 'Enter' })
+    const sendButton = screen.getByRole('button', { name: 'Send message' })
+    await waitFor(() => expect(sendButton).toBeEnabled())
+    fireEvent.click(sendButton)
 
     await waitFor(() =>
       expect(onUpdateRuntimeRunControls).toHaveBeenCalledWith({

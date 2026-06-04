@@ -17,6 +17,9 @@ import {
 	useState,
 } from "react";
 import {
+	type AgentAttachmentCompatibilityProfile,
+	attachmentCompatibilityRejectionMessage,
+	checkAttachmentModelCompatibility,
 	classificationRejectionMessage,
 	classifyAttachment,
 } from "../../lib/agent-attachments";
@@ -142,6 +145,7 @@ export interface ComposerProps {
 
 	pendingAttachments?: readonly ComposerPendingAttachment[];
 	pendingContexts?: readonly ComposerPendingContext[];
+	attachmentCompatibility?: AgentAttachmentCompatibilityProfile | null;
 	onAddFiles?: (files: File[]) => void;
 	onRemoveAttachment?: (id: string) => void;
 	onRemoveContext?: (id: string) => void;
@@ -249,6 +253,23 @@ function clampAudioLevel(level: number | null | undefined): number {
 	return Math.max(0, Math.min(1, level));
 }
 
+function pendingAttachmentCompatibilityMessage(
+	attachments: readonly ComposerPendingAttachment[] | null | undefined,
+	compatibility: AgentAttachmentCompatibilityProfile | null | undefined,
+): string | null {
+	for (const attachment of attachments ?? []) {
+		if (attachment.status === "error") continue;
+		const result = checkAttachmentModelCompatibility(
+			{ kind: attachment.kind, mediaType: attachment.mediaType },
+			compatibility,
+		);
+		if (!result.supported) {
+			return `${result.message} Choose a compatible model or remove "${attachment.originalName}".`;
+		}
+	}
+	return null;
+}
+
 export function Composer({
 	draftPrompt,
 	onDraftPromptChange,
@@ -284,6 +305,7 @@ export function Composer({
 	autoCompactDisabled,
 	pendingAttachments,
 	pendingContexts,
+	attachmentCompatibility,
 	onAddFiles,
 	onRemoveAttachment,
 	onRemoveContext,
@@ -331,7 +353,17 @@ export function Composer({
 	const hasText = draftPrompt.trim().length > 0;
 	const hasPendingAttachments = (pendingAttachments?.length ?? 0) > 0;
 	const hasPendingContexts = (pendingContexts?.length ?? 0) > 0;
-	const sendDisabled = isSendDisabled || (!hasText && !hasPendingAttachments);
+	const pendingAttachmentCompatibilityError = useMemo(
+		() => pendingAttachmentCompatibilityMessage(
+			pendingAttachments,
+			attachmentCompatibility,
+		),
+		[pendingAttachments, attachmentCompatibility],
+	);
+	const sendDisabled =
+		isSendDisabled ||
+		Boolean(pendingAttachmentCompatibilityError) ||
+		(!hasText && !hasPendingAttachments);
 
 	// Compact agent panes adopt the sidebar's flush, dense chrome.
 	const dense = inSidebar || density === "compact";
@@ -369,6 +401,10 @@ export function Composer({
 		return () => window.removeEventListener("keydown", handleDictationShortcut);
 	}, [dictation, dictationVisible, resolvedDictationShortcut]);
 
+	useEffect(() => {
+		setClassificationError(null);
+	}, [selectedModelId]);
+
 	const handleTextareaChange = useCallback(
 		(value: string) => {
 			if (dictation.updateDraftPrompt) {
@@ -391,6 +427,7 @@ export function Composer({
 		const hasContent =
 			nextDraft.trim().length > 0 || hasPendingAttachments;
 		if (isSendDisabled || !hasContent) return;
+		if (pendingAttachmentCompatibilityError) return;
 		onSubmit(nextDraft);
 	}, [
 		draftPrompt,
@@ -398,6 +435,7 @@ export function Composer({
 		internalDictation,
 		isSendDisabled,
 		onSubmit,
+		pendingAttachmentCompatibilityError,
 		usingInternalDictation,
 	]);
 
@@ -443,12 +481,21 @@ export function Composer({
 					rejections.push(classificationRejectionMessage(file, classification));
 					continue;
 				}
+				const compatibilityMessage = attachmentCompatibilityRejectionMessage(
+					file,
+					classification,
+					attachmentCompatibility,
+				);
+				if (compatibilityMessage) {
+					rejections.push(compatibilityMessage);
+					continue;
+				}
 				accepted.push(file);
 			}
 			setClassificationError(rejections.length > 0 ? rejections.join(" ") : null);
 			if (accepted.length > 0) onAddFiles(accepted);
 		},
-		[onAddFiles],
+		[attachmentCompatibility, onAddFiles],
 	);
 
 	const hasThinkingOptions = Boolean(thinkingOptions && thinkingOptions.length > 0);
@@ -790,12 +837,12 @@ export function Composer({
 					{dictationError}
 				</p>
 			) : null}
-			{classificationError ? (
+			{classificationError || pendingAttachmentCompatibilityError ? (
 				<p
 					className="border-t border-border/40 px-2.5 py-1.5 text-[11px] leading-relaxed text-destructive"
 					role="alert"
 				>
-					{classificationError}
+					{classificationError ?? pendingAttachmentCompatibilityError}
 				</p>
 			) : null}
 			{supportsAttachments ? (

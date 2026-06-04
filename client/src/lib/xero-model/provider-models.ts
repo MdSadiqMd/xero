@@ -199,6 +199,7 @@ export const providerCapabilityCatalogSchema = z
   .strict()
 
 export const providerPreflightStatusSchema = z.enum(['passed', 'warning', 'failed', 'skipped'])
+export const PROVIDER_PREFLIGHT_CONTRACT_VERSION = 3
 export const providerPreflightSourceSchema = z.enum([
   'live_probe',
   'live_catalog',
@@ -250,7 +251,7 @@ export const providerPreflightCheckSchema = z
 
 export const providerPreflightSnapshotSchema = z
   .object({
-    contractVersion: z.literal(1),
+    contractVersion: z.literal(PROVIDER_PREFLIGHT_CONTRACT_VERSION),
     profileId: z.string().trim().min(1),
     providerId: z.string().trim().min(1),
     modelId: z.string().trim().min(1),

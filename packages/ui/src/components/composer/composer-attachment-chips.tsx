@@ -212,7 +212,6 @@ function ComposerAttachmentChip({
 							)}
 						>
 							<AttachmentThumbnail
-								attachment={attachment}
 								isError={isError}
 								isImage={isImage}
 								isStaging={isStaging}
@@ -229,7 +228,6 @@ function ComposerAttachmentChip({
 				/>
 			) : (
 				<AttachmentThumbnail
-					attachment={attachment}
 					isError={isError}
 					isImage={isImage}
 					isStaging={isStaging}
@@ -264,7 +262,6 @@ function ComposerAttachmentChip({
 }
 
 interface AttachmentThumbnailProps {
-	attachment: ComposerPendingAttachment;
 	isError: boolean;
 	isImage: boolean;
 	isStaging: boolean;
@@ -272,7 +269,6 @@ interface AttachmentThumbnailProps {
 }
 
 function AttachmentThumbnail({
-	attachment,
 	isError,
 	isImage,
 	isStaging,

@@ -42,7 +42,7 @@ use crate::{
         DEEPSEEK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID,
         OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
         OPENAI_CODEX_SUPPORTED_MODEL_IDS, OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID,
-        XAI_DEFAULT_MODEL_ID, XAI_PROVIDER_ID,
+        XAI_DEFAULT_MODEL_ID, XAI_PROVIDER_ID, XAI_SUPPORTED_TEXT_MODEL_IDS,
     },
     state::DesktopState,
 };
@@ -709,11 +709,10 @@ fn openai_codex_projection() -> Vec<ProviderModelRecord> {
 }
 
 fn xai_projection() -> Vec<ProviderModelRecord> {
-    vec![xai_model_record(
-        XAI_DEFAULT_MODEL_ID.into(),
-        Vec::new(),
-        "unknown".into(),
-    )]
+    XAI_SUPPORTED_TEXT_MODEL_IDS
+        .iter()
+        .map(|model_id| xai_model_record((*model_id).into(), Vec::new(), "unknown".into()))
+        .collect()
 }
 
 fn cursor_projection() -> Vec<ProviderModelRecord> {
@@ -951,6 +950,8 @@ fn xai_model_record(
     input_modalities: Vec<String>,
     input_modalities_source: String,
 ) -> ProviderModelRecord {
+    let (input_modalities, input_modalities_source) =
+        xai_model_input_modalities(&model_id, input_modalities, input_modalities_source);
     provider_model_record(
         XAI_PROVIDER_ID,
         model_id.clone(),
@@ -961,6 +962,34 @@ fn xai_model_record(
         xai_context_window_tokens(&model_id),
         None,
     )
+}
+
+fn xai_model_input_modalities(
+    model_id: &str,
+    input_modalities: Vec<String>,
+    input_modalities_source: String,
+) -> (Vec<String>, String) {
+    let mut normalized = normalize_input_modalities(input_modalities);
+    let mut source = normalize_modality_source(input_modalities_source);
+    if !is_supported_xai_text_model_id(model_id) {
+        return (normalized, source);
+    }
+
+    let original_len = normalized.len();
+    if !normalized.iter().any(|modality| modality == "text") {
+        normalized.push("text".into());
+    }
+    if !normalized.iter().any(|modality| modality == "image") {
+        normalized.push("image".into());
+    }
+    normalized.sort();
+    normalized.dedup();
+
+    if normalized.len() != original_len && source == "unknown" {
+        source = "xai_text_runtime_default".into();
+    }
+
+    (normalized, source)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1092,11 +1121,13 @@ fn xai_cached_models(models: &[ProviderModelRecord]) -> Vec<ProviderModelRecord>
 }
 
 fn finalize_xai_models(mut normalized: Vec<ProviderModelRecord>) -> Vec<ProviderModelRecord> {
-    if !normalized
-        .iter()
-        .any(|model| model.model_id == XAI_DEFAULT_MODEL_ID)
-    {
-        normalized.extend(xai_projection());
+    for projection in xai_projection() {
+        if !normalized
+            .iter()
+            .any(|model| model.model_id == projection.model_id)
+        {
+            normalized.push(projection);
+        }
     }
     normalized.sort_by(|left, right| {
         left.display_name
@@ -2307,9 +2338,15 @@ mod tests {
             .iter()
             .find(|model| model.model_id == XAI_DEFAULT_MODEL_ID)
             .expect("grok-4.3 model choice");
+        let latest = models
+            .iter()
+            .find(|model| model.model_id == "grok-4.3-latest")
+            .expect("grok-4.3-latest model choice");
 
         assert_eq!(grok.display_name, "Grok 4.3");
         assert_eq!(grok.context_window_tokens, Some(1_000_000));
+        assert_eq!(grok.input_modalities, vec!["image", "text"]);
+        assert_eq!(latest.input_modalities, vec!["image", "text"]);
         assert_eq!(
             grok.thinking.effort_options,
             vec![
@@ -2323,6 +2360,34 @@ mod tests {
             grok.thinking.default_effort,
             Some(ProviderModelThinkingEffort::Low)
         );
+    }
+
+    #[test]
+    fn xai_cached_models_upgrade_legacy_empty_modalities_for_grok() {
+        let models = xai_cached_models(&[ProviderModelRecord {
+            model_id: XAI_DEFAULT_MODEL_ID.into(),
+            display_name: "Grok 4.3".into(),
+            thinking: unsupported_thinking_capability(),
+            input_modalities: Vec::new(),
+            input_modalities_source: "unknown".into(),
+            context_window_tokens: None,
+            max_output_tokens: None,
+            context_limit_source: None,
+            context_limit_confidence: None,
+            context_limit_fetched_at: None,
+        }]);
+        let grok = models
+            .iter()
+            .find(|model| model.model_id == XAI_DEFAULT_MODEL_ID)
+            .expect("cached grok model");
+        let latest = models
+            .iter()
+            .find(|model| model.model_id == "grok-4.3-latest")
+            .expect("projected latest grok model");
+
+        assert_eq!(grok.input_modalities, vec!["image", "text"]);
+        assert_eq!(grok.input_modalities_source, "xai_text_runtime_default");
+        assert_eq!(latest.input_modalities, vec!["image", "text"]);
     }
 
     #[test]
@@ -2435,6 +2500,8 @@ mod tests {
             .map(|model| model.model_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(model_ids, vec!["grok-4.3", "grok-4.3-latest"]);
+        assert_eq!(models[0].input_modalities, vec!["image", "text"]);
+        assert_eq!(models[1].input_modalities, vec!["image", "text"]);
         assert_eq!(
             models[1].thinking.effort_options,
             vec![

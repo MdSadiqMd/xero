@@ -14,7 +14,10 @@ import type {
   AgentPaneCloseState,
   AgentRuntimeProps,
 } from '@/components/xero/agent-runtime'
-import type { BrowserLaunchTarget } from '@/components/xero/browser-launch-targets'
+import {
+  browserLaunchTargetMatchesUrl,
+  type BrowserLaunchTarget,
+} from '@/components/xero/browser-launch-targets'
 import { SetupEmptyState } from '@/components/xero/agent-runtime/setup-empty-state'
 import { AgentWorkspace } from '@/components/xero/agent-workspace'
 import { AgentSessionsSidebar } from '@/components/xero/agent-sessions-sidebar'
@@ -170,6 +173,7 @@ import { cn } from '@/lib/utils'
 import { FloatingRightSidebarFrame } from '@/components/xero/floating-right-sidebar-frame'
 import type { BrowserAgentContextRequest } from '@/components/xero/browser-tool-injection'
 import { DesktopControlBanner } from '@/components/xero/desktop-control-banner'
+import { checkAttachmentModelCompatibility } from '@/lib/agent-attachments'
 
 export interface XeroAppProps {
   adapter?: XeroDesktopAdapter
@@ -2152,6 +2156,12 @@ export function XeroApp({ adapter }: XeroAppProps) {
       next.unshift(target)
       return next.slice(0, 8)
     })
+  }, [])
+
+  const handleBrowserLaunchTargetUnavailable = useCallback((url: string) => {
+    setBrowserLaunchTargets((current) =>
+      current.filter((target) => !browserLaunchTargetMatchesUrl(target, url)),
+    )
   }, [])
 
   const handlePendingBrowserOpenUrlConsumed = useCallback((id: string) => {
@@ -4334,10 +4344,21 @@ export function XeroApp({ adapter }: XeroAppProps) {
       updateRuntimeRunControls,
     ],
   )
+  const browserPenToolDisabledReason = useMemo(() => {
+    const compatibility = checkAttachmentModelCompatibility(
+      { kind: 'image', mediaType: 'image/png' },
+      agentView?.selectedModelOption ?? null,
+    )
+    if (compatibility.supported) return null
+    return `${compatibility.message} Choose a model with image input to use the pen tool.`
+  }, [agentView?.selectedModelOption])
   const handleAddBrowserContextToAgentComposer = useCallback(
     async (request: BrowserAgentContextRequest) => {
       if (!activeProject) {
         throw new Error('Select a project before adding browser context to an agent.')
+      }
+      if (request.image && browserPenToolDisabledReason) {
+        throw new Error(browserPenToolDisabledReason)
       }
 
       const target: BrowserComposerInsertTarget =
@@ -4370,6 +4391,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     [
       activeProject,
       activeView,
+      browserPenToolDisabledReason,
     ],
   )
   const handleBrowserComposerInsertConsumed = useCallback((id: string) => {
@@ -5228,7 +5250,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
             >
               <LazyBrowserSidebar
                 open={browserOpen}
+                penToolDisabledReason={browserPenToolDisabledReason}
                 projectBrowserTargets={browserLaunchTargets}
+                onProjectBrowserTargetUnavailable={handleBrowserLaunchTargetUnavailable}
                 pendingOpenUrl={pendingBrowserOpenUrl}
                 onPendingOpenUrlConsumed={handlePendingBrowserOpenUrlConsumed}
                 onAddAgentContext={handleAddBrowserContextToAgentComposer}

@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 use xero_agent_core::{
     provider_attachment_capability_satisfies_required_features, provider_preflight_blockers,
     ProviderPreflightRequiredFeatures, ProviderPreflightSnapshot,
+    PROVIDER_PREFLIGHT_CONTRACT_VERSION,
 };
 
 use crate::{
@@ -1179,12 +1180,12 @@ pub(crate) fn ensure_owned_runtime_provider_turn_capabilities<R: Runtime>(
         };
         match reusable_snapshot {
             Some(snapshot) => snapshot,
-            None => crate::provider_preflight::run_selected_provider_preflight(
+            None => crate::provider_preflight::provider_catalog_preflight_snapshot_for_run(
                 app,
                 state,
                 profile_id,
-                Some(model_id),
-                false,
+                provider_id,
+                model_id,
                 required_features.clone(),
             )?,
         }
@@ -1238,6 +1239,9 @@ fn reusable_provider_preflight_snapshot(
     required_features: &ProviderPreflightRequiredFeatures,
     expected_cache_binding: Option<&xero_agent_core::ProviderPreflightCacheBinding>,
 ) -> Option<ProviderPreflightSnapshot> {
+    if snapshot.contract_version != PROVIDER_PREFLIGHT_CONTRACT_VERSION {
+        return None;
+    }
     if snapshot.stale || snapshot.required_features != *required_features {
         return None;
     }
@@ -2310,6 +2314,19 @@ mod tests {
 
         assert_eq!(reused.source, ProviderPreflightSource::CachedProbe);
         assert!(provider_preflight_blockers(&reused).is_empty());
+    }
+
+    #[test]
+    fn cached_preflight_reuse_requires_current_contract_version() {
+        let mut snapshot = preflight_snapshot(ProviderPreflightSource::LiveProbe);
+        snapshot.contract_version = 0;
+
+        assert!(reusable_provider_preflight_snapshot(
+            snapshot,
+            &ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+            None,
+        )
+        .is_none());
     }
 
     #[test]

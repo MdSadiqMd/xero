@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  PROVIDER_PREFLIGHT_CONTRACT_VERSION,
   createXeroDoctorReport,
   type ImportMcpServersResponseDto,
   type ImportRepositoryResponseDto,
@@ -533,7 +534,7 @@ function makeProviderPreflightSnapshot(
   const status = profile.readiness.ready || profile.providerId === 'openai_codex' ? 'passed' : 'warning'
 
   return {
-    contractVersion: 1,
+    contractVersion: PROVIDER_PREFLIGHT_CONTRACT_VERSION,
     profileId: profile.profileId,
     providerId: profile.providerId,
     modelId,
@@ -3087,6 +3088,68 @@ describe('useXeroDesktopState', () => {
     expect(screen.getByTestId('selected-model-option-profile-id')).toHaveTextContent('openai_codex-default')
     expect(screen.getByTestId('selected-model-selection-key')).toHaveTextContent('openai_codex:openai_codex')
     expect(screen.getByTestId('selected-model-thinking-options')).toHaveTextContent('low,medium,high')
+  })
+
+  it('warms image provider preflight when the configured catalog model accepts images', async () => {
+    const setup = createMockAdapter({
+      runtimeSettings: makeRuntimeSettings({
+        providerId: 'openrouter',
+        modelId: 'openai/gpt-4.1-mini',
+        openrouterApiKeyConfigured: true,
+      }),
+      providerCredentials: [
+        makeProviderCredential({
+          providerId: 'openrouter',
+          kind: 'api_key',
+          hasApiKey: true,
+          hasOauthAccessToken: false,
+          oauthAccountId: null,
+          oauthSessionId: null,
+          readinessProof: 'stored_secret',
+        }),
+      ],
+      providerModelCatalogs: {
+        'openrouter-default': makeProviderModelCatalog('openrouter-default', {
+          providerId: 'openrouter',
+          configuredModelId: 'openai/gpt-4.1-mini',
+          models: [
+            {
+              modelId: 'openai/gpt-4.1-mini',
+              displayName: 'OpenAI GPT-4.1 Mini',
+              thinking: {
+                supported: true,
+                effortOptions: ['low'],
+                defaultEffort: 'low',
+              },
+              inputModalities: ['image', 'text'],
+              inputModalitiesSource: 'live_catalog',
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(setup.preflightProviderProfile).toHaveBeenCalledWith('openrouter-default', {
+        forceRefresh: false,
+        modelId: 'openai/gpt-4.1-mini',
+      }),
+    )
+    await waitFor(() =>
+      expect(setup.preflightProviderProfile).toHaveBeenCalledWith('openrouter-default', {
+        forceRefresh: false,
+        modelId: 'openai/gpt-4.1-mini',
+        requiredFeatures: {
+          streaming: true,
+          toolCalls: true,
+          reasoningControls: false,
+          attachments: true,
+          attachmentInputModalities: ['image'],
+        },
+      }),
+    )
   })
 
   it('projects plugin registry mutations through the skill registry state', async () => {

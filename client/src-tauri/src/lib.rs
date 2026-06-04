@@ -48,6 +48,17 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::solana::toolchain::configure_tauri_roots(app.handle());
             window_state::configure_main_window(app.handle().clone());
 
+            {
+                use tauri::Manager;
+                let app_handle = app.handle().clone();
+                let app_handle_for_state = app_handle.clone();
+                let browser_state = app_handle_for_state.state::<commands::BrowserState>();
+                commands::browser::start_browser_dev_server_reconciler(
+                    app_handle,
+                    browser_state.inner(),
+                );
+            }
+
             // Solana workbench state is rooted under Tauri's app-data dir.
             // This app is new, so we deliberately do not migrate any older
             // dirs::data_dir()/xero-solana-* locations.
@@ -502,6 +513,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::browser::browser_eval,
             commands::browser::browser_eval_fire_and_forget,
             commands::browser::browser_current_url,
+            commands::browser::browser_dev_server_running,
             commands::browser::browser_screenshot,
             commands::browser::browser_navigate,
             commands::browser::browser_back,

@@ -29,9 +29,9 @@ import {
   BROWSER_TOOL_CONTEXT_EVENT,
   BROWSER_TOOL_STATE_EVENT,
   BROWSER_TOOL_DEACTIVATE_SCRIPT,
+  BROWSER_TOOL_FINISH_CAPTURE_SCRIPT,
   BROWSER_TOOL_PREPARE_CAPTURE_SCRIPT,
   BROWSER_TOOL_RESTORE_CAPTURE_SCRIPT,
-  BROWSER_TOOL_SHOW_LOADING_SCRIPT,
   browserScreenshotBytesFromBase64,
   buildBrowserToolActivationScript,
   buildBrowserToolAgentPrompt,
@@ -53,6 +53,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   normalizeLoopbackBrowserUrl,
   type BrowserLaunchTarget,
@@ -76,6 +77,7 @@ const OVERLAY_OCCLUSION_PADDING = 8
 const BROWSER_CAPTURE_FRAME_OCCLUSION_PADDING = 0
 const BROWSER_CAPTURE_OVERLAY_EXIT_MS = 180
 const BROWSER_CAPTURE_OVERLAY_SELECTOR = '[data-xero-browser-capture-overlay="true"]'
+const PROJECT_BROWSER_TARGET_POLL_MS = 2_000
 const OVERLAY_OCCLUSION_SELECTOR = [
   BROWSER_CAPTURE_OVERLAY_SELECTOR,
   '[data-slot="alert-dialog-content"]',
@@ -97,7 +99,9 @@ const OVERLAY_OCCLUSION_SELECTOR = [
 interface BrowserSidebarProps {
   open: boolean
   onAddAgentContext?: (request: BrowserAgentContextRequest) => Promise<void>
+  penToolDisabledReason?: string | null
   projectBrowserTargets?: BrowserLaunchTarget[]
+  onProjectBrowserTargetUnavailable?: (url: string) => void
   pendingOpenUrl?: { id: string; url: string } | null
   onPendingOpenUrlConsumed?: (id: string) => void
 }
@@ -130,6 +134,12 @@ interface BrowserLoadStatePayload {
 
 interface BrowserTabUpdatedPayload {
   tabs: BrowserTabMeta[]
+}
+
+interface BrowserDevServerUnavailablePayload {
+  tabId?: string
+  tab_id?: string
+  url?: string
 }
 
 interface BrowserResizeDragPayload extends ViewportRect {
@@ -459,6 +469,21 @@ function waitForBrowserToolPaint(): Promise<void> {
   })
 }
 
+function scheduleProjectBrowserTargetPoll(callback: () => void): number {
+  const timeout = window.setTimeout(callback, PROJECT_BROWSER_TARGET_POLL_MS)
+  ;(timeout as unknown as { unref?: () => void }).unref?.()
+  return timeout
+}
+
+function shouldRepeatProjectBrowserTargetPoll(): boolean {
+  const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env
+  if (import.meta.env.MODE === "test" || import.meta.env.VITEST || processEnv?.VITEST) {
+    return false
+  }
+  return !(typeof window !== "undefined" && /jsdom/i.test(window.navigator.userAgent))
+}
+
 function readBrowserViewportRectForWidth(
   node: HTMLElement,
   width: number,
@@ -478,7 +503,9 @@ function readBrowserViewportRectForWidth(
 export function BrowserSidebar({
   open,
   onAddAgentContext,
+  penToolDisabledReason = null,
   projectBrowserTargets = [],
+  onProjectBrowserTargetUnavailable,
   pendingOpenUrl = null,
   onPendingOpenUrlConsumed,
 }: BrowserSidebarProps) {
@@ -497,6 +524,7 @@ export function BrowserSidebar({
   const [captureOverlayVisible, setCaptureOverlayVisible] = useState(false)
   const [captureOverlayExiting, setCaptureOverlayExiting] = useState(false)
   const [toolSubmitError, setToolSubmitError] = useState<string | null>(null)
+  const [projectBrowserTargetLiveness, setProjectBrowserTargetLiveness] = useState<Record<string, boolean>>({})
   const motionOpen = useSidebarOpenMotion(open)
   const [openGeometrySettled, setOpenGeometrySettled] = useState(false)
   const targetWidth = motionOpen ? width : 0
@@ -526,8 +554,10 @@ export function BrowserSidebar({
   const activeTabIdRef = useRef(activeTabId)
   const toolModeRef = useRef(toolMode)
   const injectedToolModeRef = useRef<ToolMode>(null)
+  const finishCaptureOnOverlayExitRef = useRef(false)
   const toolActivationRequestRef = useRef(0)
   const onAddAgentContextRef = useRef(onAddAgentContext)
+  const onProjectBrowserTargetUnavailableRef = useRef(onProjectBrowserTargetUnavailable)
   const consumedPendingOpenUrlIdsRef = useRef<Set<string>>(new Set())
   const occlusionFrameRef = useRef<number | null>(null)
   const lastOcclusionKeyRef = useRef("")
@@ -536,6 +566,7 @@ export function BrowserSidebar({
   activeTabIdRef.current = activeTabId
   toolModeRef.current = toolMode
   onAddAgentContextRef.current = onAddAgentContext
+  onProjectBrowserTargetUnavailableRef.current = onProjectBrowserTargetUnavailable
 
   useEffect(() => {
     if (!open || !motionOpen) {
@@ -715,7 +746,21 @@ export function BrowserSidebar({
 
   const isDevTab = isDevServerUrl(activeTab?.url ?? null)
   const pageLabel = activeTab?.title ?? activeTab?.url ?? null
+  const liveProjectBrowserTargets = useMemo(
+    () => projectBrowserTargets.filter((target) => projectBrowserTargetLiveness[target.id] === true),
+    [projectBrowserTargetLiveness, projectBrowserTargets],
+  )
+  const isCheckingProjectBrowserTargets =
+    projectBrowserTargets.length > 0 &&
+    projectBrowserTargets.some((target) => !(target.id in projectBrowserTargetLiveness))
   const resizeLockedByPenDrawing = toolMode === "pen" || penHasDrawing
+  const isPenToolDisabled = toolSubmitting || Boolean(penToolDisabledReason)
+  const penToolTooltip = penToolDisabledReason ?? "Sketch on page"
+
+  useEffect(() => {
+    if (!penToolDisabledReason || toolMode !== "pen") return
+    setToolMode(null)
+  }, [penToolDisabledReason, toolMode])
 
   const deactivateInjectedTool = useCallback(async () => {
     if (!isTauri()) return
@@ -744,13 +789,33 @@ export function BrowserSidebar({
     })
   }, [])
 
-  const showInjectedToolLoading = useCallback(async () => {
+  const finishInjectedToolCapture = useCallback(async () => {
     if (!isTauri()) return
-    await invoke("browser_eval_fire_and_forget", {
-      js: BROWSER_TOOL_SHOW_LOADING_SCRIPT,
-    }).catch(() => {
-      /* best-effort visual polish */
+    try {
+      await invoke("browser_eval_fire_and_forget", {
+        js: BROWSER_TOOL_FINISH_CAPTURE_SCRIPT(BROWSER_CAPTURE_OVERLAY_EXIT_MS),
+      })
+      injectedToolModeRef.current = null
+      setPenHasDrawing(false)
+    } catch {
+      await deactivateInjectedTool()
+    }
+  }, [deactivateInjectedTool])
+
+  const checkProjectBrowserTargetRunning = useCallback(async (target: BrowserLaunchTarget) => {
+    if (!isTauri()) return false
+    const running = await invoke<boolean>("browser_dev_server_running", {
+      url: target.url,
+    }).catch(() => false)
+    return running === true
+  }, [])
+
+  const markProjectBrowserTargetUnavailable = useCallback((target: BrowserLaunchTarget) => {
+    setProjectBrowserTargetLiveness((current) => {
+      if (current[target.id] === false) return current
+      return { ...current, [target.id]: false }
     })
+    onProjectBrowserTargetUnavailableRef.current?.(target.url)
   }, [])
 
   const addBrowserToolContextToAgent = useCallback(
@@ -765,6 +830,11 @@ export function BrowserSidebar({
 
       const context = normalized.context
       setToolSubmitError(null)
+      if (context.kind === "pen" && penToolDisabledReason) {
+        setToolSubmitError(penToolDisabledReason)
+        await restoreInjectedToolCapture()
+        return
+      }
       if (context.kind === "inspect") {
         try {
           const add = onAddAgentContextRef.current
@@ -791,7 +861,6 @@ export function BrowserSidebar({
         await prepareInjectedToolCapture()
         await waitForBrowserToolPaint()
         const screenshotBase64 = await invoke<string>("browser_screenshot").catch(() => null)
-        await showInjectedToolLoading()
         let image: BrowserAgentContextRequest["image"] | undefined
         if (screenshotBase64) {
           try {
@@ -813,9 +882,12 @@ export function BrowserSidebar({
             ...(image ? { image } : {}),
           })
         }
-        await deactivateInjectedTool()
+        finishCaptureOnOverlayExitRef.current = true
+        injectedToolModeRef.current = null
+        setPenHasDrawing(false)
         setToolMode(null)
       } catch (error) {
+        finishCaptureOnOverlayExitRef.current = false
         setToolSubmitError(
           getToolErrorMessage(error, "Xero could not add this browser context to the agent composer."),
         )
@@ -824,7 +896,12 @@ export function BrowserSidebar({
         setToolSubmitting(false)
       }
     },
-    [deactivateInjectedTool, prepareInjectedToolCapture, restoreInjectedToolCapture, showInjectedToolLoading],
+    [
+      deactivateInjectedTool,
+      penToolDisabledReason,
+      prepareInjectedToolCapture,
+      restoreInjectedToolCapture,
+    ],
   )
 
   useEffect(() => {
@@ -836,6 +913,8 @@ export function BrowserSidebar({
 
     if (!captureOverlayVisible) return
 
+    finishCaptureOnOverlayExitRef.current =
+      finishCaptureOnOverlayExitRef.current && isTauri()
     setCaptureOverlayExiting(true)
     const timeout = window.setTimeout(() => {
       setCaptureOverlayVisible(false)
@@ -846,9 +925,55 @@ export function BrowserSidebar({
   }, [captureOverlayVisible, toolSubmitting])
 
   useEffect(() => {
+    if (!captureOverlayExiting || !finishCaptureOnOverlayExitRef.current) return
+    finishCaptureOnOverlayExitRef.current = false
+    void finishInjectedToolCapture()
+  }, [captureOverlayExiting, finishInjectedToolCapture])
+
+  useEffect(() => {
     if (!open || !isTauri()) return
     syncBrowserOverlayOcclusions({ force: true })
   }, [captureOverlayExiting, captureOverlayVisible, open, syncBrowserOverlayOcclusions])
+
+  useEffect(() => {
+    if (!open || projectBrowserTargets.length === 0 || !isTauri()) {
+      setProjectBrowserTargetLiveness({})
+      return
+    }
+
+    let cancelled = false
+    let timeout: number | null = null
+
+    const checkTargets = async () => {
+      const snapshot = projectBrowserTargets
+      const results = await Promise.all(
+        snapshot.map(async (target) => ({
+          running: await checkProjectBrowserTargetRunning(target),
+          target,
+        })),
+      )
+      if (cancelled) return
+
+      const next: Record<string, boolean> = {}
+      for (const { running, target } of results) {
+        next[target.id] = running
+        if (!running) {
+          onProjectBrowserTargetUnavailableRef.current?.(target.url)
+        }
+      }
+      setProjectBrowserTargetLiveness(next)
+      if (shouldRepeatProjectBrowserTargetPoll()) {
+        timeout = scheduleProjectBrowserTargetPoll(checkTargets)
+      }
+    }
+
+    void checkTargets()
+
+    return () => {
+      cancelled = true
+      if (timeout !== null) window.clearTimeout(timeout)
+    }
+  }, [checkProjectBrowserTargetRunning, open, projectBrowserTargets])
 
   // Tools are gated to dev-server tabs. Drop the active tool whenever the
   // tab/URL changes to one that isn't a dev server, or when the sidebar closes.
@@ -1102,6 +1227,18 @@ export function BrowserSidebar({
       listen<BrowserTabUpdatedPayload>("browser:tab_updated", (event) => {
         recordIpcPayloadSample({ boundary: "event", name: "browser:tab_updated", payload: event.payload })
         coalescer.enqueueTabUpdated(event.payload)
+      }),
+    )
+
+    trackUnlisten(
+      listen<BrowserDevServerUnavailablePayload>("browser:dev_server_unavailable", (event) => {
+        recordIpcPayloadSample({
+          boundary: "event",
+          name: "browser:dev_server_unavailable",
+          payload: event.payload,
+        })
+        const url = typeof event.payload?.url === "string" ? event.payload.url : null
+        if (url) onProjectBrowserTargetUnavailableRef.current?.(url)
       }),
     )
 
@@ -1440,11 +1577,20 @@ export function BrowserSidebar({
   }, [openUrl])
 
   const handleOpenProjectBrowserTarget = useCallback(
-    (target: BrowserLaunchTarget) => {
+    async (target: BrowserLaunchTarget) => {
+      const running = await checkProjectBrowserTargetRunning(target)
+      if (!running) {
+        markProjectBrowserTargetUnavailable(target)
+        return
+      }
+      setProjectBrowserTargetLiveness((current) => {
+        if (current[target.id] === true) return current
+        return { ...current, [target.id]: true }
+      })
       setAddress(target.url)
       openUrl(target.url)
     },
-    [openUrl],
+    [checkProjectBrowserTargetRunning, markProjectBrowserTargetUnavailable, openUrl],
   )
 
   useEffect(() => {
@@ -1608,7 +1754,7 @@ export function BrowserSidebar({
             <RotateCw className="h-3.5 w-3.5" />
           )}
         </button>
-        {projectBrowserTargets.length > 1 ? (
+        {liveProjectBrowserTargets.length > 1 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1621,11 +1767,13 @@ export function BrowserSidebar({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-64">
-              {projectBrowserTargets.map((target) => (
+              {liveProjectBrowserTargets.map((target) => (
                 <DropdownMenuItem
                   key={target.id}
                   className="flex min-w-0 flex-col items-start gap-0.5"
-                  onSelect={() => handleOpenProjectBrowserTarget(target)}
+                  onSelect={() => {
+                    void handleOpenProjectBrowserTarget(target)
+                  }}
                 >
                   <span className="max-w-full truncate text-[12px]">{target.label}</span>
                   <span className="max-w-full truncate font-mono text-[10.5px] text-muted-foreground">
@@ -1639,14 +1787,16 @@ export function BrowserSidebar({
           <button
             aria-label="Open project app in browser"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-            disabled={projectBrowserTargets.length === 0}
+            disabled={liveProjectBrowserTargets.length === 0}
             onClick={() => {
-              const [target] = projectBrowserTargets
-              if (target) handleOpenProjectBrowserTarget(target)
+              const [target] = liveProjectBrowserTargets
+              if (target) void handleOpenProjectBrowserTarget(target)
             }}
             title={
-              projectBrowserTargets.length === 0
-                ? "No browser-supported project app detected"
+              liveProjectBrowserTargets.length === 0
+                ? isCheckingProjectBrowserTargets
+                  ? "Checking project app availability"
+                  : "No running browser-supported project app detected"
                 : "Open project app"
             }
             type="button"
@@ -1676,25 +1826,36 @@ export function BrowserSidebar({
             className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/40 px-0.5"
             data-testid="browser-dev-tools"
           >
-            <button
-              aria-label="Sketch on page"
-              aria-pressed={toolMode === "pen"}
-              className={cn(
-                "flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground",
-                toolMode === "pen"
-                  ? "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary"
-                  : null,
-              )}
-              disabled={toolSubmitting}
-              onClick={() => {
-                setToolSubmitError(null)
-                setToolMode((current) => (current === "pen" ? null : "pen"))
-              }}
-              title="Sketch on page"
-              type="button"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="inline-flex"
+                  tabIndex={penToolDisabledReason ? 0 : -1}
+                >
+                  <button
+                    aria-label="Sketch on page"
+                    aria-pressed={toolMode === "pen"}
+                    className={cn(
+                      "flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground",
+                      toolMode === "pen"
+                        ? "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary"
+                        : null,
+                    )}
+                    disabled={isPenToolDisabled}
+                    onClick={() => {
+                      if (penToolDisabledReason) return
+                      setToolSubmitError(null)
+                      setToolMode((current) => (current === "pen" ? null : "pen"))
+                    }}
+                    title={penToolTooltip}
+                    type="button"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{penToolTooltip}</TooltipContent>
+            </Tooltip>
             <button
               aria-label="Inspect element"
               aria-pressed={toolMode === "inspect"}

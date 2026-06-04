@@ -414,6 +414,8 @@ fn live_provider_preflight(
             thinking_supported: false,
             thinking_efforts: Vec::new(),
             thinking_default_effort: None,
+            input_modalities: Vec::new(),
+            input_modalities_source: Some("unknown".into()),
         }),
         credential_ready: Some(true),
         endpoint_reachable: Some(true),

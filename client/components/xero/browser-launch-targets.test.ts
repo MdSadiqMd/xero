@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  browserLaunchTargetMatchesUrl,
   extractBrowserSupportedDevServerUrls,
   isBrowserSupportedDevServerUrl,
   makeBrowserLaunchTarget,
@@ -34,6 +35,18 @@ describe("browser launch targets", () => {
       url: "http://127.0.0.1:5173/",
       source: "vite",
     })
+  })
+
+  it("matches unavailable project targets by normalized dev-server origin", () => {
+    const target = makeBrowserLaunchTarget({
+      label: "web",
+      url: "http://localhost:5173/",
+      source: "vite",
+    })
+
+    expect(target).not.toBeNull()
+    expect(browserLaunchTargetMatchesUrl(target!, "http://127.0.0.1:5173/dashboard")).toBe(true)
+    expect(browserLaunchTargetMatchesUrl(target!, "http://127.0.0.1:5174/")).toBe(false)
   })
 
   it("normalizes ambiguous loopback hosts to IPv4 for embedded WebViews", () => {

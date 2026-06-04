@@ -3265,6 +3265,7 @@ struct RemoteModelOption {
     model_id: String,
     display_name: String,
     thinking: ProviderModelThinkingCapability,
+    input_modalities: Vec<String>,
 }
 
 /// Returns the credential-backed models the cloud composer surfaces in its dropdown.
@@ -3361,6 +3362,7 @@ fn remote_available_models<R: Runtime>(
                 "thinkingSupported": option.thinking.supported,
                 "thinkingEffortOptions": effort_options,
                 "defaultThinkingEffort": default_effort,
+                "inputModalities": option.input_modalities,
             })
         })
         .collect())
@@ -3425,6 +3427,7 @@ fn add_remote_model_option(
                 display_name
             },
             thinking: model.thinking.clone(),
+            input_modalities: model.input_modalities.clone(),
         },
     );
 }
@@ -3457,6 +3460,7 @@ fn add_remote_model_fallback_option(
                 effort_options: Vec::new(),
                 default_effort: None,
             },
+            input_modalities: Vec::new(),
         },
     );
 }
@@ -3471,6 +3475,7 @@ struct RemoteModelOptionInput<'a> {
     model_id: &'a str,
     display_name: &'a str,
     thinking: ProviderModelThinkingCapability,
+    input_modalities: Vec<String>,
 }
 
 fn push_remote_model_option(
@@ -3491,6 +3496,7 @@ fn push_remote_model_option(
         model_id: model.model_id.to_string(),
         display_name: model.display_name.to_string(),
         thinking: model.thinking,
+        input_modalities: model.input_modalities,
     });
 }
 

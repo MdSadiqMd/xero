@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  PROVIDER_PREFLIGHT_CONTRACT_VERSION,
   CURSOR_AUTO_MODEL_ID,
   createProviderModelCatalogRequest,
   createUnavailableProviderModelCatalog,
@@ -298,7 +299,7 @@ describe('provider-models', () => {
 
   it('parses provider preflight snapshots without treating static metadata as a live probe', () => {
     const snapshot = providerPreflightSnapshotSchema.parse({
-      contractVersion: 1,
+      contractVersion: PROVIDER_PREFLIGHT_CONTRACT_VERSION,
       profileId: 'openrouter-default',
       providerId: 'openrouter',
       modelId: 'openai/o4-mini',

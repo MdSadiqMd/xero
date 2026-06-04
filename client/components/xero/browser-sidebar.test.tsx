@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 
+import { useState } from "react"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -516,6 +517,7 @@ describe("BrowserSidebar", () => {
 
   it("opens a detected project app from the browser header", async () => {
     registerInvoke("browser_tab_list", async () => [])
+    registerInvoke("browser_dev_server_running", async () => true)
     const shownUrls: string[] = []
     registerInvoke("browser_show", async (args) => {
       shownUrls.push(String((args as { url?: string })?.url ?? ""))
@@ -546,11 +548,100 @@ describe("BrowserSidebar", () => {
       />,
     )
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open project app in browser" }))
+    const projectButton = await screen.findByRole("button", { name: "Open project app in browser" })
+    await waitFor(() => expect(projectButton).toBeEnabled())
+    fireEvent.click(projectButton)
 
     await waitFor(() => {
       expect(shownUrls).toEqual(["http://127.0.0.1:5173/"])
     })
+  })
+
+  it("disables project app navigation when its dev server liveness probe fails", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    registerInvoke("browser_dev_server_running", async () => false)
+
+    function BrowserSidebarWithTargets() {
+      const [targets, setTargets] = useState([
+        {
+          id: "browser-app:http://127.0.0.1:5173/",
+          label: "web · localhost:5173",
+          url: "http://127.0.0.1:5173/",
+          source: "web",
+          detectedAt: 1,
+        },
+      ])
+
+      return (
+        <BrowserSidebar
+          open
+          projectBrowserTargets={targets}
+          onProjectBrowserTargetUnavailable={(url) => {
+            setTargets((current) =>
+              current.filter((target) => !target.url.startsWith(new URL(url).origin)),
+            )
+          }}
+        />
+      )
+    }
+
+    render(<BrowserSidebarWithTargets />)
+
+    const projectButton = await screen.findByRole("button", { name: "Open project app in browser" })
+    await waitFor(() => {
+      expect(invokeCalls.some((call) => call.command === "browser_dev_server_running")).toBe(true)
+      expect(projectButton).toBeDisabled()
+    })
+  })
+
+  it("does not open a project app that stops after the button becomes available", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    let probeCount = 0
+    registerInvoke("browser_dev_server_running", async () => {
+      probeCount += 1
+      return probeCount === 1
+    })
+    const shownUrls: string[] = []
+    registerInvoke("browser_show", async (args) => {
+      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      return undefined
+    })
+
+    function BrowserSidebarWithTargets() {
+      const [targets, setTargets] = useState([
+        {
+          id: "browser-app:http://127.0.0.1:5173/",
+          label: "web · localhost:5173",
+          url: "http://127.0.0.1:5173/",
+          source: "web",
+          detectedAt: 1,
+        },
+      ])
+
+      return (
+        <BrowserSidebar
+          open
+          projectBrowserTargets={targets}
+          onProjectBrowserTargetUnavailable={(url) => {
+            setTargets((current) =>
+              current.filter((target) => !target.url.startsWith(new URL(url).origin)),
+            )
+          }}
+        />
+      )
+    }
+
+    render(<BrowserSidebarWithTargets />)
+
+    const projectButton = await screen.findByRole("button", { name: "Open project app in browser" })
+    await waitFor(() => expect(projectButton).toBeEnabled())
+    fireEvent.click(projectButton)
+
+    await waitFor(() => {
+      expect(probeCount).toBe(2)
+      expect(projectButton).toBeDisabled()
+    })
+    expect(shownUrls).toEqual([])
   })
 
   it("opens a pending in-app browser URL request", async () => {
@@ -1561,6 +1652,37 @@ describe("BrowserSidebar", () => {
     expect(inspectButton).toHaveAttribute("aria-pressed", "true")
   })
 
+  it("disables pen mode when the selected model cannot accept image input", async () => {
+    const reason = "Text model does not support image attachments. Choose a model with image input to use the pen tool."
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Local",
+        url: "http://localhost:5173/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+
+    render(<BrowserSidebar open penToolDisabledReason={reason} />)
+    const penButton = await screen.findByLabelText("Sketch on page")
+
+    expect(penButton).toBeDisabled()
+    expect(penButton).toHaveAttribute("title", reason)
+    expect(penButton).toHaveAttribute("aria-pressed", "false")
+    fireEvent.click(penButton)
+    expect(
+      invokeCalls.some(
+        (call) =>
+          call.command === "browser_eval_fire_and_forget" &&
+          String(call.args?.js ?? "").includes('"mode":"pen"'),
+      ),
+    ).toBe(false)
+  })
+
   it("switching from pen to inspect replaces the injected browser tool", async () => {
     registerInvoke("browser_tab_list", async () => [
       {
@@ -1798,15 +1920,114 @@ describe("BrowserSidebar", () => {
     const screenshotIndex = invokeCalls.findIndex(
       (call) => call.command === "browser_screenshot",
     )
-    const deactivateIndex = invokeCalls.findIndex(
+    const finishIndex = invokeCalls.findIndex(
       (call, index) =>
         index > screenshotIndex &&
         call.command === "browser_eval_fire_and_forget" &&
-        String(call.args?.js ?? "").includes("deactivate"),
+        String(call.args?.js ?? "").includes("finishCapture"),
     )
     expect(prepareIndex).toBeGreaterThanOrEqual(0)
     expect(screenshotIndex).toBeGreaterThan(prepareIndex)
-    expect(deactivateIndex).toBeGreaterThan(screenshotIndex)
+    expect(finishIndex).toBeGreaterThan(screenshotIndex)
+  })
+
+  it("keeps the pen drawing visible until the composer insert is handed off", async () => {
+    let resolveComposerInsert: (() => void) | null = null
+    let notifyComposerInsertStarted: (() => void) | null = null
+    const composerInsertStarted = new Promise<void>((resolve) => {
+      notifyComposerInsertStarted = resolve
+    })
+    const onAddAgentContext = vi.fn(
+      async (_request: BrowserAgentContextRequest) =>
+        new Promise<void>((resolve) => {
+          resolveComposerInsert = resolve
+          notifyComposerInsertStarted?.()
+        }),
+    )
+    const finishOverlayStates: Array<string | null> = []
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Local",
+        url: "http://localhost:5173/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    registerInvoke("browser_screenshot", async () => "aGVsbG8=")
+    registerInvoke("browser_eval_fire_and_forget", (args) => {
+      if (String(args?.js ?? "").includes("window.__xeroBrowserTool.finishCapture")) {
+        finishOverlayStates.push(
+          screen
+            .queryByRole("status", { name: "Adding browser context" })
+            ?.getAttribute("data-state") ?? null,
+        )
+      }
+      return undefined
+    })
+
+    render(<BrowserSidebar open onAddAgentContext={onAddAgentContext} />)
+
+    fireEvent.click(await screen.findByLabelText("Sketch on page"))
+    const callCountBeforeSubmit = invokeCalls.length
+
+    await act(async () => {
+      emitEvent("browser:tool_context", {
+        tabId: "tab-1",
+        context: {
+          kind: "pen",
+          note: "Attach this sketch",
+          page: { url: "http://localhost:5173/", title: "Local" },
+          viewport: { width: 800, height: 600 },
+          strokeCount: 1,
+        },
+      })
+    })
+
+    await composerInsertStarted
+    const submitCallsBeforeInsertSettles = invokeCalls.slice(callCountBeforeSubmit)
+    expect(
+      submitCallsBeforeInsertSettles.some(
+        (call) =>
+          call.command === "browser_eval_fire_and_forget" &&
+          String(call.args?.js ?? "").includes("showLoading"),
+      ),
+    ).toBe(false)
+    expect(
+      submitCallsBeforeInsertSettles.some(
+        (call) =>
+          call.command === "browser_eval_fire_and_forget" &&
+          String(call.args?.js ?? "").includes("finishCapture"),
+      ),
+    ).toBe(false)
+
+    await act(async () => {
+      resolveComposerInsert?.()
+    })
+
+    await waitFor(() => {
+      const submitCalls = invokeCalls.slice(callCountBeforeSubmit)
+      expect(
+        submitCalls.some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes("finishCapture"),
+        ),
+      ).toBe(true)
+    })
+    expect(finishOverlayStates).toEqual(["closed"])
+    expect(
+      invokeCalls
+        .slice(callCountBeforeSubmit)
+        .some(
+          (call) =>
+            call.command === "browser_eval_fire_and_forget" &&
+            String(call.args?.js ?? "").includes("deactivate"),
+        ),
+    ).toBe(false)
   })
 
   it("shows the browser capture overlay while submitted context is being prepared", async () => {

@@ -250,6 +250,7 @@ commands.allow = [
   "browser_eval",
   "browser_eval_fire_and_forget",
   "browser_current_url",
+  "browser_dev_server_running",
   "browser_screenshot",
   "browser_navigate",
   "browser_back",

@@ -30,6 +30,7 @@ import {
   runtimeAgentIdForCustomBaseCapability,
 } from './composer-helpers'
 import { cn } from '@/lib/utils'
+import type { AgentAttachmentCompatibilityProfile } from '@/lib/agent-attachments'
 import {
   Composer,
   type ComposerPendingContext,
@@ -104,6 +105,7 @@ interface ComposerDockProps {
   hideContextMeter?: boolean
   pendingAttachments?: ComposerPendingAttachment[]
   pendingContexts?: ComposerPendingContext[]
+  attachmentCompatibility?: AgentAttachmentCompatibilityProfile | null
   onAddFiles?: (files: File[]) => void
   onRemoveAttachment?: (id: string) => void
   onRemoveContext?: (id: string) => void
@@ -200,6 +202,7 @@ export function ComposerDock({
   hideContextMeter = false,
   pendingAttachments,
   pendingContexts,
+  attachmentCompatibility,
   onAddFiles,
   onRemoveAttachment,
   onRemoveContext,
@@ -383,6 +386,7 @@ export function ComposerDock({
       autoCompactDisabled={runtimeRunActionStatus === 'running'}
       pendingAttachments={pendingAttachments}
       pendingContexts={pendingContexts}
+      attachmentCompatibility={attachmentCompatibility}
       onAddFiles={onAddFiles}
       onRemoveAttachment={onRemoveAttachment}
       onRemoveContext={onRemoveContext}

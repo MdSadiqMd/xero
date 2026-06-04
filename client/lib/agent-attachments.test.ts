@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   MAX_ATTACHMENT_BYTES,
+  checkAttachmentModelCompatibility,
   classifyAttachment,
   classificationRejectionMessage,
   formatBytes,
@@ -82,6 +83,70 @@ describe('classificationRejectionMessage', () => {
     expect(
       classificationRejectionMessage({ name: 'e.txt', size: 0 }, { kind: null, reason: 'empty' }),
     ).toMatch(/empty/)
+  })
+})
+
+describe('checkAttachmentModelCompatibility', () => {
+  it('allows text attachments without special model input modalities', () => {
+    expect(checkAttachmentModelCompatibility({ kind: 'text', mediaType: 'text/plain' }, null)).toEqual({
+      supported: true,
+    })
+  })
+
+  it('allows images when the selected model reports image input', () => {
+    expect(
+      checkAttachmentModelCompatibility(
+        { kind: 'image', mediaType: 'image/png' },
+        { label: 'Vision model', inputModalities: ['text', 'image'] },
+      ),
+    ).toEqual({ supported: true })
+  })
+
+  it('rejects images when the selected model only reports text input', () => {
+    const result = checkAttachmentModelCompatibility(
+      { kind: 'image', mediaType: 'image/png' },
+      { label: 'Text model', inputModalities: ['text'] },
+    )
+
+    expect(result.supported).toBe(false)
+    if (!result.supported) {
+      expect(result.message).toContain('Text model does not support image attachments')
+    }
+  })
+
+  it('allows xAI Grok image attachments when stale catalog state omitted modalities', () => {
+    expect(
+      checkAttachmentModelCompatibility(
+        { kind: 'image', mediaType: 'image/png' },
+        {
+          providerId: 'xai',
+          modelId: 'grok-4.3',
+          label: 'Grok 4.3',
+          inputModalities: [],
+        },
+      ),
+    ).toEqual({ supported: true })
+
+    expect(
+      checkAttachmentModelCompatibility(
+        { kind: 'image', mediaType: 'image/png' },
+        {
+          providerId: 'xai',
+          modelId: 'grok-4.3-latest',
+          label: 'Grok 4.3 Latest',
+          inputModalities: [],
+        },
+      ),
+    ).toEqual({ supported: true })
+  })
+
+  it('allows documents when supported types include the file media type', () => {
+    expect(
+      checkAttachmentModelCompatibility(
+        { kind: 'document', mediaType: 'application/pdf' },
+        { label: 'File model', supportedTypes: ['application/pdf'] },
+      ),
+    ).toEqual({ supported: true })
   })
 })
 

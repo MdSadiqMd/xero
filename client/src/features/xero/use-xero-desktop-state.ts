@@ -11,6 +11,7 @@ import {
   XeroDesktopAdapter,
   getDesktopErrorMessage,
 } from '@/src/lib/xero-desktop'
+import { checkAttachmentModelCompatibility } from '@/lib/agent-attachments'
 import {
   applyRuntimeRun,
   applyRuntimeSession,
@@ -855,6 +856,53 @@ function getProviderModelCatalogRefreshId(providerId: string): string {
 function getProviderModelCatalogStateKeys(providerId: string): string[] {
   const profileId = getProviderModelCatalogRefreshId(providerId)
   return profileId === providerId ? [providerId] : [providerId, profileId]
+}
+
+function catalogConfiguredModelSupportsImageInput(catalog: ProviderModelCatalogDto): boolean {
+  const configuredModel = catalog.models.find((model) => model.modelId === catalog.configuredModelId)
+  if (!configuredModel) {
+    return false
+  }
+
+  return checkAttachmentModelCompatibility(
+    { kind: 'image', mediaType: 'image/png' },
+    {
+      providerId: catalog.providerId,
+      modelId: configuredModel.modelId,
+      displayName: configuredModel.displayName,
+      inputModalities: configuredModel.inputModalities,
+      capabilities: configuredModel.capabilities ?? null,
+    },
+  ).supported
+}
+
+async function warmProviderPreflightCache(
+  adapter: XeroDesktopAdapter,
+  profileId: string,
+  catalog: ProviderModelCatalogDto,
+): Promise<void> {
+  try {
+    const modelId = catalog.configuredModelId || null
+    await adapter.preflightProviderProfile(profileId, {
+      forceRefresh: false,
+      modelId,
+    })
+    if (catalogConfiguredModelSupportsImageInput(catalog)) {
+      await adapter.preflightProviderProfile(profileId, {
+        forceRefresh: false,
+        modelId,
+        requiredFeatures: {
+          streaming: true,
+          toolCalls: true,
+          reasoningControls: false,
+          attachments: true,
+          attachmentInputModalities: ['image'],
+        },
+      })
+    }
+  } catch {
+    // Proactive preflight only warms durable compatibility cache; diagnostics surfaces explicit failures.
+  }
 }
 
 export function useXeroDesktopState(
@@ -2340,14 +2388,7 @@ export function useXeroDesktopState(
             ...currentErrors,
             [trimmedProfileId]: null,
           }))
-          void adapter
-            .preflightProviderProfile(trimmedProfileId, {
-              forceRefresh: false,
-              modelId: response.configuredModelId || null,
-            })
-            .catch(() => {
-              // Proactive preflight warms the durable cache; diagnostics surfaces explicit failures.
-            })
+          void warmProviderPreflightCache(adapter, trimmedProfileId, response)
           return response
         } catch (error) {
           if (providerModelCatalogLoadRequestRef.current[trimmedProfileId] === requestId) {
