@@ -5,6 +5,7 @@ import App from './App'
 import { SignInReminderToast } from '@/components/xero/sign-in-reminder-toast'
 import { ShortcutsProvider } from './features/shortcuts/shortcuts-provider'
 import { ThemeProvider } from './features/theme/theme-provider'
+import { installNativeTitleSuppression } from './lib/native-title-suppression'
 import './styles.css'
 
 const container = document.getElementById('root')
@@ -12,6 +13,8 @@ const container = document.getElementById('root')
 if (!container) {
   throw new Error('Xero desktop shell root container was not found.')
 }
+
+installNativeTitleSuppression()
 
 createRoot(container).render(
   <StrictMode>

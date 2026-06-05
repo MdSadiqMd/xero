@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ProjectRail } from './project-rail'
@@ -71,6 +71,61 @@ describe('ProjectRail', () => {
     expect(screen.getByRole('button', { name: 'Open mesh-lang (active)' })).toBeVisible()
     expect(screen.queryByText('No milestone assigned')).not.toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  it('shows a styled tooltip with the project name for project cards', async () => {
+    render(
+      <ProjectRail
+        activeProjectId="project-1"
+        errorMessage={null}
+        isImporting={false}
+        isLoading={false}
+        onImportProject={() => undefined}
+        onRemoveProject={() => undefined}
+        onSelectProject={() => undefined}
+        pendingProjectRemovalId={null}
+        projectRemovalStatus="idle"
+        projects={projects}
+      />,
+    )
+
+    const projectButton = screen.getByRole('button', { name: 'Open mesh-lang (active)' })
+    fireEvent.pointerEnter(projectButton)
+    fireEvent.pointerMove(projectButton)
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-content"][data-side="right"]')).toHaveTextContent(
+        'mesh-lang',
+      ),
+    )
+  })
+
+  it('shows a styled tooltip for the project rail settings button', async () => {
+    render(
+      <ProjectRail
+        activeProjectId="project-1"
+        errorMessage={null}
+        isImporting={false}
+        isLoading={false}
+        onImportProject={() => undefined}
+        onOpenSettings={() => undefined}
+        onRemoveProject={() => undefined}
+        onSelectProject={() => undefined}
+        pendingProjectRemovalId={null}
+        projectRemovalStatus="idle"
+        projects={projects}
+      />,
+    )
+
+    const settingsButton = screen.getByRole('button', { name: 'Settings' })
+    fireEvent.pointerEnter(settingsButton)
+    fireEvent.pointerMove(settingsButton)
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tooltip-content"][data-side="right"]')).toHaveTextContent(
+        'Settings',
+      ),
+    )
   })
 
   it('keeps only compact project monograms', () => {

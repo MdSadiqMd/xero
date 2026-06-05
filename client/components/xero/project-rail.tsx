@@ -4,6 +4,7 @@ import { BaseAlertDialog } from '@xero/ui/components/base-dialog'
 
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { ProjectListItem } from '@/src/lib/xero-model'
 
 interface ProjectRailProps {
@@ -145,15 +146,20 @@ export function ProjectRail({
 
       {onOpenSettings ? (
         <div className="flex items-center justify-center px-2 py-2">
-          <button
-            aria-label="Settings"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground/80 transition-colors hover:bg-secondary/60 hover:text-foreground"
-            onClick={onOpenSettings}
-            title="Settings"
-            type="button"
-          >
-            <Settings className="h-4 w-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                aria-label="Settings"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground/80 transition-colors hover:bg-secondary/60 hover:text-foreground"
+                onClick={onOpenSettings}
+                title="Settings"
+                type="button"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={10}>Settings</TooltipContent>
+          </Tooltip>
         </div>
       ) : null}
     </aside>
@@ -201,57 +207,64 @@ const ProjectRailItem = memo(function ProjectRailItem({
   return (
     <>
       <div className="group relative mx-auto w-8">
-        <button
-          aria-label={`Open ${project.name}${isActive ? ' (active)' : ''}`}
-          aria-current={isActive ? 'true' : undefined}
-          aria-describedby={
-            hasCompletedSessionCount ? completedSessionCountDescriptionId : undefined
-          }
-          className={cn(
-            'xero-project-rail-card relative isolate flex h-8 w-8 items-center justify-center overflow-visible rounded-lg border text-[12px] font-medium leading-none transition-colors duration-150',
-            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30',
-            isActive
-              ? 'border-border/80 bg-secondary text-foreground'
-              : 'border-transparent bg-secondary/30 text-foreground/55 hover:bg-secondary/60 hover:text-foreground',
-          )}
-          data-agent-running={isAgentRunning ? 'true' : undefined}
-          onClick={() => onSelectProject(project.id)}
-          onContextMenu={(event) => {
-            event.preventDefault()
-            if (!isRemovalLocked) setConfirmOpen(true)
-          }}
-          onFocus={() => onPreloadProject?.(project.id)}
-          onPointerDown={(event) => {
-            if (event.button === 0) onPreviewProject(project.id)
-          }}
-          onPointerEnter={() => onPreloadProject?.(project.id)}
-          title={project.name}
-          type="button"
-        >
-          {isAgentRunning ? (
-            <span className="xero-project-rail-activity-aura" aria-hidden="true">
-              <span className="xero-project-rail-activity-aura-field" />
-            </span>
-          ) : null}
-          {isRemovalPending ? (
-            <Loader2 className="relative z-10 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <span className="relative z-10" aria-hidden="true">
-              {projectInitial}
-            </span>
-          )}
-          {hasCompletedSessionCount ? (
-            <>
-              <span className="xero-project-rail-completion-count-badge" aria-hidden="true">
-                {displayedCompletedSessionCount}
-              </span>
-              <span id={completedSessionCountDescriptionId} className="sr-only">
-                {completedSessionCountDescription}
-              </span>
-            </>
-          ) : null}
-          <span className="sr-only">{project.name}</span>
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              aria-label={`Open ${project.name}${isActive ? ' (active)' : ''}`}
+              aria-current={isActive ? 'true' : undefined}
+              aria-describedby={
+                hasCompletedSessionCount ? completedSessionCountDescriptionId : undefined
+              }
+              className={cn(
+                'xero-project-rail-card relative isolate flex h-8 w-8 items-center justify-center overflow-visible rounded-lg border text-[12px] font-medium leading-none transition-colors duration-150',
+                'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30',
+                isActive
+                  ? 'border-border/80 bg-secondary text-foreground'
+                  : 'border-transparent bg-secondary/30 text-foreground/55 hover:bg-secondary/60 hover:text-foreground',
+              )}
+              data-agent-running={isAgentRunning ? 'true' : undefined}
+              onClick={() => onSelectProject(project.id)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                if (!isRemovalLocked) setConfirmOpen(true)
+              }}
+              onFocus={() => onPreloadProject?.(project.id)}
+              onPointerDown={(event) => {
+                if (event.button === 0) onPreviewProject(project.id)
+              }}
+              onPointerEnter={() => onPreloadProject?.(project.id)}
+              title={project.name}
+              type="button"
+            >
+              {isAgentRunning ? (
+                <span className="xero-project-rail-activity-aura" aria-hidden="true">
+                  <span className="xero-project-rail-activity-aura-field" />
+                </span>
+              ) : null}
+              {isRemovalPending ? (
+                <Loader2 className="relative z-10 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <span className="relative z-10" aria-hidden="true">
+                  {projectInitial}
+                </span>
+              )}
+              {hasCompletedSessionCount ? (
+                <>
+                  <span className="xero-project-rail-completion-count-badge" aria-hidden="true">
+                    {displayedCompletedSessionCount}
+                  </span>
+                  <span id={completedSessionCountDescriptionId} className="sr-only">
+                    {completedSessionCountDescription}
+                  </span>
+                </>
+              ) : null}
+              <span className="sr-only">{project.name}</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={10}>
+            {project.name}
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <BaseAlertDialog
