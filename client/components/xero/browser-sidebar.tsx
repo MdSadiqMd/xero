@@ -10,6 +10,8 @@ import {
   FolderGit2,
   Loader2,
   MousePointerSquareDashed,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   RotateCw,
@@ -99,6 +101,10 @@ const OVERLAY_OCCLUSION_SELECTOR = [
 
 interface BrowserSidebarProps {
   open: boolean
+  projectId?: string | null
+  fullWidth?: boolean
+  fullWidthTarget?: number | null
+  onFullWidthChange?: (fullWidth: boolean) => void
   onAddAgentContext?: (request: BrowserAgentContextRequest) => Promise<void>
   penToolDisabledReason?: string | null
   projectBrowserTargets?: BrowserLaunchTarget[]
@@ -109,6 +115,7 @@ interface BrowserSidebarProps {
 
 interface BrowserTabMeta {
   id: string
+  projectId?: string | null
   label: string
   title: string | null
   url: string | null
@@ -325,6 +332,11 @@ function viewportMaxWidth() {
   return Math.max(MIN_WIDTH, window.innerWidth - RIGHT_PADDING)
 }
 
+function viewportFullWidthTarget() {
+  if (typeof window === "undefined") return 960
+  return Math.max(MIN_WIDTH, window.innerWidth)
+}
+
 function normalizeUrl(input: string): string | null {
   const trimmed = input.trim()
   if (!trimmed) return null
@@ -501,8 +513,25 @@ function readBrowserViewportRectForWidth(
   }
 }
 
+function browserTabBelongsToProject(tab: BrowserTabMeta, projectId: string | null): boolean {
+  if (!projectId) return true
+  return tab.projectId === projectId
+}
+
+function selectActiveBrowserTab(
+  tabs: BrowserTabMeta[],
+  projectId: string | null,
+): BrowserTabMeta | null {
+  const projectTabs = tabs.filter((tab) => browserTabBelongsToProject(tab, projectId))
+  return projectTabs.find((tab) => tab.active) ?? projectTabs[0] ?? null
+}
+
 export function BrowserSidebar({
   open,
+  projectId = null,
+  fullWidth = false,
+  fullWidthTarget = null,
+  onFullWidthChange,
   onAddAgentContext,
   penToolDisabledReason = null,
   projectBrowserTargets = [],
@@ -529,8 +558,14 @@ export function BrowserSidebar({
   const [projectBrowserTargetLiveness, setProjectBrowserTargetLiveness] = useState<Record<string, boolean>>({})
   const motionOpen = useSidebarOpenMotion(open)
   const [openGeometrySettled, setOpenGeometrySettled] = useState(false)
-  const targetWidth = motionOpen ? width : 0
-  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
+  const activeFullWidth = open && fullWidth
+  const renderedWidth = activeFullWidth
+    ? Math.max(MIN_WIDTH, Math.round(fullWidthTarget ?? viewportFullWidthTarget()))
+    : width
+  const targetWidth = motionOpen ? renderedWidth : 0
+  const widthMotion = useSidebarWidthMotion(targetWidth, {
+    isResizing: isResizing && !activeFullWidth,
+  })
   const {
     browsers: cookieBrowsers,
     status: importStatus,
@@ -553,6 +588,7 @@ export function BrowserSidebar({
   const resizeDragRuntimeRef = useRef<BrowserResizeDragRuntime | null>(null)
   const cookieSourcesLoadedRef = useRef(false)
   const openRef = useRef(open)
+  const projectIdRef = useRef(projectId)
   const activeTabIdRef = useRef(activeTabId)
   const toolModeRef = useRef(toolMode)
   const injectedToolModeRef = useRef<ToolMode>(null)
@@ -565,6 +601,7 @@ export function BrowserSidebar({
   const lastOcclusionKeyRef = useRef("")
 
   openRef.current = open
+  projectIdRef.current = projectId
   activeTabIdRef.current = activeTabId
   toolModeRef.current = toolMode
   onAddAgentContextRef.current = onAddAgentContext
@@ -742,8 +779,12 @@ export function BrowserSidebar({
   )
 
   const activeTab = useMemo(
-    () => tabs.find((tab) => tab.id === activeTabId) ?? null,
-    [tabs, activeTabId],
+    () => tabs.find((tab) => tab.id === activeTabId && browserTabBelongsToProject(tab, projectId)) ?? null,
+    [tabs, activeTabId, projectId],
+  )
+  const activeProjectTabs = useMemo(
+    () => tabs.filter((tab) => browserTabBelongsToProject(tab, projectId)),
+    [projectId, tabs],
   )
 
   const isDevTab = isDevServerUrl(activeTab?.url ?? null)
@@ -757,8 +798,10 @@ export function BrowserSidebar({
     projectBrowserTargets.length > 0 &&
     projectBrowserTargets.some((target) => !(target.id in projectBrowserTargetLiveness))
   const resizeLockedByPenDrawing = toolMode === "pen" || penHasDrawing
+  const resizeDisabled = activeFullWidth || resizeLockedByPenDrawing
   const isPenToolDisabled = toolSubmitting || Boolean(penToolDisabledReason)
   const penToolTooltip = penToolDisabledReason ?? "Sketch on page"
+  const fullWidthButtonLabel = activeFullWidth ? "Show agent panel" : "Hide agent panel"
 
   useEffect(() => {
     if (!penToolDisabledReason || toolMode !== "pen") return
@@ -1039,6 +1082,19 @@ export function BrowserSidebar({
   }, [activeTabId, open, resizeScheduler])
 
   useEffect(() => {
+    if (!open || !isTauri()) return
+    if (!hasWebviewRef.current && tabsRef.current.length === 0) return
+    const forceSync = () => {
+      resizeScheduler.reset()
+      resizeScheduler.schedule({ force: true })
+    }
+
+    forceSync()
+    const timeout = window.setTimeout(forceSync, SIDEBAR_GEOMETRY_SETTLE_MS)
+    return () => window.clearTimeout(timeout)
+  }, [activeFullWidth, fullWidthTarget, open, resizeScheduler])
+
+  useEffect(() => {
     if (!openGeometrySettled || !isTauri()) return
     if (!hasWebviewRef.current && tabsRef.current.length === 0) return
 
@@ -1050,8 +1106,9 @@ export function BrowserSidebar({
     if (!open || !isTauri()) return
     if (!hasWebviewRef.current && tabsRef.current.length === 0) return
 
-    const node = viewportRef.current
-    if (!node) return
+    const viewportNode = viewportRef.current
+    const sidebarNode = sidebarRef.current
+    if (!viewportNode && !sidebarNode) return
 
     const ResizeObserverCtor = window.ResizeObserver
     if (typeof ResizeObserverCtor !== "function") {
@@ -1062,7 +1119,8 @@ export function BrowserSidebar({
     const observer = new ResizeObserverCtor(() => {
       resizeScheduler.schedule()
     })
-    observer.observe(node)
+    if (viewportNode) observer.observe(viewportNode)
+    if (sidebarNode && sidebarNode !== viewportNode) observer.observe(sidebarNode)
 
     return () => observer.disconnect()
   }, [activeTabId, open, resizeScheduler])
@@ -1181,8 +1239,10 @@ export function BrowserSidebar({
       },
       onTabUpdated: (payload) => {
         setTabs(payload.tabs)
-        hasWebviewRef.current = payload.tabs.length > 0
-        const active = payload.tabs.find((tab) => tab.active)
+        hasWebviewRef.current = payload.tabs.some((tab) =>
+          browserTabBelongsToProject(tab, projectIdRef.current),
+        )
+        const active = selectActiveBrowserTab(payload.tabs, projectIdRef.current)
         if (active) {
           activeTabIdRef.current = active.id
           setActiveTabId(active.id)
@@ -1293,11 +1353,13 @@ export function BrowserSidebar({
   useEffect(() => {
     if (!open || !isTauri()) return
     let cancelled = false
-    void safeInvoke<BrowserTabMeta[]>("browser_tab_list").then((list) => {
+    void safeInvoke<BrowserTabMeta[]>("browser_tab_list", {
+      projectId,
+    }).then((list) => {
       if (cancelled || !list) return
       setTabs(list)
       hasWebviewRef.current = list.length > 0
-      const active = list.find((tab) => tab.active) ?? list[0] ?? null
+      const active = selectActiveBrowserTab(list, projectId)
       if (active) {
         activeTabIdRef.current = active.id
         setActiveTabId(active.id)
@@ -1313,7 +1375,7 @@ export function BrowserSidebar({
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, projectId])
 
   const handleResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1459,6 +1521,7 @@ export function BrowserSidebar({
       const viewport = readBrowserViewportRect(node, RESIZE_HANDLE_INSET)
       const forceNew = options?.newTab === true
       const payload = {
+        projectId: projectIdRef.current,
         url: navigationTarget,
         ...viewport,
         tabId: forceNew ? null : options?.tabId ?? activeTabId ?? null,
@@ -1530,7 +1593,10 @@ export function BrowserSidebar({
   const handleTabFocus = useCallback(
     (tabId: string) => {
       if (!isTauri() || tabId === activeTabId) return
-      void invoke<BrowserTabMeta>("browser_tab_focus", { tabId })
+      void invoke<BrowserTabMeta>("browser_tab_focus", {
+        projectId: projectIdRef.current,
+        tabId,
+      })
         .then((meta) => {
           if (meta) {
             activeTabIdRef.current = meta.id
@@ -1549,7 +1615,10 @@ export function BrowserSidebar({
   const handleTabClose = useCallback(
     (tabId: string) => {
       if (!isTauri()) return
-      void invoke<BrowserTabMeta[]>("browser_tab_close", { tabId })
+      void invoke<BrowserTabMeta[]>("browser_tab_close", {
+        projectId: projectIdRef.current,
+        tabId,
+      })
         .then((list) => {
           if (!list) return
           setTabs(list)
@@ -1560,7 +1629,7 @@ export function BrowserSidebar({
             setLoading(false)
             hasWebviewRef.current = false
           } else {
-            const next = list.find((tab) => tab.active) ?? list[0]
+            const next = selectActiveBrowserTab(list, projectIdRef.current) ?? list[0]
             activeTabIdRef.current = next.id
             setActiveTabId(next.id)
             setLoading(next.loading)
@@ -1613,7 +1682,7 @@ export function BrowserSidebar({
   // the shared cookie store.
   useEffect(() => {
     if (!open || !isTauri()) return
-    if (tabs.length === 0) return
+    if (activeProjectTabs.length === 0) return
     if (cookieSourcesLoadedRef.current) return
     cookieSourcesLoadedRef.current = true
 
@@ -1624,7 +1693,7 @@ export function BrowserSidebar({
       if (!list.some((browser) => browser.available)) return
       setShowCookieBanner(true)
     })
-  }, [open, tabs.length, refreshCookieSources])
+  }, [activeProjectTabs.length, open, refreshCookieSources])
 
   const handleImportCookies = useCallback(
     async (browser: DetectedBrowser) => {
@@ -1641,7 +1710,7 @@ export function BrowserSidebar({
 
   // Show the tab strip (and the + button) as soon as there's any tab — otherwise
   // users have no way to open a second tab because the new-tab trigger lives there.
-  const showTabs = tabs.length > 0
+  const showTabs = activeProjectTabs.length > 0
 
   return (
     <aside
@@ -1661,12 +1730,13 @@ export function BrowserSidebar({
         aria-valuemax={maxWidth}
         aria-valuemin={MIN_WIDTH}
         aria-valuenow={width}
-        aria-disabled={resizeLockedByPenDrawing ? true : undefined}
+        aria-disabled={resizeDisabled ? true : undefined}
         className={cn(
           "absolute inset-y-0 -left-[3px] z-10 w-[6px] bg-transparent transition-colors",
-          resizeLockedByPenDrawing
+          resizeDisabled
             ? "cursor-not-allowed hover:bg-destructive/20"
             : "cursor-col-resize hover:bg-primary/30",
+          activeFullWidth && "hidden",
           isResizing && "bg-primary/40",
         )}
         onKeyDown={handleResizeKey}
@@ -1678,11 +1748,11 @@ export function BrowserSidebar({
       <div
         ref={contentRef}
         className="flex h-full min-w-0 shrink-0 flex-col"
-        style={{ width }}
+        style={{ width: renderedWidth }}
       >
       {showTabs ? (
         <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60">
-          {tabs.map((tab) => (
+          {activeProjectTabs.map((tab) => (
             <div
               key={tab.id}
               className={cn(
@@ -1871,6 +1941,32 @@ export function BrowserSidebar({
             className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/40 px-0.5"
             data-testid="browser-dev-tools"
           >
+            {onFullWidthChange ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    aria-label={fullWidthButtonLabel}
+                    aria-pressed={activeFullWidth}
+                    className={cn(
+                      "flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground",
+                      activeFullWidth
+                        ? "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary"
+                        : null,
+                    )}
+                    onClick={() => onFullWidthChange(!activeFullWidth)}
+                    title={fullWidthButtonLabel}
+                    type="button"
+                  >
+                    {activeFullWidth ? (
+                      <PanelLeftOpen className="h-3.5 w-3.5" />
+                    ) : (
+                      <PanelLeftClose className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{fullWidthButtonLabel}</TooltipContent>
+              </Tooltip>
+            ) : null}
             <Tooltip>
               <TooltipTrigger asChild>
                 <span

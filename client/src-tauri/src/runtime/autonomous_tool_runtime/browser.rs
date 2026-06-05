@@ -45,6 +45,7 @@ impl BrowserEngineId {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserExecutionContext {
     pub preference: BrowserControlPreferenceDto,
+    pub project_id: Option<String>,
     pub repo_root: PathBuf,
 }
 
@@ -858,8 +859,15 @@ pub fn execute_action_with_app<R: Runtime + 'static>(
                 )
             }
             AutonomousBrowserAction::Open { url } => {
-                let tab =
-                    provision_browser_tab(app, browser_state.inner(), &url, None, false, None)?;
+                let tab = provision_browser_tab(
+                    app,
+                    browser_state.inner(),
+                    &url,
+                    None,
+                    false,
+                    context.project_id.as_deref(),
+                    None,
+                )?;
                 (
                     "success".into(),
                     format!("Opened `{url}` in the in-app browser."),
@@ -868,8 +876,15 @@ pub fn execute_action_with_app<R: Runtime + 'static>(
                 )
             }
             AutonomousBrowserAction::TabOpen { url } => {
-                let tab =
-                    provision_browser_tab(app, browser_state.inner(), &url, None, true, None)?;
+                let tab = provision_browser_tab(
+                    app,
+                    browser_state.inner(),
+                    &url,
+                    None,
+                    true,
+                    context.project_id.as_deref(),
+                    None,
+                )?;
                 (
                     "success".into(),
                     format!("Opened `{url}` in a new in-app browser tab."),

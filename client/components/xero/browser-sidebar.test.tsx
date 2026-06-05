@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { useState } from "react"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 type ListenerHandle = () => void
@@ -450,13 +450,86 @@ describe("BrowserSidebar", () => {
     })
   })
 
+  it("renders and hydrates browser tabs only for the active project", async () => {
+    const tabListRequests: Array<Record<string, unknown> | undefined> = []
+    registerInvoke("browser_tab_list", async (args) => {
+      tabListRequests.push(args)
+      return [
+        {
+          id: "tab-project-a",
+          projectId: "project-a",
+          label: "xero-browser-tab-a",
+          title: "Project A",
+          url: "https://project-a.example/",
+          loading: false,
+          canGoBack: false,
+          canGoForward: false,
+          active: false,
+        },
+        {
+          id: "tab-project-b",
+          projectId: "project-b",
+          label: "xero-browser-tab-b",
+          title: "Project B",
+          url: "https://project-b.example/",
+          loading: false,
+          canGoBack: false,
+          canGoForward: false,
+          active: true,
+        },
+      ]
+    })
+
+    render(<BrowserSidebar open projectId="project-a" />)
+
+    const input = (await screen.findByLabelText("Address")) as HTMLInputElement
+    await waitFor(() => expect(input.value).toBe("https://project-a.example/"))
+    expect(tabListRequests[0]).toMatchObject({ projectId: "project-a" })
+    expect(screen.getByText("Project A")).toBeInTheDocument()
+    expect(screen.queryByText("Project B")).not.toBeInTheDocument()
+
+    act(() => {
+      emitEvent("browser:tab_updated", {
+        tabs: [
+          {
+            id: "tab-project-a",
+            projectId: "project-a",
+            label: "xero-browser-tab-a",
+            title: "Project A",
+            url: "https://project-a.example/updated",
+            loading: false,
+            canGoBack: false,
+            canGoForward: false,
+            active: false,
+          },
+          {
+            id: "tab-project-b",
+            projectId: "project-b",
+            label: "xero-browser-tab-b",
+            title: "Project B",
+            url: "https://project-b.example/",
+            loading: false,
+            canGoBack: false,
+            canGoForward: false,
+            active: true,
+          },
+        ],
+      })
+    })
+
+    await waitFor(() => expect(input.value).toBe("https://project-a.example/updated"))
+    expect(screen.getByText("Project A")).toBeInTheDocument()
+    expect(screen.queryByText("Project B")).not.toBeInTheDocument()
+  })
+
   it("submits a URL and invokes browser_show with the expected shape", async () => {
     registerInvoke("browser_tab_list", async () => [])
-    const shownUrls: string[] = []
+    const shownRequests: Array<Record<string, unknown> | undefined> = []
     registerInvoke("browser_show", async (args) => {
-      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      shownRequests.push(args)
       return {
         id: "tab-1",
+        projectId: "project-a",
         label: "xero-browser-tab-1",
         title: null,
         url: String((args as { url?: string })?.url ?? ""),
@@ -467,7 +540,7 @@ describe("BrowserSidebar", () => {
       }
     })
 
-    render(<BrowserSidebar open />)
+    render(<BrowserSidebar open projectId="project-a" />)
 
     const input = await screen.findByLabelText("Address")
     fireEvent.focus(input)
@@ -476,7 +549,11 @@ describe("BrowserSidebar", () => {
     fireEvent.submit(form)
 
     await waitFor(() => {
-      expect(shownUrls).toEqual(["https://example.com"])
+      expect(shownRequests).toHaveLength(1)
+      expect(shownRequests[0]).toMatchObject({
+        projectId: "project-a",
+        url: "https://example.com",
+      })
     })
   })
 
@@ -1722,6 +1799,88 @@ describe("BrowserSidebar", () => {
       ).toBe(true)
     })
     expect(inspectButton).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("places the browser focus toggle before the pen tool", async () => {
+    const onFullWidthChange = vi.fn()
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Local",
+        url: "http://localhost:5173/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+
+    const { rerender } = render(
+      <BrowserSidebar
+        open
+        fullWidth={false}
+        fullWidthTarget={900}
+        onFullWidthChange={onFullWidthChange}
+      />,
+    )
+
+    const tools = await screen.findByTestId("browser-dev-tools")
+    expect(
+      within(tools).getAllByRole("button").map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Hide agent panel", "Sketch on page", "Inspect element"])
+
+    fireEvent.click(within(tools).getByRole("button", { name: "Hide agent panel" }))
+    expect(onFullWidthChange).toHaveBeenCalledWith(true)
+
+    rerender(
+      <BrowserSidebar
+        open
+        fullWidth
+        fullWidthTarget={900}
+        onFullWidthChange={onFullWidthChange}
+      />,
+    )
+
+    const restoreButton = within(await screen.findByTestId("browser-dev-tools")).getByRole(
+      "button",
+      { name: "Show agent panel" },
+    )
+    expect(restoreButton).toHaveAttribute("aria-pressed", "true")
+    fireEvent.click(restoreButton)
+    expect(onFullWidthChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it("uses the focused browser width target and hides the resize handle", async () => {
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: "Local",
+        url: "http://localhost:5173/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+
+    render(
+      <BrowserSidebar
+        open
+        fullWidth
+        fullWidthTarget={900}
+        onFullWidthChange={() => undefined}
+      />,
+    )
+
+    await screen.findByLabelText("Address")
+    const sidebar = document.querySelector("aside")!
+
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "900px" }))
+    expect(
+      screen.queryByRole("separator", { name: "Resize browser sidebar" }),
+    ).not.toBeInTheDocument()
   })
 
   it("disables pen mode when the selected model cannot accept image input", async () => {

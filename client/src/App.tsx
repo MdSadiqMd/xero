@@ -211,6 +211,7 @@ function preloadSolanaWorkbenchSurface() {
 }
 
 const ACTIVE_VIEW_APP_STATE_KEY = 'app.activeView.v1'
+const GLOBAL_BROWSER_PROJECT_KEY = '__global_browser__'
 const GLOBAL_COMPUTER_USE_PROJECT_ID = 'global-computer-use'
 const GLOBAL_COMPUTER_USE_AGENT_SESSION_ID = 'agent-session-global-computer-use'
 
@@ -230,6 +231,20 @@ interface ComputerUseLoadResult {
   project: ProjectDetailView
   runtimeSession: RuntimeSessionView | null
   runtimeRun: RuntimeRunView | null
+}
+
+interface BrowserSidebarProjectState {
+  open: boolean
+  fullWidth: boolean
+}
+
+const DEFAULT_BROWSER_SIDEBAR_PROJECT_STATE: BrowserSidebarProjectState = {
+  open: false,
+  fullWidth: false,
+}
+
+function browserSidebarProjectKey(projectId: string | null): string {
+  return projectId ?? GLOBAL_BROWSER_PROJECT_KEY
 }
 
 function normalizePersistedActiveView(value: unknown): View | null {
@@ -307,6 +322,9 @@ const AGENT_DOCK_WIDTH_STORAGE_KEY = 'xero.agentDock.width'
 const AGENT_DOCK_MIN_WIDTH = 320
 const AGENT_DOCK_DEFAULT_WIDTH = 560
 const AGENT_DOCK_MAX_WIDTH = 720
+// Matches ProjectRail's fixed `w-12`; browser focus fills the workspace to its right.
+const PROJECT_RAIL_WIDTH = 48
+const BROWSER_FOCUS_MIN_WIDTH = 320
 const STARTUP_SURFACE_PREWARM_SETTLE_MS = 120
 const HEAVY_SURFACE_MOUNT_AFTER_REVEAL_MS = 180
 const BASE_STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = []
@@ -374,6 +392,14 @@ function readPersistedAgentDockWidth(): number {
   } catch {
     return AGENT_DOCK_DEFAULT_WIDTH
   }
+}
+
+function readBrowserFocusWidth(): number | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  return Math.max(BROWSER_FOCUS_MIN_WIDTH, Math.round(window.innerWidth - PROJECT_RAIL_WIDTH))
 }
 
 function preloadSurfaceChunk(target: SurfacePreloadTarget): void {
@@ -1778,7 +1804,48 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [])
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [projectAddOpen, setProjectAddOpen] = useState(false)
-  const [browserOpen, setBrowserOpen] = useState(false)
+  const browserProjectKey = browserSidebarProjectKey(activeProjectId)
+  const [browserSidebarStateByProject, setBrowserSidebarStateByProject] = useState<
+    Record<string, BrowserSidebarProjectState>
+  >({})
+  const browserSidebarState =
+    browserSidebarStateByProject[browserProjectKey] ?? DEFAULT_BROWSER_SIDEBAR_PROJECT_STATE
+  const browserOpen = browserSidebarState.open
+  const browserFullWidth = browserSidebarState.fullWidth
+  const updateBrowserSidebarState = useCallback(
+    (update: (current: BrowserSidebarProjectState) => BrowserSidebarProjectState) => {
+      setBrowserSidebarStateByProject((current) => {
+        const previous =
+          current[browserProjectKey] ?? DEFAULT_BROWSER_SIDEBAR_PROJECT_STATE
+        const next = update(previous)
+        if (next.open === previous.open && next.fullWidth === previous.fullWidth) {
+          return current
+        }
+        return { ...current, [browserProjectKey]: next }
+      })
+    },
+    [browserProjectKey],
+  )
+  const setBrowserOpen = useCallback(
+    (open: boolean) => {
+      updateBrowserSidebarState((current) => ({
+        ...current,
+        open,
+      }))
+    },
+    [updateBrowserSidebarState],
+  )
+  const setBrowserFullWidth = useCallback(
+    (fullWidth: boolean) => {
+      updateBrowserSidebarState((current) => ({
+        ...current,
+        fullWidth,
+      }))
+    },
+    [updateBrowserSidebarState],
+  )
+  const [browserFullWidthTarget, setBrowserFullWidthTarget] =
+    useState<number | null>(readBrowserFocusWidth)
   const [browserLaunchTargets, setBrowserLaunchTargets] = useState<BrowserLaunchTarget[]>([])
   const [pendingBrowserOpenUrl, setPendingBrowserOpenUrl] = useState<PendingBrowserOpenUrl | null>(null)
   const [iosOpen, setIosOpen] = useState(false)
@@ -1934,6 +2001,23 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [activeProjectId, refreshWorkflowDefinitions, refreshWorkflowRuns])
   const shouldRestoreExplorerFromAutoCollapseRef = useRef(false)
   const previousBrowserOpenRef = useRef<boolean>(browserOpen)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const updateBrowserFullWidthTarget = () => {
+      setBrowserFullWidthTarget(readBrowserFocusWidth())
+    }
+
+    updateBrowserFullWidthTarget()
+    window.addEventListener('resize', updateBrowserFullWidthTarget)
+    return () => window.removeEventListener('resize', updateBrowserFullWidthTarget)
+  }, [])
+
+  useEffect(() => {
+    if (browserOpen) return
+    setBrowserFullWidth(false)
+  }, [browserOpen, setBrowserFullWidth])
 
   useEffect(() => {
     let cancelled = false
@@ -2159,23 +2243,43 @@ export function XeroApp({ adapter }: XeroAppProps) {
     if (except !== 'agentDock') setAgentDockOpen(false)
     if (except !== 'computerUse') setComputerUseOpen(false)
     if (except !== 'terminal') setTerminalOpen(false)
-  }, [])
+  }, [setBrowserOpen])
 
   const toggleBrowser = useCallback(() => {
     clearPendingAgentDockOpen()
     if (browserOpen) {
+      setBrowserFullWidth(false)
       setBrowserOpen(false)
       return
     }
     closeSidebarsExcept('browser')
+    setBrowserFullWidth(false)
     setBrowserOpen(true)
-  }, [browserOpen, clearPendingAgentDockOpen, closeSidebarsExcept])
+  }, [
+    browserOpen,
+    clearPendingAgentDockOpen,
+    closeSidebarsExcept,
+    setBrowserFullWidth,
+    setBrowserOpen,
+  ])
 
   const revealBrowserSidebar = useCallback(() => {
     clearPendingAgentDockOpen()
     closeSidebarsExcept('browser')
     setBrowserOpen(true)
-  }, [clearPendingAgentDockOpen, closeSidebarsExcept])
+  }, [clearPendingAgentDockOpen, closeSidebarsExcept, setBrowserOpen])
+
+  const handleBrowserFullWidthChange = useCallback(
+    (nextFullWidth: boolean) => {
+      clearPendingAgentDockOpen()
+      if (nextFullWidth) {
+        closeSidebarsExcept('browser')
+        setBrowserOpen(true)
+      }
+      setBrowserFullWidth(nextFullWidth)
+    },
+    [clearPendingAgentDockOpen, closeSidebarsExcept, setBrowserFullWidth, setBrowserOpen],
+  )
 
   const handleOpenUrlInBrowser = useCallback(
     (url: string) => {
@@ -5099,6 +5203,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     : null
   const shellProjectName = pendingProjectSelectionName ?? activeProject?.name
   const agentDockSurfaceOpen = agentDockOpen || computerUseOpen
+  const browserFocusMode = browserOpen && browserFullWidth
   const agentDockSurfaceAgent = computerUseOpen ? computerUseAgentView : agentView
   const agentDockSurfaceSessions = computerUseOpen
     ? (computerUseProjectForView?.agentSessions ?? [])
@@ -5317,7 +5422,16 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 : undefined
             }
           />
-          <div className="relative flex min-h-0 min-w-0 flex-1">
+          <div
+            aria-hidden={browserFocusMode ? true : undefined}
+            className={cn(
+              'relative flex min-h-0 min-w-0 flex-1 overflow-hidden transition-[max-width,opacity,transform] motion-standard',
+              browserFocusMode
+                ? 'pointer-events-none max-w-0 -translate-x-2 opacity-0'
+                : 'max-w-full translate-x-0 opacity-100',
+            )}
+            inert={browserFocusMode ? true : undefined}
+          >
             <div className="flex min-h-0 min-w-0 flex-1">
               {isProjectSelectionShellPending ? null : renderBody()}
             </div>
@@ -5332,6 +5446,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
             >
               <LazyBrowserSidebar
                 open={browserOpen}
+                projectId={activeProjectId}
+                fullWidth={browserFocusMode}
+                fullWidthTarget={browserFullWidthTarget}
+                onFullWidthChange={handleBrowserFullWidthChange}
                 penToolDisabledReason={browserPenToolDisabledReason}
                 projectBrowserTargets={browserLaunchTargets}
                 onProjectBrowserTargetUnavailable={handleBrowserLaunchTargetUnavailable}

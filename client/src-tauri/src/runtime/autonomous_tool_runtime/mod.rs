@@ -5554,6 +5554,10 @@ impl AutonomousToolRuntime {
             request.action,
             BrowserExecutionContext {
                 preference: self.browser_control_preference,
+                project_id: self
+                    .agent_run_context
+                    .as_ref()
+                    .map(|context| context.project_id.clone()),
                 repo_root: self.repo_root.clone(),
             },
         )?;

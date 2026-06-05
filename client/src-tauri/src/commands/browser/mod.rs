@@ -581,6 +581,7 @@ impl BrowserResizeCoalescer {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserShowRequest {
+    pub project_id: Option<String>,
     pub url: String,
     pub x: f64,
     pub y: f64,
@@ -610,6 +611,7 @@ pub struct BrowserInternalEventPayload {
 pub fn browser_show<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: State<'_, BrowserState>,
+    project_id: Option<String>,
     url: String,
     x: f64,
     y: f64,
@@ -624,6 +626,7 @@ pub fn browser_show<R: Runtime + 'static>(
         &url,
         tab_id.as_deref(),
         new_tab.unwrap_or(false),
+        project_id.as_deref(),
         Some(BrowserViewport {
             x,
             y,
@@ -639,6 +642,7 @@ pub fn provision_browser_tab<R: Runtime + 'static>(
     url: &str,
     requested_tab_id: Option<&str>,
     force_new: bool,
+    project_id: Option<&str>,
     viewport: Option<BrowserViewport>,
 ) -> CommandResult<BrowserTabMetadata> {
     let target = actions::parse_url(url)?;
@@ -656,21 +660,24 @@ pub fn provision_browser_tab<R: Runtime + 'static>(
     let (tab_id, label) = if force_new {
         inserted_tab = true;
         let (id, label) = tabs.new_tab_label();
-        tabs.insert(id.clone(), label.clone())?;
+        tabs.insert(id.clone(), label.clone(), project_id.map(str::to_string))?;
         (id, label)
     } else {
         match requested_tab_id {
-            Some(existing) => (existing.to_string(), tabs.tab_label(existing)?),
+            Some(existing) => (
+                existing.to_string(),
+                tabs.tab_label_for_project(existing, project_id)?,
+            ),
             None => {
-                if let Some(active) = tabs.active_tab_id() {
+                if let Some(active) = tabs.active_tab_id_for_project(project_id) {
                     let label = tabs
-                        .active_label_soft()
-                        .unwrap_or_else(|| tab_label_for_id(&active));
+                        .tab_label_for_project(&active, project_id)
+                        .unwrap_or_else(|_| tab_label_for_id(&active));
                     (active, label)
                 } else {
                     inserted_tab = true;
                     let (id, label) = tabs.new_tab_label();
-                    tabs.insert(id.clone(), label.clone())?;
+                    tabs.insert(id.clone(), label.clone(), project_id.map(str::to_string))?;
                     (id, label)
                 }
             }
@@ -1764,6 +1771,7 @@ pub fn browser_storage_clear<R: Runtime>(
 pub fn browser_tab_list<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, BrowserState>,
+    project_id: Option<String>,
 ) -> CommandResult<Vec<BrowserTabMetadata>> {
     let tabs = state.tabs();
     prune_unavailable_dev_server_tabs(
@@ -1772,7 +1780,10 @@ pub fn browser_tab_list<R: Runtime>(
         &state.dev_server_monitor,
         DEV_SERVER_LIVENESS_CONNECT_TIMEOUT,
     );
-    tabs.list()
+    tabs.activate_project(project_id.as_deref())?;
+    hide_inactive_webviews(&app, &tabs);
+    emit_tab_list(&app, &tabs);
+    tabs.list_for_project(project_id.as_deref())
 }
 
 #[tauri::command]
@@ -1780,8 +1791,10 @@ pub fn browser_tab_focus<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, BrowserState>,
     tab_id: String,
+    project_id: Option<String>,
 ) -> CommandResult<BrowserTabMetadata> {
     let tabs = state.tabs();
+    tabs.tab_label_for_project(&tab_id, project_id.as_deref())?;
     tabs.set_active(&tab_id)?;
     hide_inactive_webviews(&app, &tabs);
     emit_tab_list(&app, &tabs);
@@ -1793,10 +1806,16 @@ pub fn browser_tab_close<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, BrowserState>,
     tab_id: String,
+    project_id: Option<String>,
 ) -> CommandResult<Vec<BrowserTabMetadata>> {
     let tabs = state.tabs();
+    tabs.tab_label_for_project(&tab_id, project_id.as_deref())?;
     state.dev_server_monitor.cancel(&tab_id);
-    close_browser_tab(&app, &tabs, &tab_id)
+    close_browser_tab(&app, &tabs, &tab_id)?;
+    tabs.activate_project(project_id.as_deref())?;
+    hide_inactive_webviews(&app, &tabs);
+    emit_tab_list(&app, &tabs);
+    tabs.list_for_project(project_id.as_deref())
 }
 
 fn close_browser_tab<R: Runtime>(
@@ -2084,6 +2103,7 @@ fn current_tab_meta(tabs: &BrowserTabs, id: &str) -> BrowserTabMetadata {
         .and_then(|list| list.into_iter().find(|tab| tab.id == id))
         .unwrap_or(BrowserTabMetadata {
             id: id.to_string(),
+            project_id: tabs.tab_project_id(id),
             label: tab_label_for_id(id),
             title: None,
             url: None,
@@ -2482,7 +2502,8 @@ mod tests {
     fn tab_metadata_roundtrip() {
         let tabs = BrowserTabs::new();
         let (id, label) = tabs.new_tab_label();
-        tabs.insert(id.clone(), label.clone()).unwrap();
+        tabs.insert(id.clone(), label.clone(), Some("project-a".to_string()))
+            .unwrap();
         tabs.record_page_state(
             &id,
             Some("https://example.com/".to_string()),
@@ -2492,6 +2513,7 @@ mod tests {
         let list = tabs.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, id);
+        assert_eq!(list[0].project_id.as_deref(), Some("project-a"));
         assert_eq!(list[0].url.as_deref(), Some("https://example.com/"));
         assert_eq!(tabs.url_by_id(&id).as_deref(), Some("https://example.com/"));
         assert!(list[0].active);
@@ -2502,12 +2524,66 @@ mod tests {
         let tabs = BrowserTabs::new();
         let (id_a, label_a) = tabs.new_tab_label();
         let (id_b, label_b) = tabs.new_tab_label();
-        tabs.insert(id_a.clone(), label_a).unwrap();
-        tabs.insert(id_b.clone(), label_b).unwrap();
+        tabs.insert(id_a.clone(), label_a, None).unwrap();
+        tabs.insert(id_b.clone(), label_b, None).unwrap();
         tabs.set_active(&id_b).unwrap();
         assert_eq!(tabs.active_tab_id().as_deref(), Some(id_b.as_str()));
         tabs.remove(&id_b).unwrap();
         assert_eq!(tabs.active_tab_id().as_deref(), Some(id_a.as_str()));
+    }
+
+    #[test]
+    fn tab_lists_and_active_tabs_are_project_scoped() {
+        let tabs = BrowserTabs::new();
+        let (project_a_first, project_a_first_label) = tabs.new_tab_label();
+        let (project_b, project_b_label) = tabs.new_tab_label();
+        let (project_a_second, project_a_second_label) = tabs.new_tab_label();
+        tabs.insert(
+            project_a_first.clone(),
+            project_a_first_label,
+            Some("project-a".to_string()),
+        )
+        .unwrap();
+        tabs.insert(
+            project_b.clone(),
+            project_b_label,
+            Some("project-b".to_string()),
+        )
+        .unwrap();
+        tabs.insert(
+            project_a_second.clone(),
+            project_a_second_label,
+            Some("project-a".to_string()),
+        )
+        .unwrap();
+
+        tabs.set_active(&project_a_second).unwrap();
+        assert_eq!(
+            tabs.list_for_project(Some("project-a"))
+                .unwrap()
+                .into_iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
+            vec![project_a_first.clone(), project_a_second.clone()],
+        );
+        assert_eq!(
+            tabs.list_for_project(Some("project-b"))
+                .unwrap()
+                .into_iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
+            vec![project_b.clone()],
+        );
+
+        tabs.set_active(&project_b).unwrap();
+        assert_eq!(tabs.active_tab_id().as_deref(), Some(project_b.as_str()));
+        tabs.activate_project(Some("project-a")).unwrap();
+        assert_eq!(
+            tabs.active_tab_id().as_deref(),
+            Some(project_a_second.as_str()),
+        );
+        tabs.activate_project(Some("project-b")).unwrap();
+        assert_eq!(tabs.active_tab_id().as_deref(), Some(project_b.as_str()));
     }
 
     #[test]
@@ -2552,7 +2628,8 @@ mod tests {
     fn dev_server_tab_snapshots_include_only_loopback_http_tabs() {
         let tabs = BrowserTabs::new();
         let (local_id, local_label) = tabs.new_tab_label();
-        tabs.insert(local_id.clone(), local_label).unwrap();
+        tabs.insert(local_id.clone(), local_label, Some("project-a".to_string()))
+            .unwrap();
         tabs.record_page_state(
             &local_id,
             Some("http://localhost:5173/dashboard".to_string()),
@@ -2560,7 +2637,12 @@ mod tests {
             Some(false),
         );
         let (remote_id, remote_label) = tabs.new_tab_label();
-        tabs.insert(remote_id.clone(), remote_label).unwrap();
+        tabs.insert(
+            remote_id.clone(),
+            remote_label,
+            Some("project-a".to_string()),
+        )
+        .unwrap();
         tabs.record_page_state(
             &remote_id,
             Some("https://example.com/".to_string()),
