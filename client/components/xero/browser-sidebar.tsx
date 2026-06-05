@@ -53,6 +53,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   normalizeLoopbackBrowserUrl,
@@ -513,6 +514,7 @@ export function BrowserSidebar({
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
   const [address, setAddress] = useState("")
+  const [addressSuggestionsOpen, setAddressSuggestionsOpen] = useState(false)
   const [tabs, setTabs] = useState<BrowserTabMeta[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -750,6 +752,7 @@ export function BrowserSidebar({
     () => projectBrowserTargets.filter((target) => projectBrowserTargetLiveness[target.id] === true),
     [projectBrowserTargetLiveness, projectBrowserTargets],
   )
+  const showAddressProjectSuggestions = addressSuggestionsOpen && liveProjectBrowserTargets.length > 0
   const isCheckingProjectBrowserTargets =
     projectBrowserTargets.length > 0 &&
     projectBrowserTargets.some((target) => !(target.id in projectBrowserTargetLiveness))
@@ -1578,6 +1581,7 @@ export function BrowserSidebar({
 
   const handleOpenProjectBrowserTarget = useCallback(
     async (target: BrowserLaunchTarget) => {
+      setAddressSuggestionsOpen(false)
       const running = await checkProjectBrowserTargetRunning(target)
       if (!running) {
         markProjectBrowserTargetUnavailable(target)
@@ -1804,23 +1808,64 @@ export function BrowserSidebar({
             <FolderGit2 className="h-3.5 w-3.5" />
           </button>
         )}
-        <form className="ml-1 flex min-w-0 flex-1" onSubmit={handleSubmit}>
-          <input
-            aria-label="Address"
-            className="h-7 w-full min-w-0 rounded-md border border-border/70 bg-background/40 px-2 text-[11.5px] text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none"
-            onBlur={() => {
-              addressFocusedRef.current = false
-            }}
-            onChange={(event) => setAddress(event.target.value)}
-            onFocus={(event) => {
-              addressFocusedRef.current = true
-              event.currentTarget.select()
-            }}
-            placeholder="Search or enter URL"
-            type="text"
-            value={address}
-          />
-        </form>
+        <Popover open={showAddressProjectSuggestions} onOpenChange={setAddressSuggestionsOpen}>
+          <PopoverAnchor asChild>
+            <form className="ml-1 flex min-w-0 flex-1" onSubmit={handleSubmit}>
+              <input
+                aria-label="Address"
+                autoCapitalize="none"
+                autoComplete="off"
+                autoCorrect="off"
+                className="h-7 w-full min-w-0 rounded-md border border-border/70 bg-background/40 px-2 text-[11.5px] text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none"
+                onBlur={() => {
+                  addressFocusedRef.current = false
+                  setAddressSuggestionsOpen(false)
+                }}
+                onChange={(event) => {
+                  setAddress(event.target.value)
+                  setAddressSuggestionsOpen(true)
+                }}
+                onFocus={(event) => {
+                  addressFocusedRef.current = true
+                  setAddressSuggestionsOpen(true)
+                  event.currentTarget.select()
+                }}
+                placeholder="Search or enter URL"
+                spellCheck={false}
+                type="text"
+                value={address}
+              />
+            </form>
+          </PopoverAnchor>
+          <PopoverContent
+            align="start"
+            aria-label="Project app suggestions"
+            className="w-[min(380px,var(--radix-popover-trigger-width))] p-1"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            sideOffset={6}
+          >
+            <div className="space-y-0.5">
+              {liveProjectBrowserTargets.map((target) => (
+                <button
+                  key={target.id}
+                  aria-label={`Open ${target.label}`}
+                  className="flex w-full min-w-0 flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                  onClick={() => {
+                    void handleOpenProjectBrowserTarget(target)
+                  }}
+                  onMouseDown={(event) => event.preventDefault()}
+                  type="button"
+                >
+                  <span className="max-w-full truncate text-[12px]">{target.label}</span>
+                  <span className="max-w-full truncate font-mono text-[10.5px] text-muted-foreground">
+                    {target.url}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
         {isDevTab ? (
           <div
             className="ml-1 flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/40 px-0.5"

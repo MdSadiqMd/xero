@@ -52,6 +52,8 @@ describe('ActionPromptCard', () => {
     fireEvent.click(submit)
 
     expect(resolveActionPrompt).toHaveBeenCalledWith('question-1', 'approve', {
+      actionType: 'short_text_required',
+      runId: null,
       userAnswer: 'Plan the runtime handoff',
     })
   })
@@ -71,6 +73,8 @@ describe('ActionPromptCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Large/ }))
 
     expect(resolveActionPrompt).toHaveBeenCalledWith('question-1', 'approve', {
+      actionType: 'single_choice_required',
+      runId: null,
       userAnswer: 'large',
     })
   })
@@ -112,7 +116,25 @@ describe('ActionPromptCard', () => {
     fireEvent.click(approve)
 
     expect(resolveActionPrompt).toHaveBeenCalledWith('question-1', 'approve', {
+      actionType: 'sensitive_input_request',
+      runId: null,
       userAnswer: JSON.stringify({ api_key: 'sk-live-secret-value' }),
+    })
+  })
+
+  it('passes run context through prompt decisions', () => {
+    const { resolveActionPrompt } = renderPrompt({
+      runId: 'run-owned',
+      actionType: 'safety_boundary',
+      shape: 'plain_text',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(resolveActionPrompt).toHaveBeenCalledWith('question-1', 'approve', {
+      actionType: 'safety_boundary',
+      runId: 'run-owned',
+      userAnswer: '',
     })
   })
 })

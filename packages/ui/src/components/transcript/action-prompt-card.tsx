@@ -28,7 +28,7 @@ export interface ActionPromptDispatchValue {
   resolveActionPrompt: (
     actionId: string,
     decision: ActionPromptDecision,
-    options?: { userAnswer?: string | null },
+    options?: { userAnswer?: string | null; runId?: string | null; actionType?: string | null },
   ) => Promise<unknown> | void
 }
 
@@ -54,6 +54,7 @@ function useActionPromptDispatch(): ActionPromptDispatchValue | null {
 
 interface ActionPromptCardProps {
   actionId: string
+  runId?: string | null
   actionType: string
   title: string
   detail: string
@@ -67,6 +68,7 @@ interface ActionPromptCardProps {
 
 export function ActionPromptCard({
   actionId,
+  runId = null,
   actionType: _actionType,
   title,
   detail,
@@ -128,7 +130,11 @@ export function ActionPromptCard({
           options={options}
           disabled={isLockedOut || !dispatch}
           onPick={(optionId) =>
-            dispatch?.resolveActionPrompt(actionId, 'approve', { userAnswer: optionId })
+            dispatch?.resolveActionPrompt(actionId, 'approve', {
+              userAnswer: optionId,
+              runId,
+              actionType: _actionType,
+            })
           }
         />
       ) : null}
@@ -142,6 +148,8 @@ export function ActionPromptCard({
           onSubmit={(optionIds) =>
             dispatch?.resolveActionPrompt(actionId, 'approve', {
               userAnswer: JSON.stringify(optionIds),
+              runId,
+              actionType: _actionType,
             })
           }
         />
@@ -156,9 +164,16 @@ export function ActionPromptCard({
           onApprove={(values) =>
             dispatch?.resolveActionPrompt(actionId, 'approve', {
               userAnswer: JSON.stringify(values),
+              runId,
+              actionType: _actionType,
             })
           }
-          onReject={() => dispatch?.resolveActionPrompt(actionId, 'reject')}
+          onReject={() =>
+            dispatch?.resolveActionPrompt(actionId, 'reject', {
+              runId,
+              actionType: _actionType,
+            })
+          }
         />
       ) : null}
 
@@ -175,9 +190,18 @@ export function ActionPromptCard({
           shape={shape}
           disabled={isLockedOut || !dispatch}
           onApprove={(value) =>
-            dispatch?.resolveActionPrompt(actionId, 'approve', { userAnswer: value })
+            dispatch?.resolveActionPrompt(actionId, 'approve', {
+              userAnswer: value,
+              runId,
+              actionType: _actionType,
+            })
           }
-          onReject={() => dispatch?.resolveActionPrompt(actionId, 'reject')}
+          onReject={() =>
+            dispatch?.resolveActionPrompt(actionId, 'reject', {
+              runId,
+              actionType: _actionType,
+            })
+          }
         />
       )}
     </div>

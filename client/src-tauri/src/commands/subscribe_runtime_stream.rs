@@ -254,7 +254,7 @@ fn runtime_item_reopens_terminal_stream(item: &RuntimeStreamItemDto) -> bool {
         | RuntimeStreamItemKind::ActionRequired
         | RuntimeStreamItemKind::Plan
         | RuntimeStreamItemKind::SubagentLifecycle => true,
-        RuntimeStreamItemKind::Activity => is_reasoning_activity_item(item),
+        RuntimeStreamItemKind::Activity => false,
         RuntimeStreamItemKind::Complete | RuntimeStreamItemKind::Failure => false,
     }
 }
@@ -1827,9 +1827,7 @@ fn owned_agent_event_runtime_item(
         AgentRunEventKind::RunFailed => {
             let code = payload_string(&payload, "code");
             if code.as_deref() == Some("agent_run_cancelled") {
-                item.kind = RuntimeStreamItemKind::Activity;
-                item.code = Some("owned_agent_cancelled".into());
-                item.title = Some("Run cancelled".into());
+                item.kind = RuntimeStreamItemKind::Complete;
                 item.detail = payload_string(&payload, "message")
                     .or_else(|| Some("Owned agent run was cancelled.".into()));
                 item.text = item.detail.clone();
@@ -1851,7 +1849,10 @@ fn should_emit_owned_runtime_item(
     requested: &[RuntimeStreamItemKind],
     kind: &RuntimeStreamItemKind,
 ) -> bool {
-    kind == &RuntimeStreamItemKind::Failure || requested.contains(kind)
+    matches!(
+        kind,
+        RuntimeStreamItemKind::Complete | RuntimeStreamItemKind::Failure
+    ) || requested.contains(kind)
 }
 
 fn tool_started_detail(tool_name: Option<&str>, input: &serde_json::Value) -> Option<String> {
@@ -3656,6 +3657,65 @@ mod tests {
             RuntimeStreamViewStatusDto::Live
         );
         assert!(reopened_patch.snapshot.completion.is_none());
+    }
+
+    #[test]
+    fn runtime_stream_projection_keeps_cancelled_run_terminal_after_late_reasoning() {
+        let mut projection = RuntimeStreamProjection::new(projection_context());
+
+        let cancelled = owned_agent_event_runtime_item(
+            event_with_id(
+                1,
+                AgentRunEventKind::RunFailed,
+                r#"{"code":"agent_run_cancelled","message":"Owned agent run was cancelled.","state":"blocked","stopReason":"cancelled"}"#,
+            ),
+            "owned-agent:run-1",
+            None,
+        )
+        .expect("cancelled run item");
+        let cancelled_patch = projection.apply_item(cancelled);
+
+        assert_eq!(
+            cancelled_patch.snapshot.status,
+            RuntimeStreamViewStatusDto::Complete
+        );
+        assert_eq!(
+            cancelled_patch
+                .snapshot
+                .completion
+                .as_ref()
+                .map(|item| item.detail.as_deref()),
+            Some(Some("Owned agent run was cancelled."))
+        );
+
+        let late_reasoning = owned_agent_event_runtime_item(
+            event_with_id(
+                2,
+                AgentRunEventKind::ReasoningSummary,
+                r#"{"summary":"Considering next steps"}"#,
+            ),
+            "owned-agent:run-1",
+            None,
+        )
+        .expect("late reasoning item");
+        let reasoning_patch = projection.apply_item(late_reasoning);
+
+        assert_eq!(
+            reasoning_patch.snapshot.status,
+            RuntimeStreamViewStatusDto::Complete
+        );
+        assert_eq!(
+            reasoning_patch
+                .snapshot
+                .completion
+                .as_ref()
+                .map(|item| item.sequence),
+            Some(1)
+        );
+        assert!(reasoning_patch.snapshot.items.iter().any(|item| {
+            item.code.as_deref() == Some(OWNED_AGENT_REASONING_ACTIVITY_CODE)
+                && item.text.as_deref() == Some("Considering next steps")
+        }));
     }
 
     #[test]

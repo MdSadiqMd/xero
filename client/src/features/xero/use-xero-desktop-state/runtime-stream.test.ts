@@ -813,6 +813,32 @@ describe('runtime stream event coalescing', () => {
     ])
   })
 
+  it('keeps terminal completion when late reasoning arrives after cancellation', () => {
+    const stream = mergeRuntimeStreamEvents(makeRuntimeStream(), [
+      makeRuntimeStreamEvent(1, {
+        kind: 'complete',
+        text: 'Owned agent run was cancelled.',
+        detail: 'Owned agent run was cancelled.',
+      }),
+      makeReasoningRuntimeStreamEvent(2, 'Considering next steps'),
+    ])
+
+    expect(stream?.status).toBe('complete')
+    expect(stream?.completion).toMatchObject({
+      sequence: 1,
+      detail: 'Owned agent run was cancelled.',
+    })
+    expect(stream?.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'activity',
+          code: 'owned_agent_reasoning',
+          text: 'Considering next steps',
+        }),
+      ]),
+    )
+  })
+
   it('does not merge assistant transcript deltas across intervening tool calls', () => {
     const stream = mergeRuntimeStreamEvents(makeRuntimeStream(), [
       makeRuntimeStreamEvent(1, { text: 'Before the tool. ' }),

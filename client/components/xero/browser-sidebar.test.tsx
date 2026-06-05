@@ -582,6 +582,53 @@ describe("BrowserSidebar", () => {
     })
   })
 
+  it("opens a detected project app from the address bar suggestions", async () => {
+    registerInvoke("browser_tab_list", async () => [])
+    registerInvoke("browser_dev_server_running", async () => true)
+    const shownUrls: string[] = []
+    registerInvoke("browser_show", async (args) => {
+      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      return {
+        id: "tab-1",
+        label: "xero-browser-tab-1",
+        title: null,
+        url: String((args as { url?: string })?.url ?? ""),
+        loading: true,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      }
+    })
+
+    render(
+      <BrowserSidebar
+        open
+        projectBrowserTargets={[
+          {
+            id: "browser-app:http://127.0.0.1:5173/",
+            label: "web · localhost:5173",
+            url: "http://127.0.0.1:5173/",
+            source: "web",
+            detectedAt: 1,
+          },
+        ]}
+      />,
+    )
+
+    const input = (await screen.findByLabelText("Address")) as HTMLInputElement
+    await waitFor(() => {
+      expect(invokeCalls.some((call) => call.command === "browser_dev_server_running")).toBe(true)
+    })
+    expect(input).toHaveAttribute("autocomplete", "off")
+
+    fireEvent.focus(input)
+    fireEvent.click(await screen.findByRole("button", { name: /Open web .*localhost:5173/ }))
+
+    await waitFor(() => {
+      expect(shownUrls).toEqual(["http://127.0.0.1:5173/"])
+    })
+  })
+
   it("disables project app navigation when its dev server liveness probe fails", async () => {
     registerInvoke("browser_tab_list", async () => [])
     registerInvoke("browser_dev_server_running", async () => false)

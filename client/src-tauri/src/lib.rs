@@ -364,6 +364,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::agent_task::start_agent_task,
             commands::agent_task::send_agent_message,
             commands::agent_task::cancel_agent_run,
+            commands::agent_task::reject_agent_action,
             commands::agent_task::resume_agent_run,
             commands::agent_task::get_agent_run,
             commands::agent_task::export_agent_trace,

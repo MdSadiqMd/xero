@@ -11,8 +11,8 @@ use crate::{
         AgentRunEventDto, AgentRunEventKindDto, AgentRunStatusDto, AgentTraceExportDto,
         CancelAgentRunRequestDto, CommandError, CommandResult, ExportAgentTraceRequestDto,
         GetAgentRunRequestDto, ListAgentRunsRequestDto, ListAgentRunsResponseDto,
-        ResumeAgentRunRequestDto, SendAgentMessageRequestDto, StartAgentTaskRequestDto,
-        SubscribeAgentStreamRequestDto, SubscribeAgentStreamResponseDto,
+        RejectAgentActionRequestDto, ResumeAgentRunRequestDto, SendAgentMessageRequestDto,
+        StartAgentTaskRequestDto, SubscribeAgentStreamRequestDto, SubscribeAgentStreamResponseDto,
     },
     db::project_store,
     registry::read_registry,
@@ -23,6 +23,7 @@ use crate::{
     },
     state::DesktopState,
 };
+use xero_agent_core::ApprovalDecisionRequest;
 
 use super::runtime_support::{
     agent_provider_config_identity, ensure_owned_runtime_provider_turn_capabilities,
@@ -165,6 +166,38 @@ pub fn cancel_agent_run<R: Runtime>(
         repo_root,
         project_id,
         request.run_id,
+    )?))
+}
+
+#[tauri::command]
+pub fn reject_agent_action<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: RejectAgentActionRequestDto,
+) -> CommandResult<AgentRunDto> {
+    validate_non_empty(&request.run_id, "runId")?;
+    validate_non_empty(&request.action_id, "actionId")?;
+    let response = request
+        .response
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let LocatedAgentRun {
+        repo_root,
+        project_id,
+        ..
+    } = locate_agent_run(&app, state.inner(), &request.run_id)?;
+    ensure_agent_run_not_active(state.inner(), &request.run_id)?;
+    let runtime = DesktopAgentCoreRuntime::new(state.inner().agent_run_supervisor().clone());
+    Ok(agent_run_dto(runtime.reject_action(
+        repo_root,
+        ApprovalDecisionRequest {
+            project_id,
+            run_id: request.run_id,
+            action_id: request.action_id,
+            response,
+        },
     )?))
 }
 

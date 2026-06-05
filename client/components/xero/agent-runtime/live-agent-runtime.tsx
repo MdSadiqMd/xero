@@ -99,6 +99,7 @@ export function useHistoricalConversationTurnsState(
   const agentSessionId = agent?.project.selectedAgentSessionId ?? null
   const sessionRevision = agent?.project.selectedAgentSession?.updatedAt ?? null
   const runtimeRun = agent?.runtimeRun ?? null
+  const runtimeRunIsTerminal = Boolean(runtimeRun?.isTerminal)
   const activeRunId = runtimeRun && !runtimeRun.isTerminal ? runtimeRun.runId : null
   const getSessionTranscript = desktopAdapter?.getSessionTranscript
   const [turnsByKey, setTurnsByKey] = useState<{
@@ -110,9 +111,10 @@ export function useHistoricalConversationTurnsState(
   const shouldDeferTranscriptFetch = Boolean(
     agent?.runtimeRunActionStatus === 'running' ||
       agent?.selectedPrompt?.hasQueuedPrompt ||
-      streamStatus === 'subscribing' ||
-      streamStatus === 'replaying' ||
-      streamStatus === 'live',
+      (!runtimeRunIsTerminal &&
+        (streamStatus === 'subscribing' ||
+          streamStatus === 'replaying' ||
+          streamStatus === 'live')),
   )
 
   // Keying on (project, session, run) covers the same-type handoff case: when

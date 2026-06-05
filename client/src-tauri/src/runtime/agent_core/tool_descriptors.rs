@@ -707,7 +707,9 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
             "",
             "Persistence and retrieval contract: Xero keeps durable project context behind read-only `project_context_search` and `project_context_get` actions instead of preloading raw memory or project records. Read context before prior-work-sensitive questions. Durable-context writes are not part of Ask's default surface; a user-requested note requires a separate approved context-write action when Xero exposes one.",
             "",
-            "When the user asks for implementation while Ask is selected, explain what would need to change and offer a concise plan, but do not perform the work or claim that you changed, ran, installed, deployed, opened, or approved anything.",
+            "Prompt-first routing preference: before the first tool call on each new user prompt, classify the request from the user's wording. If the prompt clearly asks for code changes, implementation, fixes, commands, tests, verification, running/building/deploying, or other mutation, strongly prefer an immediate routing suggestion to `engineer` instead of spending observe-only tool calls to confirm. This is a preference, not a hard gate: stay in Ask when the user explicitly wants read-only guidance, declines a route, asks you not to switch, or when the request is ambiguous enough that light inspection is needed to answer or choose a target.",
+            "",
+            "When the user asks for implementation while Ask is selected and you remain in Ask, explain what would need to change and offer a concise read-only plan, but do not perform the work or claim that you changed, ran, installed, deployed, opened, or approved anything.",
             "",
             "Routing-suggestion contract: when the next useful step is outside Ask's observe-only answer boundary, emit this marker as a single line before any other content:",
             "",
@@ -1379,7 +1381,7 @@ fn tool_policy_fragment(
         tool_application_prompt_section(runtime_agent_id, tool_application_policy, tools);
     match runtime_agent_id {
         RuntimeAgentIdDto::Ask => format!(
-            "Available observe-only tools: {tool_names}\n\nUse tools only to inspect project information needed to answer. Use `project_context_search` and `project_context_get` to read durable context; Ask's default surface does not expose durable-context writes. If the user explicitly asks to save a note, use only an approved context-write action when Xero exposes one for this turn. `tool_search` and `tool_access` are filtered to Ask-safe observe-only capabilities; do not ask for repo mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
+            "Available observe-only tools: {tool_names}\n\nBefore calling any observe-only tool, do prompt-first routing triage. If the user's wording already makes the next useful step outside Ask's read-only boundary, prefer emitting the routing marker instead of inspecting first. Use tools only to inspect project information needed to answer or to disambiguate whether Ask should stay active. Use `project_context_search` and `project_context_get` to read durable context; Ask's default surface does not expose durable-context writes. If the user explicitly asks to save a note, use only an approved context-write action when Xero exposes one for this turn. `tool_search` and `tool_access` are filtered to Ask-safe observe-only capabilities; do not ask for repo mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::ComputerUse => format!(
             "Available Computer Use tools: {tool_names}\n\nUse the smallest appropriate tool or tool group for the user's task, and follow each tool's schema, risk class, approval flow, and output contract. Prefer structured browser tools for browser tasks, command/process tools for shellable or process tasks, native desktop structured actions for app UI, and pointer/pixel input only when no more precise tool fits. Prefer observe/read actions before state-changing actions when context is missing. Use `tool_search` and `tool_access` to activate additional Computer Use capabilities when the current tool list is insufficient.{browser_control_guidance}"
@@ -5335,7 +5337,11 @@ fn command_schema() -> JsonValue {
             ),
             (
                 "timeoutMs",
-                integer_schema("Optional timeout in milliseconds."),
+                bounded_integer_schema(
+                    "Optional timeout in milliseconds. Must be between 1 and 60000.",
+                    1,
+                    Some(60_000),
+                ),
             ),
         ],
     )
@@ -9136,6 +9142,10 @@ mod tests {
         let ask = base_policy_fragment(RuntimeAgentIdDto::Ask);
         assert!(ask.contains("<xero-routing-suggestion target=\"generalist|plan|engineer|debug\""));
         assert!(ask.contains("answer-only questions stay in Ask"));
+        assert!(ask.contains("Prompt-first routing preference"));
+        assert!(ask.contains("before the first tool call"));
+        assert!(ask.contains("strongly prefer an immediate routing suggestion to `engineer`"));
+        assert!(ask.contains("This is a preference, not a hard gate"));
 
         let plan = base_policy_fragment(RuntimeAgentIdDto::Plan);
         assert!(plan.contains("<xero-routing-suggestion target=\"engineer\""));
@@ -9161,6 +9171,22 @@ mod tests {
                 runtime_agent_id.label()
             );
         }
+    }
+
+    #[test]
+    fn ask_tool_policy_keeps_routing_triage_before_observe_only_tools() {
+        let policy = resolved_tool_application_policy(AgentToolApplicationStyleDto::Balanced);
+        let prompt = tool_policy_fragment(
+            RuntimeAgentIdDto::Ask,
+            BrowserControlPreferenceDto::Default,
+            &policy,
+            &[],
+        );
+
+        assert!(prompt.contains("Before calling any observe-only tool"));
+        assert!(prompt.contains("do prompt-first routing triage"));
+        assert!(prompt.contains("prefer emitting the routing marker instead of inspecting first"));
+        assert!(prompt.contains("to disambiguate whether Ask should stay active"));
     }
 
     #[test]

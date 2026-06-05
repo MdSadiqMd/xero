@@ -900,6 +900,92 @@ describe('AgentRuntime current UI', () => {
     ).toBe(true)
   })
 
+  it('routes owned-agent action approvals through resumeAgentRun', async () => {
+    const resumeAgentRun = vi.fn(async () => ({}))
+    const resolveOperatorAction = vi.fn()
+
+    renderRuntimeStreamItems(
+      [
+        {
+          id: 'action_required:run-owned:tool-call-command',
+          kind: 'action_required',
+          runId: 'run-owned',
+          sequence: 1,
+          createdAt: '2026-06-05T03:40:29Z',
+          mediaAttachments: [],
+          actionId: 'tool-call-command',
+          boundaryId: null,
+          actionType: 'safety_boundary',
+          title: 'Action required',
+          detail: 'Xero requires command timeout_ms to be between 1 and 60000.',
+          answerShape: 'plain_text',
+          options: null,
+          allowMultiple: null,
+          sensitiveFields: null,
+          intendedUse: null,
+        },
+      ],
+      {
+        desktopAdapter: {
+          isDesktopRuntime: () => false,
+          resumeAgentRun,
+        } as unknown as AgentRuntimeDesktopAdapter,
+        onResolveOperatorAction: resolveOperatorAction,
+      },
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+    await waitFor(() => {
+      expect(resumeAgentRun).toHaveBeenCalledWith('run-owned', 'Approved.')
+    })
+    expect(resolveOperatorAction).not.toHaveBeenCalled()
+  })
+
+  it('routes owned-agent action rejections through rejectAgentAction', async () => {
+    const rejectAgentAction = vi.fn(async () => ({}))
+    const resolveOperatorAction = vi.fn()
+
+    renderRuntimeStreamItems(
+      [
+        {
+          id: 'action_required:run-owned:tool-call-command',
+          kind: 'action_required',
+          runId: 'run-owned',
+          sequence: 1,
+          createdAt: '2026-06-05T03:40:29Z',
+          mediaAttachments: [],
+          actionId: 'tool-call-command',
+          boundaryId: null,
+          actionType: 'command_approval',
+          title: 'Command requires review',
+          detail: 'pnpm test',
+          answerShape: 'plain_text',
+          options: null,
+          allowMultiple: null,
+          sensitiveFields: null,
+          intendedUse: null,
+        },
+      ],
+      {
+        desktopAdapter: {
+          isDesktopRuntime: () => false,
+          rejectAgentAction,
+        } as unknown as AgentRuntimeDesktopAdapter,
+        onResolveOperatorAction: resolveOperatorAction,
+      },
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+
+    await waitFor(() => {
+      expect(rejectAgentAction).toHaveBeenCalledWith('run-owned', 'tool-call-command', {
+        response: null,
+      })
+    })
+    expect(resolveOperatorAction).not.toHaveBeenCalled()
+  })
+
   it('hides the autonomous ledger and remote-escalation debug panels', () => {
     render(
       <AgentRuntime
@@ -1114,6 +1200,58 @@ describe('AgentRuntime current UI', () => {
       }),
     )
     await waitFor(() => expect(input).toHaveValue(''))
+  })
+
+  it('dedupes saved run failures already shown as inline stream failures', () => {
+    const editMismatchMessage = [
+      'Xero refused to apply the edit because the requested line range no longer matches the expected text. Current nearby lines and line hashes:',
+      'line 7: sha256=f384a560ae4d5337eccc7844047383cd9b8afad74c35d65301676e6773de3fe9 text=  return (',
+      'line 8: sha256=51b63f46864891fca6e8af4f5c5f78d77fbcda83dcecbafee76869668ee14b6a text=    <div className={`flex items-center gap-2 ${className}`}>',
+      'line 18: sha256=e42f34a1ebe32187b57c9999dcb58c0cb0399939f8f0a26886acb8f8857c8589 text=        <span className="font-display text-lg font-bold tracking-tight text-foreground">',
+    ].join('\n')
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            status: 'failed',
+            statusLabel: 'Agent failed',
+            runtimeLabel: 'OpenAI Codex · Agent failed',
+            isActive: false,
+            isTerminal: true,
+            isFailed: true,
+            stoppedAt: '2026-04-29T00:48:02Z',
+            lastErrorCode: 'autonomous_tool_edit_expected_text_mismatch',
+            lastError: {
+              code: 'autonomous_tool_edit_expected_text_mismatch',
+              message: editMismatchMessage,
+            },
+          }),
+          runtimeStreamStatus: 'error',
+          runtimeStreamStatusLabel: 'Stream failed',
+          runtimeStreamItems: [
+            {
+              id: 'failure:run-1:4',
+              kind: 'failure',
+              runId: 'run-1',
+              sequence: 4,
+              createdAt: '2026-04-29T00:48:04Z',
+              mediaAttachments: [],
+              code: 'autonomous_tool_edit_expected_text_mismatch',
+              message: editMismatchMessage,
+              retryable: false,
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Edit could not be applied')).toBeVisible()
+    expect(screen.getByText(/The edit tool could not apply the patch/)).toBeVisible()
+    expect(screen.getByText('code: autonomous_tool_edit_expected_text_mismatch')).toBeVisible()
+    expect(screen.queryByText('Latest saved run failed')).not.toBeInTheDocument()
+    expect(screen.queryByText(/line 18: sha256/)).not.toBeInTheDocument()
   })
 
   it('shows a handoff notice when the runtime stream completion reports a same-type handoff', () => {
@@ -2225,6 +2363,91 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByRole('button', { name: 'Copy agent response' })).not.toBeInTheDocument()
   })
 
+  it('labels the routing decline action with the active agent', () => {
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, role: 'user', text: 'Replace the header logo.' }),
+      makeTranscriptItem({
+        sequence: 3,
+        role: 'assistant',
+        text: [
+          'This needs an edit, so Engineer would handle it better.',
+          '<xero-routing-suggestion target="engineer" reason="Request needs a code edit" summary="Update the header logo implementation."/>',
+        ].join('\n\n'),
+      }),
+    ])
+
+    expect(screen.getByText('This task may be better suited for the Engineer agent')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Switch to Engineer' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Continue with Ask' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Continue with Agent' })).not.toBeInTheDocument()
+  })
+
+  it('does not render a stale resolved duplicate routing suggestion before the user chooses', () => {
+    const staleContinuationPrompt = [
+      'The user chose to stay with the current Agent instead of switching to Engineer.',
+      'Continue the original request now. Do not stop at another routing recommendation for this same request.',
+      'Carry over: Update the header logo implementation.',
+      'Routing reason: Request needs a code edit',
+    ].join('\n\n')
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun({
+            status: 'stopped',
+            statusLabel: 'Stopped',
+            isActive: false,
+            isTerminal: true,
+            stoppedAt: '2026-06-02T19:00:00Z',
+          }),
+          runtimeStreamStatus: 'complete',
+          runtimeStreamStatusLabel: 'Complete',
+          selectedPrompt: {
+            text: staleContinuationPrompt,
+            queuedAt: '2026-06-02T19:00:01Z',
+            hasQueuedPrompt: true,
+          },
+          runtimeStreamItems: [
+            makeTranscriptItem({ sequence: 2, role: 'user', text: 'Replace the header logo.' }),
+            makeTranscriptItem({
+              sequence: 3,
+              role: 'assistant',
+              text: [
+                'This needs an edit, so Engineer would handle it better.',
+                '<xero-routing-suggestion target="engineer" reason="Request needs a code edit" summary="Update the header logo implementation."/>',
+              ].join('\n\n'),
+            }),
+          ],
+        })}
+        historicalConversationTurns={[
+          {
+            id: 'routing_suggestion:history:run-1:3',
+            kind: 'routing_suggestion',
+            sequence: 3.5,
+            targetKind: 'built_in',
+            targetAgentId: 'engineer',
+            targetAgentDefinitionId: null,
+            targetAgentDefinitionVersion: null,
+            targetLabel: null,
+            reason: 'Request needs a code edit',
+            summary: 'Update the header logo implementation.',
+            isResolved: true,
+            acceptedTarget: null,
+            acceptedTargetAgentDefinitionId: null,
+            acceptedTargetLabel: null,
+            routingResolutionMode: 'manual',
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.getAllByText('This task may be better suited for the Engineer agent')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Switch to Engineer' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Continue with Ask' })).toBeVisible()
+    expect(screen.queryByText('Continued with Ask.')).not.toBeInTheDocument()
+  })
+
   it('copies visible routing choice context from the bottom response', async () => {
     const writeText = installClipboardWriteMock()
     renderRuntimeStreamItems([
@@ -2302,7 +2525,7 @@ describe('AgentRuntime current UI', () => {
     ).not.toBeInTheDocument()
     expect(screen.queryByText(routingSummary)).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue with Agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Ask' }))
 
     await waitFor(() => expect(onStartRuntimeRun).toHaveBeenCalledTimes(1))
     const request = onStartRuntimeRun.mock.calls[0]?.[0]
@@ -2310,7 +2533,7 @@ describe('AgentRuntime current UI', () => {
     expect(request?.prompt).toContain('instead of switching to Ask')
     expect(request?.prompt).toContain('Do not stop at another routing recommendation')
     expect(request?.prompt).toContain(routingSummary)
-    await waitFor(() => expect(screen.getByText('Continued with Agent.')).toBeVisible())
+    await waitFor(() => expect(screen.getByText('Continued with Ask.')).toBeVisible())
     expect(screen.queryByText(/The user chose to stay with the current Agent/)).not.toBeInTheDocument()
 
     rerender(
@@ -2464,7 +2687,7 @@ describe('AgentRuntime current UI', () => {
     )
 
     const switchButton = screen.getByRole('button', { name: 'Switch to Ask' })
-    const continueButton = screen.getByRole('button', { name: 'Continue with Agent' })
+    const continueButton = screen.getByRole('button', { name: 'Continue with Ask' })
     expect(switchButton).toBeEnabled()
     expect(continueButton).toBeEnabled()
 
@@ -2533,7 +2756,7 @@ describe('AgentRuntime current UI', () => {
 
     const switchButton = screen.getByRole('button', { name: 'Switch to Ask' })
     expect(switchButton).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Continue with Agent' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Continue with Ask' })).toBeEnabled()
 
     fireEvent.click(switchButton)
 
@@ -2592,9 +2815,9 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    expect(screen.getByText('Continued with Agent.')).toBeVisible()
+    expect(screen.getByText('Continued with Ask.')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Switch to Ask' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Continue with Agent' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue with Ask' })).not.toBeInTheDocument()
     expect(screen.queryByText(/The user chose to stay with the current Agent/)).not.toBeInTheDocument()
   })
 
@@ -2637,7 +2860,7 @@ describe('AgentRuntime current UI', () => {
     expect(onUpdateRuntimeRunControls).not.toHaveBeenCalled()
     expect(onStartRuntimeRun).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Switch to Ask' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Continue with Agent' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Continue with Ask' })).toBeEnabled()
   })
 
   it('automatically switches agents and records the routing action when enabled', async () => {
@@ -2738,9 +2961,9 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    expect(screen.getByText('Continued with Agent.')).toBeVisible()
+    expect(screen.getByText('Continued with Ask.')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Switch to Ask' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Continue with Agent' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue with Ask' })).not.toBeInTheDocument()
     expect(screen.queryByText(/The user chose to stay with the current Agent/)).not.toBeInTheDocument()
   })
 
@@ -2795,7 +3018,7 @@ describe('AgentRuntime current UI', () => {
 
     expect(screen.getByText('Switched to Ask and continued.')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Switch to Ask' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Continue with Agent' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue with Ask' })).not.toBeInTheDocument()
     expect(screen.queryByText(/The user accepted the routing suggestion/)).not.toBeInTheDocument()
   })
 
@@ -3174,6 +3397,66 @@ describe('AgentRuntime current UI', () => {
 
     expect(within(conversation).getAllByText(submittedPrompt)).toHaveLength(1)
     expect(within(conversation).getByText(submittedPrompt)).toBe(promptRow)
+  })
+
+  it('keeps same-session conversation turns visible while a switched-agent run rebinds', () => {
+    const baseAgent = {
+      runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+      runtimeRun: makeRuntimeRun({
+        status: 'stopped',
+        statusLabel: 'Stopped',
+        isActive: false,
+        isTerminal: true,
+        stoppedAt: '2026-06-02T19:00:00Z',
+      }),
+      runtimeStreamStatus: 'complete' as const,
+      runtimeStreamStatusLabel: 'Complete',
+      runtimeStreamItems: [
+        makeTranscriptItem({
+          sequence: 1,
+          role: 'user',
+          text: 'Replace the header logo.',
+        }),
+        makeTranscriptItem({
+          sequence: 2,
+          role: 'assistant',
+          text: 'This task may be better suited for Engineer.',
+        }),
+      ],
+    }
+
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent(baseAgent)}
+      />,
+    )
+
+    expect(screen.getByText('Replace the header logo.')).toBeVisible()
+    expect(screen.getByText('This task may be better suited for Engineer.')).toBeVisible()
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          ...baseAgent,
+          runtimeRun: makeRuntimeRun({
+            runId: 'run-2',
+            status: 'running',
+            statusLabel: 'Agent running',
+            isActive: true,
+            isTerminal: false,
+          }),
+          runtimeStreamStatus: 'idle',
+          runtimeStreamStatusLabel: 'No live stream',
+          runtimeStreamItems: [],
+          selectedRuntimeAgentId: 'engineer',
+          selectedRuntimeAgentLabel: 'Engineer',
+        })}
+        historicalConversationTurnsLoading
+      />,
+    )
+
+    expect(screen.getByText('Replace the header logo.')).toBeVisible()
+    expect(screen.getByText('This task may be better suited for Engineer.')).toBeVisible()
   })
 
   it('anchors a follow-up prompt at the top when it starts a fresh run', async () => {

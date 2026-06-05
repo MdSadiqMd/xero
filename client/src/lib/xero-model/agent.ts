@@ -432,6 +432,14 @@ export const cancelAgentRunRequestSchema = z
   })
   .strict()
 
+export const rejectAgentActionRequestSchema = z
+  .object({
+    runId: z.string().trim().min(1),
+    actionId: z.string().trim().min(1),
+    response: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
 export const resumeAgentRunRequestSchema = z
   .object({
     runId: z.string().trim().min(1),
@@ -523,6 +531,7 @@ export type StartAgentTaskRequestDto = z.infer<typeof startAgentTaskRequestSchem
 export type AgentAutoCompactPreferenceDto = z.infer<typeof agentAutoCompactPreferenceSchema>
 export type SendAgentMessageRequestDto = z.infer<typeof sendAgentMessageRequestSchema>
 export type CancelAgentRunRequestDto = z.infer<typeof cancelAgentRunRequestSchema>
+export type RejectAgentActionRequestDto = z.infer<typeof rejectAgentActionRequestSchema>
 export type ResumeAgentRunRequestDto = z.infer<typeof resumeAgentRunRequestSchema>
 export type GetAgentRunRequestDto = z.infer<typeof getAgentRunRequestSchema>
 export type ExportAgentTraceRequestDto = z.infer<typeof exportAgentTraceRequestSchema>

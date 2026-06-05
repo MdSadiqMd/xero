@@ -88,6 +88,7 @@ import {
 } from './agent-runtime/composer-helpers'
 import {
   ActionPromptDispatchProvider,
+  type ActionPromptDecision,
   type ActionPromptDispatchValue,
 } from '@xero/ui/components/transcript/action-prompt-card'
 import {
@@ -153,6 +154,8 @@ export type AgentRuntimeDesktopAdapter = SpeechDictationAdapter &
       | 'getSessionTranscript'
       | 'stageAgentAttachment'
       | 'discardAgentAttachment'
+      | 'resumeAgentRun'
+      | 'rejectAgentAction'
       | 'getAgentHandoffContextSummary'
     >
   >
@@ -297,6 +300,13 @@ const STREAMING_TOOL_OUTPUT_MAX_CHARS = 24_000
 const CONTEXT_METER_REFRESH_IDLE_TIMEOUT_MS = 1200
 const CONTEXT_METER_REFRESH_FALLBACK_DELAY_MS = 220
 const CODE_EDIT_TOOL_NAMES = new Set(['edit', 'patch', 'write', 'apply_patch', 'notebook_edit'])
+const OWNED_AGENT_ACTION_PROMPT_TYPES = new Set([
+  'command_approval',
+  'review_plan',
+  'safety_boundary',
+  'subagent_resolution_required',
+  'verification_required',
+])
 
 export interface AgentPaneCloseState {
   hasRunningRun: boolean
@@ -541,6 +551,30 @@ function isCodeEditToolName(toolName: string): boolean {
   return CODE_EDIT_TOOL_NAMES.has(toolName)
 }
 
+function isOwnedAgentActionPrompt(
+  runId: string | null | undefined,
+  actionType: string | null | undefined,
+): boolean {
+  const normalizedRunId = runId?.trim()
+  const normalizedActionType = actionType?.trim()
+  return Boolean(
+    normalizedRunId &&
+      normalizedActionType &&
+      OWNED_AGENT_ACTION_PROMPT_TYPES.has(normalizedActionType),
+  )
+}
+
+function ownedAgentActionResponse(
+  decision: ActionPromptDecision,
+  userAnswer: string | null | undefined,
+): string | null {
+  const trimmed = userAnswer?.trim() ?? ''
+  if (trimmed.length > 0) {
+    return trimmed
+  }
+  return decision === 'approve' || decision === 'resume' ? 'Approved.' : null
+}
+
 function actionPromptTurnFromItem(item: RuntimeStreamActionRequiredItemView): ConversationTurn {
   const shape = item.answerShape ?? 'plain_text'
   return {
@@ -548,6 +582,7 @@ function actionPromptTurnFromItem(item: RuntimeStreamActionRequiredItemView): Co
     kind: 'action_prompt',
     sequence: item.sequence,
     actionId: item.actionId,
+    runId: item.runId,
     actionType: item.actionType,
     title: item.title,
     detail: item.detail,
@@ -1524,7 +1559,7 @@ function getConversationTurnRunIdFromId(id: string): string | null {
   if (toolMatch) {
     return toolMatch[1] ?? null
   }
-  const match = /^(?:transcript|history):(.+):[^:]+$/.exec(id)
+  const match = /^(?:transcript|history|activity):(.+):[^:]+$/.exec(id)
   return match?.[1] ?? null
 }
 
@@ -1776,6 +1811,37 @@ function conversationActionCovers(
   return candidateKeys.every((key) => coveringKeys.has(key))
 }
 
+function routingSuggestionsAreEquivalent(
+  left: Extract<ConversationTurn, { kind: 'routing_suggestion' }>,
+  right: Extract<ConversationTurn, { kind: 'routing_suggestion' }>,
+): boolean {
+  const leftRunId = getConversationTurnRunId(left)
+  const rightRunId = getConversationTurnRunId(right)
+  return (
+    Boolean(leftRunId && rightRunId && leftRunId === rightRunId) &&
+    Math.abs(left.sequence - right.sequence) <= 1 &&
+    left.targetKind === right.targetKind &&
+    left.targetAgentId === right.targetAgentId &&
+    left.targetAgentDefinitionId === right.targetAgentDefinitionId &&
+    left.targetAgentDefinitionVersion === right.targetAgentDefinitionVersion
+  )
+}
+
+function findEquivalentMergedRoutingSuggestionIndex(
+  mergedTurns: readonly ConversationTurn[],
+  candidateTurn: ConversationTurn,
+): number {
+  if (candidateTurn.kind !== 'routing_suggestion') {
+    return -1
+  }
+
+  return mergedTurns.findIndex(
+    (turn) =>
+      turn.kind === 'routing_suggestion' &&
+      routingSuggestionsAreEquivalent(turn, candidateTurn),
+  )
+}
+
 function isConversationTurnCoveredByTurns(
   candidateTurn: ConversationTurn,
   coveringTurns: readonly ConversationTurn[],
@@ -1838,6 +1904,16 @@ function mergeConversationTurnsByCurrentOrder({
   for (let currentIndex = 0; currentIndex < currentTurns.length; currentIndex += 1) {
     const currentTurn = currentTurns[currentIndex]
     if (previousIds.has(currentTurn.id)) {
+      continue
+    }
+
+    const equivalentRoutingIndex = findEquivalentMergedRoutingSuggestionIndex(
+      mergedTurns,
+      currentTurn,
+    )
+    if (equivalentRoutingIndex >= 0) {
+      mergedTurns[equivalentRoutingIndex] = currentTurn
+      previousIds.add(currentTurn.id)
       continue
     }
 
@@ -1922,9 +1998,11 @@ function useContinuousConversationTurns(
   {
     sessionKey,
     preserveDuringTransition,
+    preserveSameSession,
   }: {
     sessionKey: string
     preserveDuringTransition: boolean
+    preserveSameSession: boolean
   },
 ): ConversationTurn[] {
   const continuityRef = useRef<ConversationContinuitySnapshot | null>(null)
@@ -1940,7 +2018,7 @@ function useContinuousConversationTurns(
     const looksLikeRuntimeReset =
       missingPreviousTurnCount > 0 && (sharedTurnCount === 0 || sharedTurnCount <= 2)
     if (
-      preserveDuringTransition &&
+      (preserveDuringTransition || preserveSameSession) &&
       previous?.sessionKey === sessionKey &&
       previous.turns.length > 0 &&
       looksLikeRuntimeReset
@@ -1949,7 +2027,7 @@ function useContinuousConversationTurns(
     }
 
     return turns
-  }, [preserveDuringTransition, sessionKey, turns])
+  }, [preserveDuringTransition, preserveSameSession, sessionKey, turns])
 
   useEffect(() => {
     if (visibleTurns.length === 0 && !preserveDuringTransition) {
@@ -2386,6 +2464,12 @@ export const AgentRuntime = memo(function AgentRuntime({
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
   const renderableRuntimeRun = hasUsableRuntimeRunId(runtimeRun) ? runtimeRun : null
+  const currentAgentLabelForRouting =
+    renderableRuntimeRun?.controls?.active.runtimeAgentLabel.trim() ||
+    agent.runtimeRunActiveControls?.runtimeAgentLabel.trim() ||
+    renderableRuntimeRun?.controls?.selected.runtimeAgentLabel.trim() ||
+    agent.selectedRuntimeAgentLabel.trim() ||
+    getRuntimeAgentLabel(agent.selectedRuntimeAgentId)
   const hasIncompleteRuntimeRunPayload = Boolean(runtimeRun && !renderableRuntimeRun)
   const runtimeStream = agent.runtimeStream ?? null
   const streamStatus = agent.runtimeStreamStatus ?? runtimeStream?.status ?? 'idle'
@@ -2561,6 +2645,7 @@ export const AgentRuntime = memo(function AgentRuntime({
     {
       sessionKey: conversationContinuityKey,
       preserveDuringTransition: preserveConversationDuringRuntimeTransition,
+      preserveSameSession: historicalConversationTurnsLoading,
     },
   )
   const visibleTurnsWithPersistedRoutingResolutions = useMemo(
@@ -2572,8 +2657,16 @@ export const AgentRuntime = memo(function AgentRuntime({
       const selectedPromptDecision = selectedPromptText
         ? parseInternalRoutingContinuationPromptText(selectedPromptText)
         : null
+      const shouldApplySelectedPromptDecision = Boolean(
+        selectedPromptDecision &&
+          (
+            isQueueingRuntimePrompt ||
+            promptSubmissionPending ||
+            (renderableRuntimeRun && !renderableRuntimeRun.isTerminal)
+          ),
+      )
 
-      return selectedPromptDecision
+      return shouldApplySelectedPromptDecision && selectedPromptDecision
         ? applyRoutingContinuationDecision(persistedTurns, selectedPromptDecision, persistedTurns.length)
         : persistedTurns
     },
@@ -2581,6 +2674,9 @@ export const AgentRuntime = memo(function AgentRuntime({
       agent.selectedPrompt.hasQueuedPrompt,
       agent.selectedPrompt.text,
       continuousVisibleTurnsWithPendingPrompt,
+      isQueueingRuntimePrompt,
+      promptSubmissionPending,
+      renderableRuntimeRun,
     ],
   )
   const visibleTurnsWithPendingPrompt = useMemo(
@@ -3328,13 +3424,39 @@ export const AgentRuntime = memo(function AgentRuntime({
   )
   const promptInputLabel = controller.promptInputAvailable ? 'Agent input' : 'Agent input unavailable'
   const sendButtonLabel = controller.promptInputAvailable ? 'Send message' : 'Send message unavailable'
+  const [pendingOwnedAgentActionIntent, setPendingOwnedAgentActionIntent] = useState<{
+    actionId: string
+    kind: ActionPromptDecision
+  } | null>(null)
   const actionPromptDispatchValue = useMemo<ActionPromptDispatchValue>(() => {
-    const pendingOperatorIntent = controller.pendingOperatorIntent
+    const pendingOperatorIntent = pendingOwnedAgentActionIntent ?? controller.pendingOperatorIntent
     return {
       pendingActionId: pendingOperatorIntent?.actionId ?? null,
       pendingDecision: pendingOperatorIntent?.kind ?? null,
-      isResolving: agent.operatorActionStatus === 'running',
+      isResolving: agent.operatorActionStatus === 'running' || pendingOwnedAgentActionIntent !== null,
       resolveActionPrompt: async (actionId, decision, options) => {
+        const runId = options?.runId?.trim() ?? ''
+        const actionType = options?.actionType?.trim() ?? ''
+        if (isOwnedAgentActionPrompt(runId, actionType)) {
+          setPendingOwnedAgentActionIntent({ actionId, kind: decision })
+          try {
+            const response = ownedAgentActionResponse(decision, options?.userAnswer ?? null)
+            if (decision === 'reject') {
+              if (!desktopAdapter?.rejectAgentAction) {
+                throw new Error('Xero cannot reject this owned-agent action in the current runtime.')
+              }
+              return desktopAdapter.rejectAgentAction(runId, actionId, { response })
+            }
+            if (!desktopAdapter?.resumeAgentRun) {
+              throw new Error('Xero cannot resume this owned-agent action in the current runtime.')
+            }
+            return desktopAdapter.resumeAgentRun(runId, response ?? 'Approved.')
+          } finally {
+            setPendingOwnedAgentActionIntent((current) =>
+              current?.actionId === actionId && current.kind === decision ? null : current,
+            )
+          }
+        }
         if (decision === 'resume') {
           if (renderableRuntimeRun && !renderableRuntimeRun.isTerminal) {
             return controller.handleResumeLiveActionRequired(actionId, {
@@ -3355,7 +3477,9 @@ export const AgentRuntime = memo(function AgentRuntime({
     controller.handleResolveOperatorAction,
     controller.handleResumeOperatorRun,
     controller.handleResumeLiveActionRequired,
+    desktopAdapter,
     agent.operatorActionStatus,
+    pendingOwnedAgentActionIntent,
     renderableRuntimeRun,
   ])
   const isProviderLoggedIn = Boolean(
@@ -4414,6 +4538,7 @@ export const AgentRuntime = memo(function AgentRuntime({
                       streamCompletion={runtimeStream?.completion ?? null}
                       accountAvatarUrl={accountAvatarUrl}
                       accountLogin={accountLogin}
+                      currentAgentLabel={currentAgentLabelForRouting}
                       variant={isDense ? 'dense' : 'default'}
                       codeUndoStates={codeUndoStates}
                       returnSessionToHereStates={returnSessionToHereStates}

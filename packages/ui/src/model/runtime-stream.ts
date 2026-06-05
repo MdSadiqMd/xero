@@ -1279,7 +1279,7 @@ function shouldRuntimeStreamItemReopenTerminalStatus(item: RuntimeStreamViewItem
     case 'subagent_lifecycle':
       return true
     case 'activity':
-      return isReasoningActivityItem(item)
+      return false
     case 'complete':
     case 'failure':
       return false

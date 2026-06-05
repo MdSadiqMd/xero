@@ -174,6 +174,7 @@ export type ConversationTurn =
       kind: 'action_prompt'
       sequence: number
       actionId: string
+      runId?: string | null
       actionType: string
       title: string
       detail: string
@@ -276,6 +277,8 @@ export interface ConversationSectionProps {
   accountAvatarUrl?: string | null
   /** GitHub login for the signed-in user, used as alt text. */
   accountLogin?: string | null
+  /** Active run agent label used for routing-decline actions. */
+  currentAgentLabel?: string | null
   /** Visual density. `dense` collapses each turn into a single PTY-style line. */
   variant?: 'default' | 'dense'
   codeUndoStates?: Record<string, CodeUndoUiState>
@@ -441,15 +444,21 @@ function parseBrowserToolPromptContext(
   }
 }
 
-function visibleConversationCopyText(turns: readonly ConversationTurn[]): string {
+function visibleConversationCopyText(
+  turns: readonly ConversationTurn[],
+  currentAgentLabel?: string | null,
+): string {
   return turns
-    .flatMap((turn) => conversationTurnCopySections(turn))
+    .flatMap((turn) => conversationTurnCopySections(turn, currentAgentLabel))
     .map((section) => section.trim())
     .filter(Boolean)
     .join('\n\n')
 }
 
-function conversationTurnCopySections(turn: ConversationTurn): string[] {
+function conversationTurnCopySections(
+  turn: ConversationTurn,
+  currentAgentLabel?: string | null,
+): string[] {
   switch (turn.kind) {
     case 'message': {
       if (turn.role === 'user') {
@@ -494,12 +503,13 @@ function conversationTurnCopySections(turn: ConversationTurn): string[] {
         (turn.acceptedTarget ? getRuntimeAgentLabel(turn.acceptedTarget) : null)
 
       if (turn.isResolved) {
+        const displayCurrentAgentLabel = currentAgentLabel?.trim() || 'current agent'
         visibleLines.push(
           turn.acceptedTarget
             ? `${turn.routingResolutionMode === 'automatic' ? 'Auto-switched' : 'Switched'} to ${
                 resolvedTargetLabel ?? getRuntimeAgentLabel(turn.acceptedTarget)
               } and continued.`
-            : 'Continued with Agent.',
+            : `Continued with ${displayCurrentAgentLabel}.`,
         )
       }
 
@@ -529,6 +539,7 @@ export const ConversationSection = memo(function ConversationSection({
   streamCompletion = null,
   accountAvatarUrl = null,
   accountLogin = null,
+  currentAgentLabel = null,
   variant = 'default',
   codeUndoStates = {},
   returnSessionToHereStates = {},
@@ -553,9 +564,36 @@ export const ConversationSection = memo(function ConversationSection({
         streamFailure.code,
       )
     : null
+  const inlineFailureDuplicatesRunFailure = Boolean(
+    runFailureMessage &&
+      visibleTurns.some(
+        (turn) =>
+          turn.kind === 'failure' &&
+          failureDiagnosticsMatch(
+            turn.message,
+            turn.code,
+            runFailureMessage,
+            runFailureCode,
+          ),
+      ),
+  )
+  const inlineFailureDuplicatesStreamFailure = Boolean(
+    streamFailure &&
+      visibleTurns.some(
+        (turn) =>
+          turn.kind === 'failure' &&
+          failureDiagnosticsMatch(
+            turn.message,
+            turn.code,
+            streamFailure.message,
+            streamFailure.code,
+          ),
+      ),
+  )
   const streamFailureIsDuplicate =
     Boolean(
-      streamFailure?.message && streamFailure.message === runFailureMessage,
+      streamFailure?.message &&
+        failureMessagesMatch(streamFailure.message, runFailureMessage),
     ) || Boolean(streamFailure?.code && streamFailure.code === runFailureCode)
   const streamIssueIsDuplicate =
     Boolean(
@@ -569,8 +607,10 @@ export const ConversationSection = memo(function ConversationSection({
           streamIssue.code === streamFailure?.code),
     )
 
-  const showRunFailure = Boolean(runFailureMessage)
-  const showStreamFailure = Boolean(streamFailure && !streamFailureIsDuplicate)
+  const showRunFailure = Boolean(runFailureMessage && !inlineFailureDuplicatesRunFailure)
+  const showStreamFailure = Boolean(
+    streamFailure && !streamFailureIsDuplicate && !inlineFailureDuplicatesStreamFailure,
+  )
   const showStreamIssue = Boolean(streamIssue && !streamIssueIsDuplicate)
   // Suppress the footer handoff notice if an inline `handoff_notice` turn is
   // already in the conversation. The inline turn is the steady-state marker
@@ -598,8 +638,8 @@ export const ConversationSection = memo(function ConversationSection({
       lastTurn.text.trim().length > 0,
   )
   const copyableVisibleConversationText = useMemo(
-    () => visibleConversationCopyText(visibleTurns),
-    [visibleTurns],
+    () => visibleConversationCopyText(visibleTurns, currentAgentLabel),
+    [currentAgentLabel, visibleTurns],
   )
 
   if (variant === 'dense') {
@@ -623,6 +663,7 @@ export const ConversationSection = memo(function ConversationSection({
                   onUndoChangeGroup={onUndoChangeGroup}
                   onReturnSessionToHere={onReturnSessionToHere}
                   onOpenHandoffSummary={onOpenHandoffSummary}
+                  currentAgentLabel={currentAgentLabel}
                 />
               ))}
             </AnimatePresence>
@@ -733,6 +774,7 @@ export const ConversationSection = memo(function ConversationSection({
                   onUndoChangeGroup={onUndoChangeGroup}
                   onReturnSessionToHere={onReturnSessionToHere}
                   onOpenHandoffSummary={onOpenHandoffSummary}
+                  currentAgentLabel={currentAgentLabel}
                   isLastTurn={index === visibleTurns.length - 1}
                   nextTurn={next}
                   hideCopyBeforeFooterNotice={
@@ -955,6 +997,7 @@ interface ConversationTurnItemProps {
   connectsBottom: boolean
   codeUndoStates: Record<string, CodeUndoUiState>
   returnSessionToHereStates: Record<string, CodeUndoUiState>
+  currentAgentLabel?: string | null
   onUndoChangeGroup?: (request: CodeUndoRequest) => void
   onReturnSessionToHere?: (request: ReturnSessionToHereUiRequest) => void
   onOpenHandoffSummary?: (request: {
@@ -1040,6 +1083,7 @@ function ConversationTurnItem({
   connectsBottom,
   codeUndoStates,
   returnSessionToHereStates,
+  currentAgentLabel,
   onUndoChangeGroup,
   onReturnSessionToHere,
   onOpenHandoffSummary,
@@ -1062,6 +1106,7 @@ function ConversationTurnItem({
         connectsBottom={connectsBottom}
         codeUndoStates={codeUndoStates}
         returnSessionToHereStates={returnSessionToHereStates}
+        currentAgentLabel={currentAgentLabel}
         onUndoChangeGroup={onUndoChangeGroup}
         onReturnSessionToHere={onReturnSessionToHere}
         onOpenHandoffSummary={onOpenHandoffSummary}
@@ -1083,6 +1128,7 @@ interface ConversationTurnRowProps {
   connectsBottom: boolean
   codeUndoStates: Record<string, CodeUndoUiState>
   returnSessionToHereStates: Record<string, CodeUndoUiState>
+  currentAgentLabel?: string | null
   onUndoChangeGroup?: (request: CodeUndoRequest) => void
   onReturnSessionToHere?: (request: ReturnSessionToHereUiRequest) => void
   onOpenHandoffSummary?: (request: {
@@ -1104,6 +1150,7 @@ function ConversationTurnRow({
   connectsBottom,
   codeUndoStates,
   returnSessionToHereStates,
+  currentAgentLabel,
   onUndoChangeGroup,
   onReturnSessionToHere,
   onOpenHandoffSummary,
@@ -1221,6 +1268,7 @@ function ConversationTurnRow({
     return (
       <ActionPromptCard
         actionId={turn.actionId}
+        runId={turn.runId ?? null}
         actionType={turn.actionType}
         title={turn.title}
         detail={turn.detail}
@@ -1267,6 +1315,7 @@ function ConversationTurnRow({
         acceptedTargetAgentDefinitionId={turn.acceptedTargetAgentDefinitionId}
         acceptedTargetLabel={turn.acceptedTargetLabel}
         resolutionMode={turn.routingResolutionMode}
+        currentAgentLabel={currentAgentLabel}
       />
     )
   }
@@ -3356,11 +3405,62 @@ function failurePresentation(
         'The in-app browser is not open yet. Open the built-in browser, or continue from the visible desktop or another open app.',
     }
   }
+  if (code === 'autonomous_tool_edit_expected_text_mismatch') {
+    return {
+      tone: 'destructive',
+      title: 'Edit could not be applied',
+      message:
+        'The edit tool could not apply the patch because the exact line snapshot did not match. The agent should reread the file and retry against the current contents.',
+    }
+  }
   return {
     tone: 'destructive',
     title: 'Agent run failed',
-    message,
+    message: compactFailureMessage(message),
   }
+}
+
+function compactFailureMessage(message: string): string {
+  const normalized = message.trim()
+  if (normalized.length <= 900) return normalized
+
+  const firstLine = normalized.split(/\r?\n/, 1)[0]?.trim()
+  if (firstLine) {
+    return `${firstLine}\n\nDetailed diagnostics are saved with the run.`
+  }
+
+  return `${normalized.slice(0, 900).trimEnd()}\n\nDetailed diagnostics are saved with the run.`
+}
+
+function normalizeFailureMessage(message: string | null | undefined): string {
+  return (message ?? '').trim().replace(/\s+/g, ' ')
+}
+
+function failureMessagesMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const normalizedLeft = normalizeFailureMessage(left)
+  const normalizedRight = normalizeFailureMessage(right)
+  return Boolean(
+    normalizedLeft &&
+      normalizedRight &&
+      (normalizedLeft === normalizedRight ||
+        normalizedLeft.includes(normalizedRight) ||
+        normalizedRight.includes(normalizedLeft)),
+  )
+}
+
+function failureDiagnosticsMatch(
+  leftMessage: string | null | undefined,
+  leftCode: string | null | undefined,
+  rightMessage: string | null | undefined,
+  rightCode: string | null | undefined,
+): boolean {
+  return Boolean(
+    (leftCode && rightCode && leftCode === rightCode) ||
+      failureMessagesMatch(leftMessage, rightMessage),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -3491,6 +3591,7 @@ interface DenseTurnItemProps {
   turn: ConversationTurn
   codeUndoStates: Record<string, CodeUndoUiState>
   returnSessionToHereStates: Record<string, CodeUndoUiState>
+  currentAgentLabel?: string | null
   onUndoChangeGroup?: (request: CodeUndoRequest) => void
   onReturnSessionToHere?: (request: ReturnSessionToHereUiRequest) => void
   onOpenHandoffSummary?: (request: {

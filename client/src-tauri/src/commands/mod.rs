@@ -116,8 +116,8 @@ pub use agent_session::{
 };
 pub use agent_session_title::auto_name_agent_session;
 pub use agent_task::{
-    cancel_agent_run, export_agent_trace, get_agent_run, list_agent_runs, resume_agent_run,
-    send_agent_message, start_agent_task, subscribe_agent_stream,
+    cancel_agent_run, export_agent_trace, get_agent_run, list_agent_runs, reject_agent_action,
+    resume_agent_run, send_agent_message, start_agent_task, subscribe_agent_stream,
 };
 pub use agent_tooling_settings::{
     agent_tooling_settings, agent_tooling_update_settings, AgentToolingModelOverrideDto,

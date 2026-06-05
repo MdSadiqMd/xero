@@ -83,6 +83,7 @@ export interface RoutingSuggestionCardProps {
   acceptedTargetAgentDefinitionId: string | null
   acceptedTargetLabel: string | null
   resolutionMode?: 'manual' | 'automatic' | null
+  currentAgentLabel?: string | null
 }
 
 export function RoutingSuggestionCard({
@@ -99,6 +100,7 @@ export function RoutingSuggestionCard({
   acceptedTargetAgentDefinitionId,
   acceptedTargetLabel,
   resolutionMode = null,
+  currentAgentLabel = null,
 }: RoutingSuggestionCardProps) {
   const dispatch = useRoutingSuggestionDispatch()
   const actionAvailability =
@@ -115,6 +117,7 @@ export function RoutingSuggestionCard({
     acceptedTargetLabel?.trim() ||
     (acceptedTargetAgentDefinitionId ? 'custom agent' : null) ||
     (acceptedTarget ? getRuntimeAgentLabel(acceptedTarget) : null)
+  const displayCurrentAgentLabel = currentAgentLabel?.trim() || 'current agent'
 
   const handleAccept = useCallback(() => {
     if (isResolved || !dispatch || actionsDisabled) return
@@ -201,7 +204,7 @@ export function RoutingSuggestionCard({
                 </span>
               </>
             ) : (
-              <span>Continued with Agent.</span>
+              <span>Continued with {displayCurrentAgentLabel}.</span>
             )}
           </div>
         ) : (
@@ -226,7 +229,7 @@ export function RoutingSuggestionCard({
               title={disabledReason}
               className="h-7 px-2.5 text-[12px]"
             >
-              Continue with Agent
+              Continue with {displayCurrentAgentLabel}
             </Button>
           </div>
         )}

@@ -1330,11 +1330,18 @@ impl AutonomousToolRuntime {
         let (start_byte, end_byte) =
             line_byte_range(&existing, request.start_line, request.end_line)?;
         let current = &existing[start_byte..end_byte];
-        if current != request.expected {
+        let expected = normalize_replacement_line_endings(&request.expected, decoded.line_ending);
+        if current != expected
+            && !guarded_edit_expected_equivalent(
+                current,
+                expected.as_str(),
+                request.expected_hash.as_deref(),
+            )
+        {
             return Err(CommandError::user_fixable(
                 "autonomous_tool_edit_expected_text_mismatch",
                 format!(
-                    "Xero refused to apply the edit because the requested line range no longer matches the expected text. Current nearby lines and line hashes:\n{}",
+                    "Xero refused to apply the edit because the expected text does not match the current requested line range. Current nearby lines and line hashes:\n{}",
                     edit_conflict_context(&existing, request.start_line, request.end_line)
                 ),
             ));
@@ -6458,6 +6465,24 @@ fn normalize_replacement_line_endings(
     }
 }
 
+fn guarded_edit_expected_equivalent(
+    current: &str,
+    expected: &str,
+    expected_hash: Option<&str>,
+) -> bool {
+    expected_hash.is_some()
+        && normalize_edit_expected_guard_text(current)
+            == normalize_edit_expected_guard_text(expected)
+}
+
+fn normalize_edit_expected_guard_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .lines()
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn build_search_regex(query: &str, is_regex: bool, ignore_case: bool) -> CommandResult<Regex> {
     let pattern = if is_regex {
         query.to_string()
@@ -7279,7 +7304,7 @@ mod tests {
             path: "notes.txt".into(),
             start_line: 2,
             end_line: 2,
-            expected: "two\r\n".into(),
+            expected: "two\n".into(),
             replacement: "TWO\n".into(),
             expected_hash: read_output.sha256.clone(),
             start_line_hash: Some(line_two_hash.clone()),
@@ -7308,6 +7333,51 @@ mod tests {
             })
             .expect_err("line hash mismatch");
         assert_eq!(err.code, "autonomous_tool_edit_line_hash_mismatch");
+    }
+
+    #[test]
+    fn edit_allows_guarded_expected_text_whitespace_drift() {
+        let tempdir = tempdir().expect("tempdir");
+        let root = tempdir.path();
+        let path = root.join("component.tsx");
+        fs::write(&path, "function App() {\n  return <Logo />\n}\n").expect("component");
+
+        let runtime = AutonomousToolRuntime::new(root).expect("runtime");
+        let read_output = read_output(runtime.read(read_request("component.tsx")));
+
+        let edit_output = edit_output(runtime.edit(AutonomousEditRequest {
+            path: "component.tsx".into(),
+            start_line: 2,
+            end_line: 2,
+            expected: "return <Logo />\n".into(),
+            replacement: "  return <BrandLogo />\n".into(),
+            expected_hash: read_output.sha256.clone(),
+            start_line_hash: None,
+            end_line_hash: None,
+            preview: false,
+        }));
+
+        assert_ne!(edit_output.old_hash, edit_output.new_hash);
+        assert_eq!(
+            fs::read_to_string(&path).expect("updated component"),
+            "function App() {\n  return <BrandLogo />\n}\n",
+        );
+
+        fs::write(&path, "function App() {\n  return <Logo />\n}\n").expect("reset");
+        let rejected = runtime
+            .edit(AutonomousEditRequest {
+                path: "component.tsx".into(),
+                start_line: 2,
+                end_line: 2,
+                expected: "return <Logo />\n".into(),
+                replacement: "  return <BrandLogo />\n".into(),
+                expected_hash: None,
+                start_line_hash: None,
+                end_line_hash: None,
+                preview: false,
+            })
+            .expect_err("unguarded whitespace drift should still fail");
+        assert_eq!(rejected.code, "autonomous_tool_edit_expected_text_mismatch");
     }
 
     #[test]

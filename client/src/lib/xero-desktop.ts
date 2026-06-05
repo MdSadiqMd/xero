@@ -151,6 +151,7 @@ import {
   getAgentRunRequestSchema,
   listAgentRunsRequestSchema,
   listAgentRunsResponseSchema,
+  rejectAgentActionRequestSchema,
   resumeAgentRunRequestSchema,
   sendAgentMessageRequestSchema,
   startAgentTaskRequestSchema,
@@ -163,6 +164,7 @@ import {
   type ExportAgentTraceRequestDto,
   type GetAgentRunRequestDto,
   type ListAgentRunsResponseDto,
+  type RejectAgentActionRequestDto,
   type ResumeAgentRunRequestDto,
   type SendAgentMessageRequestDto,
   type StartAgentTaskRequestDto,
@@ -742,6 +744,7 @@ const COMMANDS = {
   startAgentTask: 'start_agent_task',
   sendAgentMessage: 'send_agent_message',
   cancelAgentRun: 'cancel_agent_run',
+  rejectAgentAction: 'reject_agent_action',
   resumeAgentRun: 'resume_agent_run',
   getAgentRun: 'get_agent_run',
   exportAgentTrace: 'export_agent_trace',
@@ -1411,6 +1414,11 @@ export interface XeroDesktopAdapter {
     options?: { autoCompact?: SendAgentMessageRequestDto['autoCompact'] },
   ): Promise<AgentRunDto>
   cancelAgentRun?(runId: string): Promise<AgentRunDto>
+  rejectAgentAction?(
+    runId: string,
+    actionId: string,
+    options?: { response?: RejectAgentActionRequestDto['response'] },
+  ): Promise<AgentRunDto>
   resumeAgentRun?(
     runId: string,
     response: string,
@@ -3302,6 +3310,17 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
       runId,
     })
     return invokeTyped(COMMANDS.cancelAgentRun, agentRunSchema, {
+      request,
+    })
+  },
+
+  rejectAgentAction(runId, actionId, options) {
+    const request: RejectAgentActionRequestDto = rejectAgentActionRequestSchema.parse({
+      runId,
+      actionId,
+      response: options?.response ?? null,
+    })
+    return invokeTyped(COMMANDS.rejectAgentAction, agentRunSchema, {
       request,
     })
   },

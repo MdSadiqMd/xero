@@ -424,6 +424,40 @@ describe('useHistoricalConversationTurns', () => {
     ).toBe(true)
   })
 
+  it('fetches history for a terminal runtime run even when the stream still says live', async () => {
+    const transcript = makeTranscript({
+      runId: 'run-cancelled',
+      text: 'history before the cancelled continuation',
+    })
+    const { adapter, getSessionTranscript } = makeAdapter(transcript)
+    const { result } = renderHook(() =>
+      useHistoricalConversationTurns(
+        makeAgentPane({
+          activeRunId: 'run-cancelled',
+          runtimeRunIsTerminal: true,
+          runtimeStreamStatus: 'live',
+        }),
+        adapter,
+      ),
+    )
+
+    await waitFor(() => {
+      expect(getSessionTranscript).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(result.current).not.toBeNull()
+    })
+
+    expect(result.current).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'message',
+          text: 'history before the cancelled continuation',
+        }),
+      ]),
+    )
+  })
+
   it('refetches when the active runId flips (the same-type handoff transition path)', async () => {
     const transcript = makeTranscriptWithHandoff()
     const { adapter, getSessionTranscript } = makeAdapter(transcript)
