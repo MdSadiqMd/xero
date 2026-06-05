@@ -190,6 +190,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
   var VERSION = 1;
   var ROOT_ID = "__xero-browser-tool-root";
   var PEN_DOCUMENT_LAYER_ID = "__xero-browser-pen-document-layer";
+  var TOOLBAR_POSITION_KEY = "__xeroBrowserToolToolbarPosition";
   var DEFAULT_THEME = ${JSON.stringify(DEFAULT_BROWSER_TOOL_THEME)};
   var THEME_KEYS = Object.keys(DEFAULT_THEME);
   var RAINBOW_STOPS = [
@@ -800,6 +801,167 @@ const BROWSER_TOOL_RUNTIME = String.raw`
     composer.style.top = top + "px";
   }
 
+  function readToolbarPosition() {
+    try {
+      var stored = window[TOOLBAR_POSITION_KEY];
+      if (!stored || typeof stored !== "object") return null;
+      var left = Number(stored.left);
+      var top = Number(stored.top);
+      if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+      return { left: left, top: top };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function rememberToolbarPosition(position) {
+    try {
+      window[TOOLBAR_POSITION_KEY] = {
+        left: Number(position.left) || 0,
+        top: Number(position.top) || 0
+      };
+    } catch (_error) {
+      // best-effort per-page placement memory
+    }
+  }
+
+  function toolbarSize(toolbar) {
+    var rect = toolbar && typeof toolbar.getBoundingClientRect === "function"
+      ? toolbar.getBoundingClientRect()
+      : null;
+    return {
+      width: Math.max(1, Number(rect && rect.width) || Number(toolbar.offsetWidth) || 360),
+      height: Math.max(1, Number(rect && rect.height) || Number(toolbar.offsetHeight) || 34)
+    };
+  }
+
+  function clampToolbarPosition(toolbar, left, top) {
+    var size = toolbarSize(toolbar);
+    var margin = 8;
+    return {
+      left: clamp(Number(left) || 0, margin, Math.max(margin, window.innerWidth - size.width - margin)),
+      top: clamp(Number(top) || 0, margin, Math.max(margin, window.innerHeight - size.height - margin))
+    };
+  }
+
+  function applyToolbarPosition(toolbar, left, top, options) {
+    var position = clampToolbarPosition(toolbar, left, top);
+    toolbar.style.left = round(position.left) + "px";
+    toolbar.style.top = round(position.top) + "px";
+    toolbar.style.transform = "none";
+    if (!options || options.persist !== false) {
+      rememberToolbarPosition(position);
+    }
+    return position;
+  }
+
+  function defaultToolbarPosition(toolbar) {
+    var size = toolbarSize(toolbar);
+    return {
+      left: (window.innerWidth - size.width) / 2,
+      top: 10
+    };
+  }
+
+  function syncToolbarPosition(toolbar, options) {
+    var stored = readToolbarPosition();
+    if (stored) {
+      return applyToolbarPosition(toolbar, stored.left, stored.top, options);
+    }
+
+    var rect = toolbar.getBoundingClientRect();
+    var fallback = defaultToolbarPosition(toolbar);
+    return applyToolbarPosition(
+      toolbar,
+      Number(rect.left) || fallback.left,
+      Number(rect.top) || fallback.top,
+      { persist: false }
+    );
+  }
+
+  function setupToolbarDrag(state, toolbar, handle) {
+    var dragging = false;
+    var activePointerId = null;
+    var offsetX = 0;
+    var offsetY = 0;
+
+    function move(event) {
+      if (!dragging) return;
+      if (activePointerId !== null && event.pointerId !== activePointerId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      applyToolbarPosition(toolbar, event.clientX - offsetX, event.clientY - offsetY);
+    }
+
+    function stop(event) {
+      if (!dragging) return;
+      if (activePointerId !== null && event && event.pointerId !== activePointerId) return;
+      dragging = false;
+      activePointerId = null;
+      toolbar.removeAttribute("data-dragging");
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", stop, true);
+      window.removeEventListener("pointercancel", stop, true);
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          handle.releasePointerCapture(event.pointerId);
+        } catch (_error) {
+          // ignore
+        }
+      }
+    }
+
+    function nudge(event) {
+      var horizontal = event.key === "ArrowLeft" || event.key === "ArrowRight";
+      var vertical = event.key === "ArrowUp" || event.key === "ArrowDown";
+      if (!horizontal && !vertical) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var step = event.shiftKey ? 32 : 8;
+      var rect = toolbar.getBoundingClientRect();
+      var left = rect.left + (event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0);
+      var top = rect.top + (event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0);
+      applyToolbarPosition(toolbar, left, top);
+    }
+
+    handle.addEventListener("pointerdown", function (event) {
+      if (event.button != null && event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var rect = toolbar.getBoundingClientRect();
+      offsetX = event.clientX - rect.left;
+      offsetY = event.clientY - rect.top;
+      dragging = true;
+      activePointerId = event.pointerId != null ? event.pointerId : null;
+      toolbar.setAttribute("data-dragging", "true");
+      applyToolbarPosition(toolbar, rect.left, rect.top);
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", stop, true);
+      window.addEventListener("pointercancel", stop, true);
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch (_error) {
+        // ignore
+      }
+    });
+    handle.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    handle.addEventListener("keydown", nudge);
+
+    var resize = function () {
+      syncToolbarPosition(toolbar, { persist: Boolean(readToolbarPosition()) });
+    };
+    window.addEventListener("resize", resize);
+    state.cleanups.push(function () {
+      stop();
+      window.removeEventListener("resize", resize);
+    });
+  }
+
   function removeComposer(state, composer, afterRemove) {
     if (!composer || composer.getAttribute("data-closing") === "true") return;
     composer.setAttribute("data-closing", "true");
@@ -932,14 +1094,21 @@ const BROWSER_TOOL_RUNTIME = String.raw`
 
   function makeToolbar(state, mode, pageLabel) {
     var toolbar = createNode("div", "toolbar xero-tool-chrome");
+    var handle = createNode("button", "toolbar-handle");
     var badge = createNode("span", "toolbar-badge", mode === "pen" ? "Pen mode" : "Inspect mode");
     var label = createNode("span", "toolbar-label", pageLabel ? "On " + pageLabel : (mode === "pen" ? "Sketch over the page" : "Select an element"));
     var clear = createNode("button", "toolbar-button", "Clear");
     var exit = createNode("button", "toolbar-button", "Exit");
+    handle.type = "button";
+    handle.setAttribute("aria-label", "Move browser tool controls");
+    handle.setAttribute("title", "Move controls");
     clear.type = "button";
     exit.type = "button";
-    clear.hidden = mode !== "pen";
     clear.addEventListener("click", function () {
+      if (state.mode === "inspect") {
+        if (state.clearInspect) state.clearInspect();
+        return;
+      }
       if (state.clearPen) state.clearPen();
     });
     exit.addEventListener("click", function () {
@@ -947,6 +1116,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
       api.deactivate();
       bridgeEmit("tool_closed", { mode: closingMode });
     });
+    toolbar.appendChild(handle);
     toolbar.appendChild(badge);
     toolbar.appendChild(createNode("span", "toolbar-dot", "|"));
     toolbar.appendChild(label);
@@ -955,6 +1125,12 @@ const BROWSER_TOOL_RUNTIME = String.raw`
     toolbar.appendChild(exit);
     state.layer.appendChild(toolbar);
     state.toolbar = toolbar;
+    setupToolbarDrag(state, toolbar, handle);
+    requestAnimationFrame(function () {
+      if (state.toolbar === toolbar) {
+        syncToolbarPosition(toolbar, { persist: false });
+      }
+    });
   }
 
   function startCapture(state, context) {
@@ -1556,6 +1732,19 @@ const BROWSER_TOOL_RUNTIME = String.raw`
     state.hoveredElement = null;
     state.selectedElement = null;
 
+    state.clearInspect = function () {
+      state.hoveredElement = null;
+      state.selectedElement = null;
+      state.selectedContext = null;
+      if (state.composer && state.composer.parentNode) {
+        state.composer.parentNode.removeChild(state.composer);
+      }
+      state.composer = null;
+      state.composerInput = null;
+      state.composerAvoidRect = null;
+      showElement(null, false);
+    };
+
     function elementAt(x, y) {
       var previous = state.host.style.pointerEvents;
       state.host.style.pointerEvents = "none";
@@ -1640,7 +1829,13 @@ const BROWSER_TOOL_RUNTIME = String.raw`
       ".pen-layer{position:absolute;inset:0;z-index:1;display:block;width:100vw;height:100vh;cursor:crosshair;touch-action:none;overflow:visible}" +
       ".pen-path{fill:none;stroke:var(--xero-tool-pen,#f97316);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}" +
       ".pen-path.active{stroke:var(--xero-tool-ring,#f97316)}" +
-      ".toolbar{position:fixed;z-index:4;top:10px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;max-width:min(760px,calc(100vw - 24px));height:34px;padding:0 12px;border:1px solid var(--xero-tool-border,#3f3f46);border-radius:999px;background:var(--xero-tool-popover,#18181b);box-shadow:0 16px 42px rgba(0,0,0,.26);font-size:12px;line-height:1;color:var(--xero-tool-muted-foreground,#a1a1aa);white-space:nowrap}" +
+      ".toolbar{position:fixed;z-index:4;top:10px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;max-width:min(760px,calc(100vw - 24px));height:34px;padding:0 8px 0 6px;border:1px solid var(--xero-tool-border,#3f3f46);border-radius:999px;background:var(--xero-tool-popover,#18181b);box-shadow:0 16px 42px rgba(0,0,0,.26);font-size:12px;line-height:1;color:var(--xero-tool-muted-foreground,#a1a1aa);white-space:nowrap;user-select:none}" +
+      ".toolbar[data-dragging='true']{cursor:grabbing}" +
+      ".toolbar-handle{appearance:none;display:flex;align-items:center;justify-content:center;width:22px;height:24px;flex:0 0 22px;border:0;border-radius:999px;background:transparent;color:var(--xero-tool-muted-foreground,#a1a1aa);cursor:grab;touch-action:none}" +
+      ".toolbar-handle::before{content:'';width:12px;height:14px;background:radial-gradient(circle,currentColor 1.15px,transparent 1.3px) 0 0/6px 6px;opacity:.75}" +
+      ".toolbar-handle:hover,.toolbar-handle:focus-visible{background:var(--xero-tool-secondary,#27272a);color:var(--xero-tool-secondary-foreground,#fafafa)}" +
+      ".toolbar-handle:active,.toolbar[data-dragging='true'] .toolbar-handle{cursor:grabbing}" +
+      ".toolbar-handle:focus-visible{outline:2px solid var(--xero-tool-ring,#f97316);outline-offset:1px}" +
       ".toolbar-badge{font-weight:700;color:var(--xero-tool-popover-foreground,#fafafa)}" +
       ".toolbar-label{min-width:0;overflow:hidden;text-overflow:ellipsis}" +
       ".toolbar-dot{color:var(--xero-tool-muted-foreground,#a1a1aa)}" +

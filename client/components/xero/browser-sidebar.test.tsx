@@ -59,6 +59,7 @@ import {
   buildBrowserToolAgentPrompt,
   buildBrowserToolVisiblePrompt,
   type BrowserAgentContextRequest,
+  type BrowserToolMode,
   type BrowserToolTheme,
 } from "./browser-tool-injection"
 import {
@@ -211,6 +212,30 @@ function dispatchPointer(
       ...init,
     }),
   )
+}
+
+function browserToolTestTheme(): BrowserToolTheme {
+  return {
+    background: "#09090b",
+    foreground: "#fafafa",
+    card: "#18181b",
+    cardForeground: "#fafafa",
+    popover: "#18181b",
+    popoverForeground: "#fafafa",
+    primary: "#fafafa",
+    primaryForeground: "#18181b",
+    secondary: "#27272a",
+    secondaryForeground: "#fafafa",
+    muted: "#27272a",
+    mutedForeground: "#a1a1aa",
+    accent: "#f97316",
+    accentForeground: "#111827",
+    destructive: "#ef4444",
+    destructiveForeground: "#fafafa",
+    border: "#3f3f46",
+    input: "#3f3f46",
+    ring: "#f97316",
+  }
 }
 
 beforeEach(() => {
@@ -2332,6 +2357,137 @@ describe("BrowserSidebar", () => {
     expect(script).toContain("#34c759")
     expect(script).toContain("#ff2dff")
     expect(script).toContain('stylePenPath(path, "url(#" + gradientId + ")")')
+  })
+
+  it("lets the floating browser tool toolbar be dragged in pen and inspect modes", () => {
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    const modes: BrowserToolMode[] = ["pen", "inspect"]
+
+    try {
+      setWindowInnerSize(900, 600)
+
+      for (const mode of modes) {
+        const script = buildBrowserToolActivationScript({
+          mode,
+          pageLabel: "Local App",
+          theme: browserToolTestTheme(),
+        })
+        new Function(script)()
+
+        const toolHost = document.getElementById("__xero-browser-tool-root")
+        const shadow = toolHost?.shadowRoot
+        const toolbar = shadow?.querySelector<HTMLElement>(".toolbar")
+        const handle = shadow?.querySelector<HTMLButtonElement>(".toolbar-handle")
+        expect(toolbar).toBeTruthy()
+        expect(handle).toBeTruthy()
+        expect(handle?.getAttribute("aria-label")).toBe("Move browser tool controls")
+
+        vi.spyOn(toolbar!, "getBoundingClientRect").mockReturnValue(
+          rect({
+            bottom: 44,
+            height: 34,
+            left: 220,
+            right: 540,
+            top: 10,
+            width: 320,
+          }),
+        )
+
+        dispatchPointer(handle!, "pointerdown", { clientX: 236, clientY: 22 })
+        expect(toolbar?.getAttribute("data-dragging")).toBe("true")
+        dispatchPointer(window, "pointermove", { clientX: 436, clientY: 112 })
+        dispatchPointer(window, "pointerup", { clientX: 436, clientY: 112 })
+
+        expect(toolbar?.style.left).toBe("420px")
+        expect(toolbar?.style.top).toBe("100px")
+        expect(toolbar?.style.transform).toBe("none")
+        expect(toolbar?.getAttribute("data-dragging")).toBeNull()
+
+        if (mode === "pen") {
+          expect(
+            document
+              .getElementById("__xero-browser-pen-document-layer")
+              ?.querySelector(".xero-document-pen-path"),
+          ).toBeNull()
+        }
+
+        ;(window as unknown as { __xeroBrowserTool?: { deactivate: () => void } })
+          .__xeroBrowserTool?.deactivate()
+      }
+    } finally {
+      ;(window as unknown as { __xeroBrowserTool?: { deactivate: () => void } })
+        .__xeroBrowserTool?.deactivate()
+      setWindowInnerSize(originalWidth, originalHeight)
+    }
+  })
+
+  it("clears the selected inspect target from the floating toolbar", () => {
+    const originalElementFromPoint = Object.getOwnPropertyDescriptor(
+      document,
+      "elementFromPoint",
+    )
+    const target = document.createElement("button")
+    target.textContent = "Launch"
+    target.setAttribute("aria-label", "Launch")
+    document.body.appendChild(target)
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue(
+      rect({
+        bottom: 100,
+        height: 40,
+        left: 40,
+        right: 160,
+        top: 60,
+        width: 120,
+      }),
+    )
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    })
+
+    try {
+      const script = buildBrowserToolActivationScript({
+        mode: "inspect",
+        pageLabel: "Local App",
+        theme: browserToolTestTheme(),
+      })
+      new Function(script)()
+
+      const toolHost = document.getElementById("__xero-browser-tool-root")
+      const shadow = toolHost?.shadowRoot
+      const layer = shadow?.querySelector<HTMLElement>(".layer")
+      const clear = Array.from(
+        shadow?.querySelectorAll<HTMLButtonElement>(".toolbar-button") ?? [],
+      ).find((button) => button.textContent === "Clear")
+      expect(layer).toBeTruthy()
+      expect(clear).toBeTruthy()
+      expect(clear?.hidden).toBe(false)
+
+      dispatchPointer(layer!, "pointermove", { clientX: 80, clientY: 80 })
+      dispatchPointer(layer!, "click", { clientX: 80, clientY: 80 })
+
+      expect(shadow?.querySelector(".composer")).toBeTruthy()
+      expect(shadow?.querySelector(".inspect-highlight")?.getAttribute("data-selected")).toBe(
+        "true",
+      )
+
+      clear!.click()
+
+      expect(shadow?.querySelector(".composer")).toBeNull()
+      expect((shadow?.querySelector(".inspect-highlight") as HTMLElement | null)?.style.display).toBe(
+        "none",
+      )
+    } finally {
+      ;(window as unknown as { __xeroBrowserTool?: { deactivate: () => void } })
+        .__xeroBrowserTool?.deactivate()
+      target.remove()
+      if (originalElementFromPoint) {
+        Object.defineProperty(document, "elementFromPoint", originalElementFromPoint)
+      } else {
+        delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint
+      }
+    }
   })
 
   it("emits browser tool context through Tauri internals when the page bridge is unavailable", async () => {
