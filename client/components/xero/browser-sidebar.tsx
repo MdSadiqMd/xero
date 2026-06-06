@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  type CSSProperties,
   useCallback,
   useEffect,
   useMemo,
@@ -8,6 +9,23 @@ import {
   useState,
   type WheelEvent,
 } from "react"
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+} from "@dnd-kit/core"
+import {
+  horizontalListSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import {
@@ -126,7 +144,7 @@ interface BrowserSidebarProps {
   projectStartTargets?: BrowserServerLabelStartTarget[]
 }
 
-interface BrowserTabMeta {
+export interface BrowserTabMeta {
   id: string
   projectId?: string | null
   label: string
@@ -626,12 +644,246 @@ function browserTabBelongsToProject(tab: BrowserTabMeta, projectId: string | nul
   return tab.projectId === projectId
 }
 
+export function reorderBrowserTabs(
+  tabs: BrowserTabMeta[],
+  projectId: string | null,
+  activeTabId: string,
+  overTabId: string,
+): BrowserTabMeta[] {
+  if (!activeTabId || !overTabId || activeTabId === overTabId) return tabs
+
+  const projectTabs = tabs.filter((tab) => browserTabBelongsToProject(tab, projectId))
+  const fromIndex = projectTabs.findIndex((tab) => tab.id === activeTabId)
+  const toIndex = projectTabs.findIndex((tab) => tab.id === overTabId)
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return tabs
+
+  const reorderedProjectTabs = projectTabs.slice()
+  const [moved] = reorderedProjectTabs.splice(fromIndex, 1)
+  if (!moved) return tabs
+  reorderedProjectTabs.splice(Math.min(toIndex, reorderedProjectTabs.length), 0, moved)
+
+  let projectTabIndex = 0
+  return tabs.map((tab) => {
+    if (!browserTabBelongsToProject(tab, projectId)) return tab
+    const replacement = reorderedProjectTabs[projectTabIndex]
+    projectTabIndex += 1
+    return replacement ?? tab
+  })
+}
+
+function browserTabOrderKey(projectId: string | null): string {
+  return projectId ?? "__global_browser_tabs__"
+}
+
+function browserProjectTabIds(tabs: readonly BrowserTabMeta[], projectId: string | null): string[] {
+  return tabs
+    .filter((tab) => browserTabBelongsToProject(tab, projectId))
+    .map((tab) => tab.id)
+}
+
+export function applyBrowserTabOrder(
+  tabs: BrowserTabMeta[],
+  projectId: string | null,
+  orderedTabIds: readonly string[] | null | undefined,
+): BrowserTabMeta[] {
+  if (!orderedTabIds || orderedTabIds.length === 0) return tabs
+
+  const projectTabs = tabs.filter((tab) => browserTabBelongsToProject(tab, projectId))
+  if (projectTabs.length < 2) return tabs
+
+  const remainingById = new Map(projectTabs.map((tab) => [tab.id, tab]))
+  const orderedProjectTabs: BrowserTabMeta[] = []
+  for (const tabId of orderedTabIds) {
+    const tab = remainingById.get(tabId)
+    if (!tab) continue
+    orderedProjectTabs.push(tab)
+    remainingById.delete(tabId)
+  }
+  for (const tab of projectTabs) {
+    if (remainingById.has(tab.id)) {
+      orderedProjectTabs.push(tab)
+    }
+  }
+
+  const currentProjectOrder = projectTabs.map((tab) => tab.id).join("\0")
+  const nextProjectOrder = orderedProjectTabs.map((tab) => tab.id).join("\0")
+  if (currentProjectOrder === nextProjectOrder) return tabs
+
+  let projectTabIndex = 0
+  return tabs.map((tab) => {
+    if (!browserTabBelongsToProject(tab, projectId)) return tab
+    const replacement = orderedProjectTabs[projectTabIndex]
+    projectTabIndex += 1
+    return replacement ?? tab
+  })
+}
+
 function selectActiveBrowserTab(
   tabs: BrowserTabMeta[],
   projectId: string | null,
 ): BrowserTabMeta | null {
   const projectTabs = tabs.filter((tab) => browserTabBelongsToProject(tab, projectId))
   return projectTabs.find((tab) => tab.active) ?? projectTabs[0] ?? null
+}
+
+interface BrowserTabStripProps {
+  activeTabId: string | null
+  tabs: BrowserTabMeta[]
+  onCloseTab: (tabId: string) => void
+  onFocusTab: (tabId: string) => void
+  onNewTab: () => void
+  onReorderTabs: (activeTabId: string, overTabId: string) => void
+}
+
+function BrowserTabStrip({
+  activeTabId,
+  tabs,
+  onCloseTab,
+  onFocusTab,
+  onNewTab,
+  onReorderTabs,
+}: BrowserTabStripProps) {
+  const lastOverTabIdRef = useRef<string | null>(null)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 3 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const tabIds = useMemo(() => tabs.map((tab) => tab.id), [tabs])
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const overId = event.over ? String(event.over.id) : null
+    if (overId) {
+      lastOverTabIdRef.current = overId
+    }
+  }, [])
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const activeId = String(event.active.id)
+      const overId = event.over ? String(event.over.id) : lastOverTabIdRef.current
+      lastOverTabIdRef.current = null
+      if (!overId || activeId === overId) return
+      onReorderTabs(activeId, overId)
+    },
+    [onReorderTabs],
+  )
+
+  const handleDragCancel = useCallback(() => {
+    lastOverTabIdRef.current = null
+  }, [])
+
+  return (
+    <DndContext
+      collisionDetection={closestCenter}
+      sensors={sensors}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragCancel={handleDragCancel}
+    >
+      <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
+        <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60">
+          {tabs.map((tab) => (
+            <BrowserSortableTab
+              key={tab.id}
+              active={tab.id === activeTabId}
+              tab={tab}
+              onClose={onCloseTab}
+              onFocus={onFocusTab}
+            />
+          ))}
+          <button
+            aria-label="New tab"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors motion-fast hover:bg-secondary/60 hover:text-foreground"
+            onClick={onNewTab}
+            type="button"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </SortableContext>
+    </DndContext>
+  )
+}
+
+export function browserTabTranslateX(
+  transform:
+    | { x: number; y?: number; scaleX?: number; scaleY?: number }
+    | null
+    | undefined,
+): string | undefined {
+  return transform ? CSS.Translate.toString({ ...transform, y: 0 }) : undefined
+}
+
+interface BrowserSortableTabProps {
+  active: boolean
+  tab: BrowserTabMeta
+  onClose: (tabId: string) => void
+  onFocus: (tabId: string) => void
+}
+
+function BrowserSortableTab({
+  active,
+  tab,
+  onClose,
+  onFocus,
+}: BrowserSortableTabProps) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: tab.id })
+  const style: CSSProperties = {
+    transform: browserTabTranslateX(transform),
+    transition: isDragging ? "none" : transition,
+    opacity: isDragging ? 0.82 : undefined,
+    willChange: transform ? "transform" : undefined,
+    zIndex: isDragging ? 20 : undefined,
+  }
+  const label = tab.title ?? tab.url ?? "New tab"
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "group relative flex h-8 max-w-[160px] shrink-0 items-center gap-1 border px-2 text-[11px] transition-[border-color,background-color,color,box-shadow,opacity] motion-fast",
+        active
+          ? "border-primary/40 bg-background/80 text-foreground"
+          : "border-border/50 bg-sidebar/60 text-muted-foreground hover:text-foreground",
+        isDragging && "shadow-lg shadow-black/25 ring-1 ring-primary/30",
+      )}
+      style={style}
+    >
+      <button
+        ref={setActivatorNodeRef}
+        className="min-w-0 flex-1 cursor-grab select-none truncate text-left active:cursor-grabbing"
+        onClick={() => onFocus(tab.id)}
+        title={label}
+        type="button"
+        {...attributes}
+        {...listeners}
+      >
+        {tab.loading ? (
+          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+        ) : null}
+        <span className="truncate">
+          {label}
+        </span>
+      </button>
+      <button
+        aria-label="Close tab"
+        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity motion-fast hover:bg-secondary/60 hover:text-foreground group-hover:opacity-100"
+        onClick={() => onClose(tab.id)}
+        onPointerDown={(event) => event.stopPropagation()}
+        type="button"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  )
 }
 
 export function BrowserSidebar({
@@ -712,6 +964,7 @@ export function BrowserSidebar({
   const injectedToolModeRef = useRef<ToolMode>(null)
   const finishCaptureOnOverlayExitRef = useRef(false)
   const toolActivationRequestRef = useRef(0)
+  const tabOrderByProjectRef = useRef<Record<string, string[]>>({})
   const onAddAgentContextRef = useRef(onAddAgentContext)
   const onProjectBrowserTargetUnavailableRef = useRef(onProjectBrowserTargetUnavailable)
   const consumedPendingOpenUrlIdsRef = useRef<Set<string>>(new Set())
@@ -957,6 +1210,10 @@ export function BrowserSidebar({
     () => tabs.filter((tab) => browserTabBelongsToProject(tab, projectId)),
     [projectId, tabs],
   )
+  const applyLocalTabOrder = useCallback((nextTabs: BrowserTabMeta[], targetProjectId: string | null) => {
+    const key = browserTabOrderKey(targetProjectId)
+    return applyBrowserTabOrder(nextTabs, targetProjectId, tabOrderByProjectRef.current[key])
+  }, [])
 
   const isDevTab = isDevServerUrl(activeTab?.url ?? null)
   const pageLabel = activeTab?.title ?? activeTab?.url ?? null
@@ -1577,11 +1834,12 @@ export function BrowserSidebar({
         }
       },
       onTabUpdated: (payload) => {
-        setTabs(payload.tabs)
-        hasWebviewRef.current = payload.tabs.some((tab) =>
+        const orderedTabs = applyLocalTabOrder(payload.tabs, projectIdRef.current)
+        setTabs(orderedTabs)
+        hasWebviewRef.current = orderedTabs.some((tab) =>
           browserTabBelongsToProject(tab, projectIdRef.current),
         )
-        const active = selectActiveBrowserTab(payload.tabs, projectIdRef.current)
+        const active = selectActiveBrowserTab(orderedTabs, projectIdRef.current)
         if (active) {
           activeTabIdRef.current = active.id
           setActiveTabId(active.id)
@@ -1700,7 +1958,13 @@ export function BrowserSidebar({
       coalescer.dispose()
       unsubs.forEach((unsub) => unsub())
     }
-  }, [addBrowserToolContextToAgent, applyNativeOcclusionClick, applyNativeOcclusionWheel, applyNativeResizeDrag])
+  }, [
+    addBrowserToolContextToAgent,
+    applyLocalTabOrder,
+    applyNativeOcclusionClick,
+    applyNativeOcclusionWheel,
+    applyNativeResizeDrag,
+  ])
 
   // Hydrate tabs when sidebar opens
   useEffect(() => {
@@ -1710,9 +1974,10 @@ export function BrowserSidebar({
       projectId,
     }).then((list) => {
       if (cancelled || !list) return
-      setTabs(list)
-      hasWebviewRef.current = list.length > 0
-      const active = selectActiveBrowserTab(list, projectId)
+      const orderedList = applyLocalTabOrder(list, projectId)
+      setTabs(orderedList)
+      hasWebviewRef.current = orderedList.length > 0
+      const active = selectActiveBrowserTab(orderedList, projectId)
       if (active) {
         activeTabIdRef.current = active.id
         setActiveTabId(active.id)
@@ -1728,7 +1993,7 @@ export function BrowserSidebar({
     return () => {
       cancelled = true
     }
-  }, [open, projectId])
+  }, [applyLocalTabOrder, open, projectId])
 
   const handleResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1971,18 +2236,19 @@ export function BrowserSidebar({
       void invoke<BrowserTabMeta[]>("browser_tab_close", {
         projectId: projectIdRef.current,
         tabId,
-      })
+        })
         .then((list) => {
           if (!list) return
-          setTabs(list)
-          if (list.length === 0) {
+          const orderedList = applyLocalTabOrder(list, projectIdRef.current)
+          setTabs(orderedList)
+          if (orderedList.length === 0) {
             activeTabIdRef.current = null
             setActiveTabId(null)
             setAddress("")
             setLoading(false)
             hasWebviewRef.current = false
           } else {
-            const next = selectActiveBrowserTab(list, projectIdRef.current) ?? list[0]
+            const next = selectActiveBrowserTab(orderedList, projectIdRef.current) ?? orderedList[0]
             activeTabIdRef.current = next.id
             setActiveTabId(next.id)
             setLoading(next.loading)
@@ -1993,8 +2259,38 @@ export function BrowserSidebar({
           /* swallow */
         })
     },
-    [],
+    [applyLocalTabOrder],
   )
+
+  const handleTabReorder = useCallback((activeTabId: string, overTabId: string) => {
+    if (!activeTabId || !overTabId || activeTabId === overTabId) return
+
+    const projectId = projectIdRef.current
+    setTabs((current) => {
+      const next = reorderBrowserTabs(current, projectId, activeTabId, overTabId)
+      tabOrderByProjectRef.current[browserTabOrderKey(projectId)] = browserProjectTabIds(next, projectId)
+      return next
+    })
+
+    if (!isTauri()) return
+    void invoke<BrowserTabMeta[]>("browser_tab_reorder", {
+      projectId,
+      activeTabId,
+      overTabId,
+    })
+      .then((list) => {
+        if (list) {
+          setTabs(applyLocalTabOrder(list, projectId))
+        }
+      })
+      .catch(() => {
+        void safeInvoke<BrowserTabMeta[]>("browser_tab_list", {
+          projectId,
+        }).then((list) => {
+          if (list) setTabs(applyLocalTabOrder(list, projectId))
+        })
+      })
+  }, [applyLocalTabOrder])
 
   const handleNewTab = useCallback(() => {
     if (!isTauri()) return
@@ -2129,49 +2425,14 @@ export function BrowserSidebar({
         style={{ width: renderedWidth }}
       >
       {showTabs ? (
-        <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60">
-          {activeProjectTabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={cn(
-                "group flex h-8 max-w-[160px] shrink-0 items-center gap-1 border px-2 text-[11px]",
-                tab.id === activeTabId
-                  ? "border-primary/40 bg-background/80 text-foreground"
-                  : "border-border/50 bg-sidebar/60 text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <button
-                className="min-w-0 flex-1 truncate text-left"
-                onClick={() => handleTabFocus(tab.id)}
-                title={tab.title ?? tab.url ?? "New tab"}
-                type="button"
-              >
-                {tab.loading ? (
-                  <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
-                ) : null}
-                <span className="truncate">
-                  {tab.title ?? tab.url ?? "New tab"}
-                </span>
-              </button>
-              <button
-                aria-label="Close tab"
-                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-secondary/60 hover:text-foreground group-hover:opacity-100"
-                onClick={() => handleTabClose(tab.id)}
-                type="button"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-          <button
-            aria-label="New tab"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-            onClick={handleNewTab}
-            type="button"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <BrowserTabStrip
+          activeTabId={activeTabId}
+          tabs={activeProjectTabs}
+          onCloseTab={handleTabClose}
+          onFocusTab={handleTabFocus}
+          onNewTab={handleNewTab}
+          onReorderTabs={handleTabReorder}
+        />
       ) : null}
 
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border/70 px-2">

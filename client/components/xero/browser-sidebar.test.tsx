@@ -63,9 +63,12 @@ import {
   type BrowserToolTheme,
 } from "./browser-tool-injection"
 import {
+  applyBrowserTabOrder,
   BrowserSidebar,
+  browserTabTranslateX,
   collectBrowserOverlayOcclusionRects,
   createBrowserEventCoalescer,
+  reorderBrowserTabs,
 } from "./browser-sidebar"
 
 // jsdom in this project ships a localStorage object whose methods aren't
@@ -521,6 +524,118 @@ describe("BrowserSidebar", () => {
     await waitFor(() => expect(input.value).toBe("https://project-a.example/updated"))
     expect(screen.getByText("Project A")).toBeInTheDocument()
     expect(screen.queryByText("Project B")).not.toBeInTheDocument()
+  })
+
+  it("reorders browser tabs inside the current project", () => {
+    const tabs = [
+      {
+        id: "tab-project-a-1",
+        projectId: "project-a",
+        label: "xero-browser-tab-a-1",
+        title: "Project A 1",
+        url: "https://project-a.example/1",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: false,
+      },
+      {
+        id: "tab-project-b",
+        projectId: "project-b",
+        label: "xero-browser-tab-b",
+        title: "Project B",
+        url: "https://project-b.example/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+      {
+        id: "tab-project-a-2",
+        projectId: "project-a",
+        label: "xero-browser-tab-a-2",
+        title: "Project A 2",
+        url: "https://project-a.example/2",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: false,
+      },
+    ]
+
+    expect(
+      reorderBrowserTabs(
+        tabs,
+        "project-a",
+        "tab-project-a-2",
+        "tab-project-a-1",
+      ).map((tab) => tab.id),
+    ).toEqual(["tab-project-a-2", "tab-project-b", "tab-project-a-1"])
+    expect(
+      reorderBrowserTabs(
+        tabs,
+        "project-a",
+        "tab-project-a-2",
+        "tab-project-b",
+      ),
+    ).toBe(tabs)
+  })
+
+  it("applies pending browser tab order to stale native tab lists", () => {
+    const tabs = [
+      {
+        id: "tab-project-a-1",
+        projectId: "project-a",
+        label: "xero-browser-tab-a-1",
+        title: "Project A 1",
+        url: "https://project-a.example/1",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: false,
+      },
+      {
+        id: "tab-project-b",
+        projectId: "project-b",
+        label: "xero-browser-tab-b",
+        title: "Project B",
+        url: "https://project-b.example/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+      {
+        id: "tab-project-a-2",
+        projectId: "project-a",
+        label: "xero-browser-tab-a-2",
+        title: "Project A 2",
+        url: "https://project-a.example/2",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: false,
+      },
+    ]
+
+    expect(
+      applyBrowserTabOrder(
+        tabs,
+        "project-a",
+        ["tab-project-a-2", "tab-project-a-1"],
+      ).map((tab) => tab.id),
+    ).toEqual(["tab-project-a-2", "tab-project-b", "tab-project-a-1"])
+  })
+
+  it("keeps sortable tab transforms translate-only so tab widths do not stretch", () => {
+    expect(
+      browserTabTranslateX({
+        x: 42,
+        y: 7,
+        scaleX: 1.8,
+        scaleY: 0.75,
+      }),
+    ).toBe("translate3d(42px, 0px, 0)")
   })
 
   it("submits a URL and invokes browser_show with the expected shape", async () => {
@@ -3236,6 +3351,92 @@ describe("BrowserSidebar", () => {
     }
   })
 
+  it("promotes pen drawing layers into the browser top layer when available", () => {
+    const originalShowPopover = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "showPopover",
+    )
+    const originalHidePopover = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "hidePopover",
+    )
+    const originalMatches = Object.getOwnPropertyDescriptor(Element.prototype, "matches")
+    const opened: string[] = []
+    const hidden: string[] = []
+    Object.defineProperty(HTMLElement.prototype, "showPopover", {
+      configurable: true,
+      value(this: HTMLElement) {
+        ;(this as unknown as { __testPopoverOpen?: boolean }).__testPopoverOpen = true
+        opened.push(this.id)
+      },
+    })
+    Object.defineProperty(HTMLElement.prototype, "hidePopover", {
+      configurable: true,
+      value(this: HTMLElement) {
+        ;(this as unknown as { __testPopoverOpen?: boolean }).__testPopoverOpen = false
+        hidden.push(this.id)
+      },
+    })
+    Object.defineProperty(Element.prototype, "matches", {
+      configurable: true,
+      value(this: Element, selector: string) {
+        if (selector === ":popover-open") {
+          return Boolean((this as unknown as { __testPopoverOpen?: boolean }).__testPopoverOpen)
+        }
+        return originalMatches?.value.call(this, selector) ?? false
+      },
+    })
+
+    const script = buildBrowserToolActivationScript({
+      mode: "pen",
+      pageLabel: "Local App",
+      theme: browserToolTestTheme(),
+    })
+
+    try {
+      new Function(script)()
+
+      const toolHost = document.getElementById("__xero-browser-tool-root")
+      const documentRoot = document.getElementById("__xero-browser-pen-document-root")
+      const overlay = toolHost?.shadowRoot?.querySelector(".pen-layer")
+      expect(toolHost?.getAttribute("popover")).toBe("manual")
+      expect(documentRoot?.getAttribute("popover")).toBe("manual")
+      expect(toolHost?.style.maxWidth).toBe("none")
+      expect(documentRoot?.style.maxWidth).toBe("none")
+      expect(opened.slice(-2)).toEqual([
+        "__xero-browser-pen-document-root",
+        "__xero-browser-tool-root",
+      ])
+
+      dispatchPointer(overlay!, "pointerdown", { clientX: 100, clientY: 100 })
+
+      expect(hidden.slice(-2)).toEqual([
+        "__xero-browser-pen-document-root",
+        "__xero-browser-tool-root",
+      ])
+      expect(opened.slice(-2)).toEqual([
+        "__xero-browser-pen-document-root",
+        "__xero-browser-tool-root",
+      ])
+    } finally {
+      ;(window as unknown as { __xeroBrowserTool?: { deactivate: () => void } })
+        .__xeroBrowserTool?.deactivate()
+      if (originalShowPopover) {
+        Object.defineProperty(HTMLElement.prototype, "showPopover", originalShowPopover)
+      } else {
+        delete (HTMLElement.prototype as unknown as { showPopover?: unknown }).showPopover
+      }
+      if (originalHidePopover) {
+        Object.defineProperty(HTMLElement.prototype, "hidePopover", originalHidePopover)
+      } else {
+        delete (HTMLElement.prototype as unknown as { hidePopover?: unknown }).hidePopover
+      }
+      if (originalMatches) {
+        Object.defineProperty(Element.prototype, "matches", originalMatches)
+      }
+    }
+  })
+
   it("records scrolled drawings in document coordinates instead of viewport coordinates", async () => {
     const originalWidth = window.innerWidth
     const originalHeight = window.innerHeight
@@ -3308,7 +3509,7 @@ describe("BrowserSidebar", () => {
     }
   })
 
-  it("keeps pen strokes attached to an inner scroll container", async () => {
+  it("keeps pen strokes attached to an inner scroll container without clipping overlays", async () => {
     const scroller = document.createElement("div")
     const child = document.createElement("div")
     const originalElementFromPoint = Object.getOwnPropertyDescriptor(
@@ -3387,7 +3588,7 @@ describe("BrowserSidebar", () => {
       expect(documentFrame?.style.top).toBe("100px")
       expect(documentFrame?.style.width).toBe("320px")
       expect(documentFrame?.style.height).toBe("240px")
-      expect(documentFrame?.style.overflow).toBe("hidden")
+      expect(documentFrame?.style.overflow).toBe("visible")
       expect(scroller.style.position).toBe("")
       expect(documentLayer?.getAttribute("viewBox")).toBe("0 0 320 1000")
       expect(documentLayer?.style.transform).toBe("translate(0px, -200px)")

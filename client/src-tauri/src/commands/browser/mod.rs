@@ -2218,6 +2218,20 @@ pub fn browser_tab_close<R: Runtime>(
     tabs.list_for_project(project_id.as_deref())
 }
 
+#[tauri::command]
+pub fn browser_tab_reorder<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, BrowserState>,
+    active_tab_id: String,
+    over_tab_id: String,
+    project_id: Option<String>,
+) -> CommandResult<Vec<BrowserTabMetadata>> {
+    let tabs = state.tabs();
+    tabs.reorder_for_project(&active_tab_id, &over_tab_id, project_id.as_deref())?;
+    emit_tab_list(&app, &tabs);
+    tabs.list_for_project(project_id.as_deref())
+}
+
 fn close_browser_tab<R: Runtime>(
     app: &AppHandle<R>,
     tabs: &Arc<BrowserTabs>,
@@ -3400,6 +3414,66 @@ mod tests {
         );
         tabs.activate_project(Some("project-b")).unwrap();
         assert_eq!(tabs.active_tab_id().as_deref(), Some(project_b.as_str()));
+    }
+
+    #[test]
+    fn tab_reorder_is_project_scoped() {
+        let tabs = BrowserTabs::new();
+        let (project_a_first, project_a_first_label) = tabs.new_tab_label();
+        let (project_b, project_b_label) = tabs.new_tab_label();
+        let (project_a_second, project_a_second_label) = tabs.new_tab_label();
+        tabs.insert(
+            project_a_first.clone(),
+            project_a_first_label,
+            Some("project-a".to_string()),
+        )
+        .unwrap();
+        tabs.insert(
+            project_b.clone(),
+            project_b_label,
+            Some("project-b".to_string()),
+        )
+        .unwrap();
+        tabs.insert(
+            project_a_second.clone(),
+            project_a_second_label,
+            Some("project-a".to_string()),
+        )
+        .unwrap();
+        tabs.set_active(&project_a_second).unwrap();
+
+        tabs.reorder_for_project(&project_a_second, &project_a_first, Some("project-a"))
+            .unwrap();
+
+        assert_eq!(
+            tabs.list_for_project(Some("project-a"))
+                .unwrap()
+                .into_iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
+            vec![project_a_second.clone(), project_a_first.clone()],
+        );
+        assert_eq!(
+            tabs.list()
+                .unwrap()
+                .into_iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
+            vec![
+                project_a_second.clone(),
+                project_a_first.clone(),
+                project_b.clone(),
+            ],
+        );
+        assert_eq!(
+            tabs.active_tab_id().as_deref(),
+            Some(project_a_second.as_str()),
+        );
+
+        let error = tabs
+            .reorder_for_project(&project_a_second, &project_b, Some("project-a"))
+            .expect_err("cross-project reorder should fail");
+        assert_eq!(error.code, "browser_tab_not_found");
     }
 
     #[test]

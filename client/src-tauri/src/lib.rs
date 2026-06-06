@@ -537,6 +537,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::browser::browser_tab_list,
             commands::browser::browser_tab_focus,
             commands::browser::browser_tab_close,
+            commands::browser::browser_tab_reorder,
             commands::browser::browser_internal_reply,
             commands::browser::browser_internal_event,
             commands::browser::cookie_import::browser_list_cookie_sources,

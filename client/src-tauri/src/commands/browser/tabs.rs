@@ -50,8 +50,8 @@ pub struct BrowserTabs {
 
 #[derive(Default)]
 struct BrowserTabsInner {
-    /// Preserves insertion order by using the tab id (monotonic).
     tabs: BTreeMap<String, TabRecord>,
+    order: Vec<String>,
     active: Option<String>,
     active_by_project: BTreeMap<String, String>,
 }
@@ -178,6 +178,9 @@ impl BrowserTabs {
         let mut guard = self.lock()?;
         let project_id = normalize_owned_project_id(project_id);
         let project_key = project_id.clone();
+        if !guard.tabs.contains_key(&id) {
+            guard.order.push(id.clone());
+        }
         guard.tabs.insert(
             id.clone(),
             TabRecord {
@@ -195,6 +198,36 @@ impl BrowserTabs {
                 .entry(project_id)
                 .or_insert_with(|| id.clone());
         }
+        Ok(())
+    }
+
+    pub fn reorder_for_project(
+        &self,
+        active_id: &str,
+        over_id: &str,
+        project_id: Option<&str>,
+    ) -> CommandResult<()> {
+        if active_id == over_id {
+            return Ok(());
+        }
+
+        let mut guard = self.lock()?;
+        ensure_tab_belongs_to_project(&guard, active_id, project_id)?;
+        ensure_tab_belongs_to_project(&guard, over_id, project_id)?;
+
+        let Some(from_index) = guard.order.iter().position(|id| id == active_id) else {
+            return Err(tab_not_found_error(active_id));
+        };
+        let Some(to_index) = guard.order.iter().position(|id| id == over_id) else {
+            return Err(tab_not_found_error(over_id));
+        };
+        if from_index == to_index {
+            return Ok(());
+        }
+
+        let moved = guard.order.remove(from_index);
+        let target_index = to_index.min(guard.order.len());
+        guard.order.insert(target_index, moved);
         Ok(())
     }
 
@@ -228,10 +261,7 @@ impl BrowserTabs {
                 }
                 active
             }
-            None => guard
-                .active
-                .clone()
-                .or_else(|| guard.tabs.keys().next_back().cloned()),
+            None => guard.active.clone().or_else(|| last_ordered_tab_id(&guard)),
         };
         guard.active = active.clone();
         Ok(active)
@@ -375,9 +405,10 @@ impl BrowserTabs {
                 guard.active = project_fallback;
             }
         } else if removed_was_active {
-            guard.active = guard.tabs.keys().next_back().cloned();
+            guard.active = last_ordered_tab_id(&guard);
         }
 
+        guard.order.retain(|tab_id| tab_id != id);
         Ok(removed.map(|tab| tab.label))
     }
 }
@@ -409,12 +440,26 @@ fn active_tab_id_for_project(guard: &BrowserTabsInner, project_id: &str) -> Opti
         .cloned()
         .or_else(|| {
             guard
-                .tabs
+                .order
                 .iter()
                 .rev()
-                .find(|(_, tab)| tab.project_id.as_deref() == Some(project_id))
-                .map(|(id, _)| id.clone())
+                .find(|id| {
+                    guard
+                        .tabs
+                        .get(*id)
+                        .is_some_and(|tab| tab.project_id.as_deref() == Some(project_id))
+                })
+                .cloned()
         })
+}
+
+fn last_ordered_tab_id(guard: &BrowserTabsInner) -> Option<String> {
+    guard
+        .order
+        .iter()
+        .rev()
+        .find(|id| guard.tabs.contains_key(*id))
+        .cloned()
 }
 
 fn tab_matches_project(tab: &TabRecord, project_id: Option<&str>) -> bool {
@@ -430,8 +475,9 @@ fn tab_metadata_for_project(
 ) -> Vec<BrowserTabMetadata> {
     let active = guard.active.clone();
     guard
-        .tabs
+        .order
         .iter()
+        .filter_map(|id| guard.tabs.get(id).map(|tab| (id, tab)))
         .filter(|(_, tab)| tab_matches_project(tab, project_id))
         .map(|(id, tab)| BrowserTabMetadata {
             id: id.clone(),
@@ -445,4 +491,28 @@ fn tab_metadata_for_project(
             active: active.as_deref() == Some(id),
         })
         .collect()
+}
+
+fn ensure_tab_belongs_to_project(
+    guard: &BrowserTabsInner,
+    id: &str,
+    project_id: Option<&str>,
+) -> CommandResult<()> {
+    let tab = guard.tabs.get(id).ok_or_else(|| tab_not_found_error(id))?;
+    if let Some(project_id) = normalize_project_id(project_id) {
+        if tab.project_id.as_deref() != Some(project_id) {
+            return Err(CommandError::user_fixable(
+                "browser_tab_not_found",
+                format!("Browser tab `{id}` was not found in this project."),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn tab_not_found_error(id: &str) -> CommandError {
+    CommandError::user_fixable(
+        "browser_tab_not_found",
+        format!("Browser tab `{id}` was not found."),
+    )
 }

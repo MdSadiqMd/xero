@@ -707,6 +707,62 @@ const BROWSER_TOOL_RUNTIME = String.raw`
     host.style.setProperty("--xero-tool-selection", resolved.ring || resolved.primary);
   }
 
+  function isToolTopLayerOpen(element) {
+    if (!element) return false;
+    try {
+      if (typeof element.matches === "function" && element.matches(":popover-open")) {
+        return true;
+      }
+    } catch (_error) {
+      // Some test DOMs do not understand the :popover-open pseudo-class.
+    }
+    return element.__xeroBrowserToolTopLayerOpen === true;
+  }
+
+  function applyTopLayerStyles(element) {
+    if (!element) return;
+    element.style.margin = "0";
+    element.style.padding = "0";
+    element.style.border = "0";
+    element.style.width = "100vw";
+    element.style.height = "100vh";
+    element.style.maxWidth = "none";
+    element.style.maxHeight = "none";
+    element.style.background = "transparent";
+  }
+
+  function showInTopLayer(element, bringToFront) {
+    if (!element || typeof element.showPopover !== "function") return false;
+    element.setAttribute("popover", "manual");
+    applyTopLayerStyles(element);
+    try {
+      if (bringToFront && isToolTopLayerOpen(element) && typeof element.hidePopover === "function") {
+        try {
+          element.hidePopover();
+        } catch (_hideError) {
+          // If the browser already closed it, the next show call will repair it.
+        }
+        element.__xeroBrowserToolTopLayerOpen = false;
+      }
+      if (!isToolTopLayerOpen(element)) {
+        element.showPopover();
+        element.__xeroBrowserToolTopLayerOpen = true;
+      }
+      return true;
+    } catch (_error) {
+      if (!isToolTopLayerOpen(element)) {
+        element.removeAttribute("popover");
+      }
+      return false;
+    }
+  }
+
+  function promoteToolLayers(state, bringToFront) {
+    if (!state) return;
+    if (state.pageRoot) showInTopLayer(state.pageRoot, bringToFront);
+    if (state.host) showInTopLayer(state.host, bringToFront);
+  }
+
   function eventHitsChrome(event) {
     var path = typeof event.composedPath === "function" ? event.composedPath() : [];
     for (var index = 0; index < path.length; index += 1) {
@@ -1422,7 +1478,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
         pageFrame.style.top = round(rect.top) + "px";
         pageFrame.style.width = Math.max(1, round(rect.width)) + "px";
         pageFrame.style.height = Math.max(1, round(rect.height)) + "px";
-        pageFrame.style.overflow = "hidden";
+        pageFrame.style.overflow = "visible";
       } else {
         pageFrame.style.left = "0px";
         pageFrame.style.top = "0px";
@@ -1606,6 +1662,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
 
     function syncPenLayer() {
       syncFrameId = 0;
+      promoteToolLayers(state, false);
       syncLayerSize();
       syncOverlayViewport();
       repositionComposer();
@@ -1726,6 +1783,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
     overlay.addEventListener("pointerdown", function (event) {
       if (event.button !== 0 || eventHitsChrome(event)) return;
       event.preventDefault();
+      promoteToolLayers(state, true);
       activatePenSurfaceForPoint(event.clientX, event.clientY);
       syncPenLayer();
       state.captureMode = false;
@@ -2041,6 +2099,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
       } else {
         setupPen(state);
       }
+      promoteToolLayers(state, true);
       return { active: true, mode: mode };
     },
     prepareCapture: function () {
@@ -2048,6 +2107,7 @@ const BROWSER_TOOL_RUNTIME = String.raw`
       if (!state) {
         return null;
       }
+      promoteToolLayers(state, true);
       if (typeof state.syncPenLayer === "function") state.syncPenLayer();
       state.captureMode = true;
       if (state.root) state.root.setAttribute("data-capture", "true");
