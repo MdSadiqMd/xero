@@ -13,6 +13,7 @@ import {
   parseRoutingMarker,
   stripRoutingMarkers,
 } from './routing-suggestion-marker'
+import { cleanPersistedRoutingContinuationTurns } from './routing-continuation'
 
 const HANDED_OFF_RUN_STATUS = 'handed_off'
 const MAX_HISTORICAL_CONVERSATION_TURNS = 80
@@ -123,7 +124,8 @@ export function buildHistoricalConversationTurns(
     }
   }
 
-  const promotedTurns = promoteActionMediaIntoFollowingAssistantMessages(turns)
+  const canonicalTurns = cleanPersistedRoutingContinuationTurns(turns)
+  const promotedTurns = promoteActionMediaIntoFollowingAssistantMessages(canonicalTurns)
 
   if (promotedTurns.length <= MAX_HISTORICAL_CONVERSATION_TURNS) {
     return promotedTurns

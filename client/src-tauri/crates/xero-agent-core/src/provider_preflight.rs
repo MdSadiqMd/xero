@@ -486,7 +486,7 @@ pub fn provider_preflight_admission_blockers(
         .checks
         .iter()
         .filter(|check| {
-            (check.status == ProviderPreflightStatus::Failed
+            check.status == ProviderPreflightStatus::Failed
                 && matches!(
                     check.code.as_str(),
                     "provider_preflight_credentials"
@@ -497,12 +497,7 @@ pub fn provider_preflight_admission_blockers(
                         | "provider_preflight_reasoning"
                         | "provider_preflight_attachments"
                         | "provider_preflight_provider_error"
-                ))
-                || (snapshot.stale
-                    && matches!(
-                        check.code.as_str(),
-                        "provider_preflight_tool_schema" | "provider_preflight_model"
-                    ))
+                )
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1879,6 +1874,40 @@ mod tests {
 
         assert_eq!(cached.source, ProviderPreflightSource::CachedProbe);
         assert!(provider_preflight_blockers(&cached).is_empty());
+    }
+
+    #[test]
+    fn stale_cached_probe_reports_stale_blocker_instead_of_passed_model_check() {
+        let cached = provider_preflight_snapshot(ProviderPreflightInput {
+            profile_id: "xai-default".into(),
+            provider_id: "xai".into(),
+            model_id: "grok-4.3-latest".into(),
+            source: ProviderPreflightSource::CachedProbe,
+            checked_at: "2026-06-05T19:49:35Z".into(),
+            age_seconds: Some(121),
+            ttl_seconds: Some(120),
+            required_features: ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+            capabilities: capabilities("live"),
+            credential_ready: Some(true),
+            endpoint_reachable: Some(true),
+            model_available: Some(true),
+            streaming_route_available: Some(true),
+            tool_schema_accepted: Some(true),
+            reasoning_controls_accepted: None,
+            attachments_accepted: None,
+            context_limit_known: Some(true),
+            provider_error: None,
+        });
+
+        let blockers = provider_preflight_blockers(&cached);
+
+        assert_eq!(
+            blockers.first().map(|check| check.code.as_str()),
+            Some("provider_preflight_cached_probe_stale")
+        );
+        assert!(!blockers
+            .iter()
+            .any(|check| check.code == "provider_preflight_model"));
     }
 
     #[test]

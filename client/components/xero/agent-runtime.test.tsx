@@ -2515,6 +2515,86 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByText('Continued with Ask.')).not.toBeInTheDocument()
   })
 
+  it('dedupes historical and live copies of the same routing prompt during switch transitions', () => {
+    renderRuntimeStreamItems(
+      [
+        makeTranscriptItem({ sequence: 2, role: 'user', text: 'What is this project about?' }),
+        makeTranscriptItem({
+          sequence: 3,
+          role: 'assistant',
+          text: [
+            'This is a straightforward documentation question.',
+            '<xero-routing-suggestion target="ask" reason="Question-only project overview request" summary="User wants a high-level description."/>',
+          ].join('\n\n'),
+        }),
+      ],
+      {
+        historicalConversationTurns: [
+          {
+            id: 'history:run-1:2',
+            kind: 'message',
+            role: 'user',
+            sequence: 12,
+            text: 'What is this project about?',
+            attachments: [],
+          },
+          {
+            id: 'routing_suggestion:history:run-1:30',
+            kind: 'routing_suggestion',
+            sequence: 30,
+            targetKind: 'built_in',
+            targetAgentId: 'ask',
+            targetAgentDefinitionId: null,
+            targetAgentDefinitionVersion: null,
+            targetLabel: null,
+            reason: 'Question-only project overview request',
+            summary: 'User wants a high-level description.',
+            isResolved: true,
+            acceptedTarget: 'ask',
+            acceptedTargetAgentDefinitionId: null,
+            acceptedTargetLabel: 'Ask',
+            routingResolutionMode: 'automatic',
+          },
+        ],
+      },
+    )
+
+    expect(screen.getAllByText('What is this project about?')).toHaveLength(1)
+    expect(screen.getAllByText('This task may be better suited for the Ask agent')).toHaveLength(1)
+  })
+
+  it('does not append a queued prompt row when the submitted prompt is already visible', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          selectedPrompt: {
+            text: 'What is this project about?',
+            queuedAt: '2026-06-11T22:58:55Z',
+            hasQueuedPrompt: true,
+          },
+          runtimeStreamItems: [
+            makeTranscriptItem({ sequence: 2, role: 'user', text: 'What is this project about?' }),
+            makeTranscriptItem({
+              sequence: 3,
+              role: 'assistant',
+              text: [
+                'This is a straightforward documentation question.',
+                '<xero-routing-suggestion target="ask" reason="Question-only project overview request" summary="User wants a high-level description."/>',
+              ].join('\n\n'),
+            }),
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getAllByText('What is this project about?')).toHaveLength(1)
+    expect(screen.getByText('This task may be better suited for the Ask agent')).toBeVisible()
+  })
+
   it('copies visible routing choice context from the bottom response', async () => {
     const writeText = installClipboardWriteMock()
     renderRuntimeStreamItems([

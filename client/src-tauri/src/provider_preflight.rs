@@ -96,7 +96,6 @@ pub(crate) fn run_selected_provider_preflight<R: Runtime>(
     )? {
         Some(snapshot) => Some(snapshot),
         None => match live_xai_preflight_for_profile(
-            state,
             &provider_profiles,
             profile,
             selected_model_id,
@@ -180,15 +179,34 @@ pub(crate) fn provider_catalog_preflight_snapshot_for_run<R: Runtime>(
         required_features.clone(),
         credential_ready,
     );
-    let snapshot = live_openai_codex_preflight_for_profile(
+    let live_snapshot = match live_openai_codex_preflight_for_profile(
         app,
         state,
         profile,
         selected_model_id,
-        required_features,
+        required_features.clone(),
         &catalog,
-    )?
-    .unwrap_or(catalog_snapshot);
+    )? {
+        Some(snapshot) => Some(snapshot),
+        None => match live_xai_preflight_for_profile(
+            &provider_profiles,
+            profile,
+            selected_model_id,
+            required_features.clone(),
+            &catalog,
+        )? {
+            Some(snapshot) => Some(snapshot),
+            None => live_openai_compatible_preflight_for_profile(
+                state,
+                &provider_profiles,
+                profile,
+                selected_model_id,
+                required_features,
+                &catalog,
+            )?,
+        },
+    };
+    let snapshot = live_snapshot.unwrap_or(catalog_snapshot);
     let snapshot =
         bind_provider_preflight_cache_for_profile(state, &provider_profiles, profile, snapshot)?;
     persist_provider_preflight_snapshot(&state.global_db_path(app)?, &snapshot)?;
@@ -477,7 +495,6 @@ pub(crate) fn static_provider_preflight_snapshot(
 }
 
 fn live_xai_preflight_for_profile(
-    _state: &DesktopState,
     provider_profiles: &ProviderCredentialsView,
     profile: &ProviderCredentialProfile,
     selected_model_id: &str,
@@ -1043,7 +1060,7 @@ fn classify_provider_preflight_error(code: &str, message: &str) -> ProviderPrefl
 mod tests {
     use super::*;
     use crate::commands::SessionContextLimitConfidenceDto;
-    use crate::provider_credentials::ProviderCredentialLink;
+    use crate::provider_credentials::{ProviderCredentialLink, ProviderCredentialsView};
     use crate::provider_models::{
         ProviderModelRecord, ProviderModelThinkingCapability, ProviderModelThinkingEffort,
     };
@@ -1345,5 +1362,70 @@ mod tests {
             &session(now + XAI_PREFLIGHT_REFRESH_SKEW_SECONDS + 1),
             now
         ));
+    }
+
+    #[test]
+    fn xai_live_preflight_is_attempted_before_catalog_fallback() {
+        let profile = ProviderCredentialProfile {
+            profile_id: "xai-default".into(),
+            provider_id: XAI_PROVIDER_ID.into(),
+            runtime_kind: XAI_PROVIDER_ID.into(),
+            label: "xAI".into(),
+            model_id: "grok-4.3-latest".into(),
+            preset_id: Some(XAI_PROVIDER_ID.into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential_link: None,
+            updated_at: "2026-06-11T23:48:32Z".into(),
+        };
+        let provider_profiles = ProviderCredentialsView::from_projected_profiles_for_tests(
+            profile.profile_id.clone(),
+            vec![profile.clone()],
+            Vec::new(),
+        );
+        let catalog = ProviderModelCatalog {
+            profile_id: profile.profile_id.clone(),
+            provider_id: XAI_PROVIDER_ID.into(),
+            configured_model_id: "grok-4.3-latest".into(),
+            source: ProviderModelCatalogSource::Cache,
+            fetched_at: Some("2026-06-05T19:49:35Z".into()),
+            last_success_at: Some("2026-06-05T19:49:35Z".into()),
+            last_refresh_error: None,
+            models: vec![ProviderModelRecord {
+                model_id: "grok-4.3-latest".into(),
+                display_name: "Grok 4.3 Latest".into(),
+                thinking: ProviderModelThinkingCapability {
+                    supported: true,
+                    effort_options: vec![ProviderModelThinkingEffort::Low],
+                    default_effort: Some(ProviderModelThinkingEffort::Low),
+                },
+                input_modalities: vec!["image".into(), "text".into()],
+                input_modalities_source: "xai_language_models_api".into(),
+                context_window_tokens: Some(1_000_000),
+                max_output_tokens: Some(4_096),
+                context_limit_source: Some(SessionContextLimitSourceDto::LiveCatalog),
+                context_limit_confidence: Some(SessionContextLimitConfidenceDto::High),
+                context_limit_fetched_at: Some("2026-06-05T19:49:35Z".into()),
+            }],
+        };
+
+        let snapshot = live_xai_preflight_for_profile(
+            &provider_profiles,
+            &profile,
+            "grok-4.3-latest",
+            ProviderPreflightRequiredFeatures::owned_agent_text_turn(),
+            &catalog,
+        )
+        .expect("xai live preflight should not error")
+        .expect("xai provider should return a live preflight snapshot");
+
+        assert_eq!(snapshot.source, ProviderPreflightSource::LiveProbe);
+        assert!(snapshot
+            .checks
+            .iter()
+            .any(|check| check.code == "provider_preflight_credentials"
+                && check.status == xero_agent_core::ProviderPreflightStatus::Failed));
     }
 }

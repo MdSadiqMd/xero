@@ -542,6 +542,65 @@ describe('buildHistoricalConversationTurns', () => {
     }
   })
 
+  it('resolves accepted routing handoffs and hides the internal continuation prompt', () => {
+    const routingSummary = 'Explain the repository purpose.'
+    const markerText = [
+      'This is a straightforward documentation question.',
+      `<xero-routing-suggestion target="ask" reason="Question-only project overview request" summary="${routingSummary}"/>`,
+    ].join('\n\n')
+    const continuationPrompt = [
+      'The user accepted the routing suggestion to switch to Ask.',
+      'Continue the original request now in this same session.',
+      'Target agent: Ask',
+      `Carry over: ${routingSummary}`,
+      'Routing reason: Question-only project overview request',
+    ].join('\n\n')
+    const transcript = makeTranscript(
+      [
+        makeRun('run-source', 'handed_off', '2026-05-08T09:00:00Z', 2),
+        makeRun('run-target-ask-1', 'completed', '2026-05-08T09:01:00Z', 2),
+      ],
+      [
+        makeMessageItem('run-source', 1, 'user', 'What is this project about?'),
+        makeMessageItem('run-source', 2, 'assistant', markerText),
+        makeMessageItem('run-target-ask-1', 3, 'user', continuationPrompt),
+        makeMessageItem(
+          'run-target-ask-1',
+          4,
+          'assistant',
+          'This project is Xero, a Tauri desktop application for agent workflows.',
+        ),
+      ],
+    )
+
+    const turns = buildHistoricalConversationTurns(transcript, { activeRunId: null })
+
+    expect(turns.map((turn) => turn.kind)).toEqual([
+      'message',
+      'message',
+      'routing_suggestion',
+      'handoff_notice',
+      'message',
+    ])
+    expect(turns.some((turn) => turn.kind === 'message' && turn.text.includes('accepted the routing suggestion'))).toBe(false)
+    expect(turns[1]).toMatchObject({
+      role: 'assistant',
+      text: 'This is a straightforward documentation question.',
+    })
+    expect(turns[2]).toMatchObject({
+      kind: 'routing_suggestion',
+      targetAgentId: 'ask',
+      isResolved: true,
+      acceptedTarget: 'ask',
+      acceptedTargetLabel: 'Ask',
+      routingResolutionMode: 'manual',
+    })
+    expect(turns[4]).toMatchObject({
+      role: 'assistant',
+      text: 'This project is Xero, a Tauri desktop application for agent workflows.',
+    })
+  })
+
   it('extracts custom routing-suggestion targets with carry-over labels', () => {
     const markerText =
       '<xero-routing-suggestion targetKind="custom" definitionId="release_helper" runtimeAgentId="ask" targetLabel="Release Helper" reason="release docs" summary="draft notes from context"/>\n\nRelease Helper can take it from here.'

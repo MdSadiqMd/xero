@@ -2855,7 +2855,7 @@ fn find_session_context_sensitive_content(value: &str) -> Option<&'static str> {
         || normalized.contains("token=")
         || normalized.contains("token:")
         || normalized.contains("\"token\"")
-        || normalized.contains("sk-")
+        || contains_sk_api_key_material(value)
         || normalized.contains("-----begin")
         || normalized.contains("ghp_")
         || normalized.contains("gho_")
@@ -2886,6 +2886,31 @@ fn find_session_context_sensitive_content(value: &str) -> Option<&'static str> {
     }
 
     None
+}
+
+fn contains_sk_api_key_material(value: &str) -> bool {
+    value
+        .split(|character: char| character.is_whitespace() || is_secret_token_separator(character))
+        .any(|token| {
+            let lower = token.to_ascii_lowercase();
+            lower
+                .strip_prefix("sk-")
+                .is_some_and(|suffix| is_secret_like_token(suffix, 16))
+        })
+}
+
+fn is_secret_token_separator(character: char) -> bool {
+    matches!(
+        character,
+        '"' | '\'' | '`' | ',' | ';' | ':' | '=' | '(' | ')' | '[' | ']' | '{' | '}' | '\\'
+    )
+}
+
+fn is_secret_like_token(value: &str, min_len: usize) -> bool {
+    value.chars().count() >= min_len
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
 }
 
 fn looks_like_prompt_injection_text(normalized: &str) -> bool {
@@ -3156,7 +3181,7 @@ fn ensure_secret_free_json<T: Serialize>(value: &T) -> Result<(), String> {
 
 fn find_serialized_secret_marker(value: &str) -> Option<&'static str> {
     let normalized = value.to_ascii_lowercase();
-    if normalized.contains("sk-")
+    if contains_sk_api_key_material(value)
         || normalized.contains("bearer ")
         || normalized.contains("bearer:")
         || normalized.contains("authorization=")
@@ -3201,6 +3226,35 @@ mod tests {
         provider_capability_catalog, provider_preflight_snapshot, ProviderCapabilityCatalogInput,
         ProviderPreflightInput, ProviderPreflightRequiredFeatures, ProviderPreflightSource,
     };
+
+    #[test]
+    fn ask_routing_identifiers_are_not_treated_as_sk_secrets() {
+        assert_eq!(
+            find_serialized_secret_marker(
+                r#"{"runId":"run-source-target-ask-b7affd","agent":"ask-agent"}"#,
+            ),
+            None
+        );
+
+        let (text, redaction) =
+            redact_session_context_text("run-source-target-ask-b7affd continued with ask-agent");
+        assert_eq!(
+            text,
+            "run-source-target-ask-b7affd continued with ask-agent"
+        );
+        assert!(!redaction.redacted);
+    }
+
+    #[test]
+    fn long_sk_tokens_remain_secret_markers() {
+        let token = "sk-live-secret-value-that-is-long-enough";
+
+        assert_eq!(find_serialized_secret_marker(token), Some("secret marker"));
+
+        let (text, redaction) = redact_session_context_text(token);
+        assert_eq!(text, REDACTED_TEXT);
+        assert!(redaction.redacted);
+    }
 
     #[test]
     fn context_limit_prefers_preflight_catalog_limit_over_static_heuristic() {

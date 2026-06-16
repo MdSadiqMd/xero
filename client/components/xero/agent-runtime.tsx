@@ -148,6 +148,16 @@ import {
   parseRoutingMarker,
   stripRoutingMarkers,
 } from './agent-runtime/routing-suggestion-marker'
+import {
+  applyPersistedRoutingContinuationResolutions,
+  applyRoutingContinuationDecision,
+  filterInternalRoutingContinuationTurns,
+  getRoutingDecisionTargetLabel,
+  getRoutingResolutionForDecision,
+  isInternalRoutingContinuationPromptText,
+  parseInternalRoutingContinuationPromptText,
+  type RoutingResolutionRecord,
+} from './agent-runtime/routing-continuation'
 
 export type AgentRuntimeDesktopAdapter = SpeechDictationAdapter &
   Partial<
@@ -304,6 +314,7 @@ const FOREGROUND_WORK_DEFER_MS = 32
 const STREAMING_TOOL_OUTPUT_MAX_CHARS = 24_000
 const CONTEXT_METER_REFRESH_IDLE_TIMEOUT_MS = 1200
 const CONTEXT_METER_REFRESH_FALLBACK_DELAY_MS = 220
+const PENDING_PROMPT_TRANSCRIPT_CLOCK_SKEW_MS = 120_000
 const CODE_EDIT_TOOL_NAMES = new Set(['edit', 'patch', 'write', 'apply_patch', 'notebook_edit'])
 const OWNED_AGENT_ACTION_PROMPT_TYPES = new Set([
   'command_approval',
@@ -999,13 +1010,6 @@ interface PendingPromptTurn {
   attachments?: ConversationMessageAttachment[]
 }
 
-type RoutingResolutionRecord = {
-  acceptedTarget: RuntimeAgentIdDto | null
-  acceptedTargetAgentDefinitionId: string | null
-  acceptedTargetLabel: string | null
-  routingResolutionMode: 'manual' | 'automatic' | null
-}
-
 type PendingRoutingContinuation = {
   turnId: string
   decision: RoutingSuggestionDecision
@@ -1142,18 +1146,6 @@ function buildRoutingDeclineContinuationPrompt(
   ].join('\n\n')
 }
 
-function getRoutingDecisionTargetLabel(
-  decision: Pick<
-    RoutingSuggestionDecision,
-    'targetAgentId' | 'targetAgentDefinitionId' | 'targetLabel'
-  >,
-): string {
-  return (
-    decision.targetLabel?.trim() ||
-    (decision.targetAgentDefinitionId ? 'the suggested custom agent' : getRuntimeAgentLabel(decision.targetAgentId))
-  )
-}
-
 function buildRoutingAcceptContinuationPrompt(
   decision: Extract<RoutingSuggestionDecision, { kind: 'accept' }>,
 ): string {
@@ -1169,26 +1161,6 @@ function buildRoutingAcceptContinuationPrompt(
     'Continue the original request now in this same session.',
     ...contextLines,
   ].join('\n\n')
-}
-
-function getRoutingResolutionForDecision(
-  decision: RoutingSuggestionDecision,
-): RoutingResolutionRecord {
-  if (decision.kind === 'decline') {
-    return {
-      acceptedTarget: null,
-      acceptedTargetAgentDefinitionId: null,
-      acceptedTargetLabel: null,
-      routingResolutionMode: decision.resolutionMode ?? 'manual',
-    }
-  }
-
-  return {
-    acceptedTarget: decision.targetAgentId,
-    acceptedTargetAgentDefinitionId: decision.targetAgentDefinitionId ?? null,
-    acceptedTargetLabel: decision.targetLabel ?? null,
-    routingResolutionMode: decision.resolutionMode ?? 'manual',
-  }
 }
 
 function buildRoutingAcceptDecisionFromTurn(
@@ -1532,7 +1504,10 @@ function findTranscriptForPendingPrompt(
     }
 
     const itemCreatedAtMs = Date.parse(item.createdAt)
-    if (Number.isFinite(itemCreatedAtMs) && itemCreatedAtMs >= queuedAtMs - 5_000) {
+    if (
+      Number.isFinite(itemCreatedAtMs) &&
+      itemCreatedAtMs >= queuedAtMs - PENDING_PROMPT_TRANSCRIPT_CLOCK_SKEW_MS
+    ) {
       return item
     }
   }
@@ -1554,6 +1529,21 @@ function appendPendingPromptTurn(
 
   const text = pendingPrompt.text.trim()
   if (!text && !pendingPrompt.attachments?.length) {
+    return turns
+  }
+
+  const visibleText = normalizeConversationTurnText(userVisiblePromptText(text))
+  const alreadyVisible = Boolean(
+    visibleText &&
+      pendingPrompt.id.startsWith('queued:') &&
+      turns.some(
+        (turn) =>
+          turn.kind === 'message' &&
+          turn.role === 'user' &&
+          normalizeConversationTurnText(userVisiblePromptText(turn.text)) === visibleText,
+      ),
+  )
+  if (alreadyVisible) {
     return turns
   }
 
@@ -1629,11 +1619,6 @@ function normalizeConversationTurnText(text: string): string {
   return text.trim().replace(/\s+/g, ' ')
 }
 
-interface InternalRoutingContinuationDecision {
-  kind: 'accept' | 'decline'
-  targetLabel: string
-}
-
 const ROUTING_DECLINE_CONTINUATION_PREFIX =
   'The user chose to stay with the current Agent instead of switching to '
 const ROUTING_DECLINE_CONTINUATION_BODY =
@@ -1642,162 +1627,6 @@ const ROUTING_ACCEPT_CONTINUATION_PREFIX =
   'The user accepted the routing suggestion to switch to '
 const ROUTING_ACCEPT_CONTINUATION_BODY =
   'Continue the original request now in this same session.'
-
-function parseRoutingContinuationTargetLabel(
-  normalizedText: string,
-  prefix: string,
-  continuationBody: string,
-): string | null {
-  if (!normalizedText.startsWith(prefix)) {
-    return null
-  }
-
-  const targetWithRest = normalizedText.slice(prefix.length)
-  const continuationStart = targetWithRest.indexOf(`. ${continuationBody}`)
-  if (continuationStart < 0) {
-    return null
-  }
-  const targetLabel = (
-    targetWithRest.slice(0, continuationStart)
-  ).trim()
-  return targetLabel.length > 0 ? targetLabel : null
-}
-
-function parseInternalRoutingContinuationPromptText(
-  text: string,
-): InternalRoutingContinuationDecision | null {
-  const normalized = normalizeConversationTurnText(text)
-  if (!normalized) return null
-
-  const declinedTargetLabel = parseRoutingContinuationTargetLabel(
-    normalized,
-    ROUTING_DECLINE_CONTINUATION_PREFIX,
-    ROUTING_DECLINE_CONTINUATION_BODY,
-  )
-  if (declinedTargetLabel) {
-    return {
-      kind: 'decline',
-      targetLabel: declinedTargetLabel,
-    }
-  }
-
-  const acceptedTargetLabel = parseRoutingContinuationTargetLabel(
-    normalized,
-    ROUTING_ACCEPT_CONTINUATION_PREFIX,
-    ROUTING_ACCEPT_CONTINUATION_BODY,
-  )
-  if (acceptedTargetLabel) {
-    return {
-      kind: 'accept',
-      targetLabel: acceptedTargetLabel,
-    }
-  }
-
-  return null
-}
-
-function isInternalRoutingContinuationPromptText(text: string): boolean {
-  return parseInternalRoutingContinuationPromptText(text) !== null
-}
-
-function isInternalRoutingContinuationTurn(turn: ConversationTurn): boolean {
-  return (
-    turn.kind === 'message' &&
-    turn.role === 'user' &&
-    isInternalRoutingContinuationPromptText(turn.text)
-  )
-}
-
-function filterInternalRoutingContinuationTurns(turns: ConversationTurn[]): ConversationTurn[] {
-  const filteredTurns = turns.filter((turn) => !isInternalRoutingContinuationTurn(turn))
-  return filteredTurns.length === turns.length ? turns : filteredTurns
-}
-
-function getRoutingTurnTargetLabel(
-  turn: Extract<ConversationTurn, { kind: 'routing_suggestion' }>,
-): string {
-  return (
-    turn.targetLabel?.trim() ||
-    (turn.targetAgentDefinitionId ? 'the suggested custom agent' : getRuntimeAgentLabel(turn.targetAgentId))
-  )
-}
-
-function routingContinuationMatchesTurn(
-  decision: InternalRoutingContinuationDecision,
-  turn: Extract<ConversationTurn, { kind: 'routing_suggestion' }>,
-): boolean {
-  return (
-    normalizeConversationTurnText(decision.targetLabel).toLocaleLowerCase() ===
-    normalizeConversationTurnText(getRoutingTurnTargetLabel(turn)).toLocaleLowerCase()
-  )
-}
-
-function resolveRoutingTurnFromContinuation(
-  turn: Extract<ConversationTurn, { kind: 'routing_suggestion' }>,
-  decision: InternalRoutingContinuationDecision,
-): Extract<ConversationTurn, { kind: 'routing_suggestion' }> {
-  if (decision.kind === 'decline') {
-    return {
-      ...turn,
-      isResolved: true,
-      acceptedTarget: null,
-      acceptedTargetAgentDefinitionId: null,
-      acceptedTargetLabel: null,
-      routingResolutionMode: 'manual',
-    }
-  }
-
-  return {
-    ...turn,
-    isResolved: true,
-    acceptedTarget: turn.targetAgentId,
-    acceptedTargetAgentDefinitionId: turn.targetAgentDefinitionId,
-    acceptedTargetLabel: turn.targetLabel ?? decision.targetLabel,
-    routingResolutionMode: 'manual',
-  }
-}
-
-function applyRoutingContinuationDecision(
-  turns: ConversationTurn[],
-  decision: InternalRoutingContinuationDecision,
-  beforeIndex: number,
-): ConversationTurn[] {
-  for (let candidateIndex = beforeIndex - 1; candidateIndex >= 0; candidateIndex -= 1) {
-    const candidate = turns[candidateIndex]
-    if (candidate.kind !== 'routing_suggestion') {
-      continue
-    }
-    if (!routingContinuationMatchesTurn(decision, candidate)) {
-      continue
-    }
-
-    const nextTurns = turns.slice()
-    nextTurns[candidateIndex] = resolveRoutingTurnFromContinuation(candidate, decision)
-    return nextTurns
-  }
-
-  return turns
-}
-
-function applyPersistedRoutingContinuationResolutions(turns: ConversationTurn[]): ConversationTurn[] {
-  let nextTurns = turns
-
-  for (let index = 0; index < turns.length; index += 1) {
-    const turn = turns[index]
-    if (turn.kind !== 'message' || turn.role !== 'user') {
-      continue
-    }
-
-    const decision = parseInternalRoutingContinuationPromptText(turn.text)
-    if (!decision) {
-      continue
-    }
-
-    nextTurns = applyRoutingContinuationDecision(nextTurns, decision, index)
-  }
-
-  return nextTurns
-}
 
 function conversationMessageCovers(
   coveringTurn: ConversationTurn,
@@ -1874,7 +1703,6 @@ function routingSuggestionsAreEquivalent(
   const rightRunId = getConversationTurnRunId(right)
   return (
     Boolean(leftRunId && rightRunId && leftRunId === rightRunId) &&
-    Math.abs(left.sequence - right.sequence) <= 1 &&
     left.targetKind === right.targetKind &&
     left.targetAgentId === right.targetAgentId &&
     left.targetAgentDefinitionId === right.targetAgentDefinitionId &&

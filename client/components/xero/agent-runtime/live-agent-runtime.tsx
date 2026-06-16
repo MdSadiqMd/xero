@@ -19,6 +19,45 @@ const LazyAgentRuntime = lazy(() =>
   import('@/components/xero/agent-runtime').then((module) => ({ default: module.AgentRuntime })),
 )
 
+function getHistoricalTurnRunIdFromId(id: string): string | null {
+  const normalizedId = id.replace(/^routing_suggestion:/, '')
+  const toolMatch = /^tool:([^:]+):/.exec(normalizedId)
+  if (toolMatch) {
+    return toolMatch[1] ?? null
+  }
+  const match = /^(?:transcript|history|activity):(.+):[^:]+$/.exec(normalizedId)
+  return match?.[1] ?? null
+}
+
+function historicalTurnBelongsToActiveRun(
+  turn: ConversationTurn,
+  activeRunId: string | null,
+): boolean {
+  if (!activeRunId) {
+    return false
+  }
+
+  if (turn.kind === 'handoff_notice') {
+    return turn.sourceRunId === activeRunId
+  }
+
+  return getHistoricalTurnRunIdFromId(turn.id) === activeRunId
+}
+
+function filterHistoricalTurnsForActiveRun(
+  turns: ConversationTurn[],
+  activeRunId: string | null,
+): ConversationTurn[] {
+  if (!activeRunId) {
+    return turns
+  }
+
+  const filteredTurns = turns.filter(
+    (turn) => !historicalTurnBelongsToActiveRun(turn, activeRunId),
+  )
+  return filteredTurns.length === turns.length ? turns : filteredTurns
+}
+
 function AgentRuntimeLoadingShell() {
   return (
     <div
@@ -94,7 +133,7 @@ export function useAgentViewWithLiveRuntimeStream(
 export function useHistoricalConversationTurnsState(
   agent: AgentPaneView | null,
   desktopAdapter: AgentRuntimeDesktopAdapter | undefined,
-): { loading: boolean; turns: ConversationTurn[] | null } {
+): { loading: boolean; turns: ConversationTurn[] | null; status: 'idle' | 'loading' | 'ready' | 'failed' } {
   const projectId = agent?.project.id ?? null
   const agentSessionId = agent?.project.selectedAgentSessionId ?? null
   const sessionRevision = agent?.project.selectedAgentSession?.updatedAt ?? null
@@ -105,16 +144,21 @@ export function useHistoricalConversationTurnsState(
   const [turnsByKey, setTurnsByKey] = useState<{
     sessionKey: string
     fetchKey: string
-    turns: ConversationTurn[]
+    turns: ConversationTurn[] | null
+    status: 'ready' | 'failed'
   } | null>(null)
   const streamStatus = agent?.runtimeStreamStatus ?? 'idle'
+  const streamIsAttachingWithoutRunId = Boolean(
+    !activeRunId &&
+      !runtimeRunIsTerminal &&
+      (streamStatus === 'subscribing' ||
+        streamStatus === 'replaying' ||
+        streamStatus === 'live'),
+  )
   const shouldDeferTranscriptFetch = Boolean(
     agent?.runtimeRunActionStatus === 'running' ||
       agent?.selectedPrompt?.hasQueuedPrompt ||
-      (!runtimeRunIsTerminal &&
-        (streamStatus === 'subscribing' ||
-          streamStatus === 'replaying' ||
-          streamStatus === 'live')),
+      streamIsAttachingWithoutRunId,
   )
 
   // Keying on (project, session, run) covers the same-type handoff case: when
@@ -149,13 +193,18 @@ export function useHistoricalConversationTurnsState(
       .then((transcript) => {
         if (cancelled) return
         const turns = buildHistoricalConversationTurns(transcript, { activeRunId })
-        setTurnsByKey({ sessionKey, fetchKey, turns })
+        setTurnsByKey({ sessionKey, fetchKey, turns, status: 'ready' })
       })
       .catch(() => {
         if (cancelled) return
-        // On failure, fall back silently to the live stream alone. The pane
-        // is still functional; only the historical context is missing.
-        setTurnsByKey({ sessionKey, fetchKey, turns: [] })
+        setTurnsByKey((current) => ({
+          sessionKey,
+          fetchKey,
+          turns: current?.sessionKey === sessionKey
+            ? filterHistoricalTurnsForActiveRun(current.turns ?? [], activeRunId)
+            : null,
+          status: 'failed',
+        }))
       })
 
     return () => {
@@ -173,20 +222,31 @@ export function useHistoricalConversationTurnsState(
     shouldDeferTranscriptFetch,
   ])
 
-  // While stale-keyed (e.g. user just switched panes or the active run id just
-  // arrived during project load), suppress the previous history. Keeping a
-  // transcript fetched with no active run would let the current run appear once
-  // as static history and again from the live/restored stream.
+  // While stale-keyed (e.g. the active run id just arrived during stream
+  // attach), keep only history that cannot belong to the active run. This
+  // preserves the source-run prompt/card through a routing handoff without
+  // letting the current run appear once as static history and again from the
+  // live stream.
   if (
     !sessionKey ||
     !fetchKey ||
     !turnsByKey ||
-    turnsByKey.sessionKey !== sessionKey ||
-    turnsByKey.fetchKey !== fetchKey
+    turnsByKey.sessionKey !== sessionKey
   ) {
-    return { loading: canFetchTranscript, turns: null }
+    return { loading: canFetchTranscript, turns: null, status: canFetchTranscript ? 'loading' : 'idle' }
   }
-  return { loading: false, turns: turnsByKey.turns }
+
+  if (turnsByKey.fetchKey !== fetchKey) {
+    return {
+      loading: canFetchTranscript,
+      turns: turnsByKey.turns
+        ? filterHistoricalTurnsForActiveRun(turnsByKey.turns, activeRunId)
+        : null,
+      status: canFetchTranscript ? 'loading' : turnsByKey.status,
+    }
+  }
+
+  return { loading: false, turns: turnsByKey.turns, status: turnsByKey.status }
 }
 
 export function useHistoricalConversationTurns(
@@ -237,6 +297,7 @@ export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
       !liveAgent ||
       !liveAgentIdentity ||
       historicalConversationState.loading ||
+      historicalConversationState.status === 'failed' ||
       incomingLooksLikeProjectShell
     ) {
       return
@@ -249,6 +310,7 @@ export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
     }
   }, [
     historicalConversationState.loading,
+    historicalConversationState.status,
     historicalConversationState.turns,
     incomingLooksLikeProjectShell,
     liveAgent,
@@ -263,6 +325,7 @@ export const LiveAgentRuntimeView = memo(function LiveAgentRuntimeView({
         lastReadySnapshot.identity !== liveAgentIdentity,
     ) && (
       historicalConversationState.loading ||
+      historicalConversationState.status === 'failed' ||
       incomingLooksLikeProjectShell
     )
   const renderedAgent = shouldHoldPreviousRuntime

@@ -350,6 +350,54 @@ describe('useHistoricalConversationTurns', () => {
     expect(screen.getByText('settled next session')).toBeInTheDocument()
   })
 
+  it('does not promote a failed transcript fetch into a blank switched runtime', async () => {
+    const highChurnStore = createXeroHighChurnStore()
+    const { adapter } = makeAdapter(makeTranscript({ text: 'settled previous session' }))
+    const { rerender } = render(
+      <LiveAgentRuntimeView
+        agent={makeAgentPane({ activeRunId: null })}
+        highChurnStore={highChurnStore}
+        desktopAdapter={adapter}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-runtime')).toHaveAttribute(
+        'data-loading-history',
+        'false',
+      )
+    })
+
+    const getSessionTranscript = vi.fn(async () => {
+      throw new Error('context projection failed')
+    })
+    const failingAdapter = {
+      getSessionTranscript,
+    } as unknown as AgentRuntimeDesktopAdapter
+
+    rerender(
+      <LiveAgentRuntimeView
+        agent={makeAgentPane({
+          activeRunId: null,
+          projectId: 'project-next',
+          sessionId: 'agent-session-next',
+          sessionUpdatedAt: '2026-05-08T10:30:00Z',
+        })}
+        highChurnStore={highChurnStore}
+        desktopAdapter={failingAdapter}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(getSessionTranscript).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-runtime')).toHaveAttribute('data-project-id', PROJECT_ID)
+    })
+    expect(screen.getByTestId('agent-runtime')).toHaveAttribute('data-session-id', SESSION_ID)
+    expect(screen.getByText('settled previous session')).toBeInTheDocument()
+  })
+
   it('returns null while no transcript fetch has settled (so the pane falls back to the live stream)', () => {
     const { adapter } = makeAdapter(makeTranscriptWithHandoff())
     const { result } = renderHook(() =>
@@ -363,7 +411,7 @@ describe('useHistoricalConversationTurns', () => {
     const { result } = renderHook(() =>
       useHistoricalConversationTurnsState(makeAgentPane({ activeRunId: 'run-B' }), adapter),
     )
-    expect(result.current).toEqual({ loading: true, turns: null })
+    expect(result.current).toEqual({ loading: true, turns: null, status: 'loading' })
   })
 
   it('fetches the session transcript and projects the source run plus a handoff_notice when the active run is the handoff target', async () => {
@@ -504,7 +552,7 @@ describe('useHistoricalConversationTurns', () => {
     })
   })
 
-  it('suppresses history fetched before active run metadata arrives during stream attach', async () => {
+  it('filters stale history fetched before active run metadata arrives during stream attach', async () => {
     const transcript = makeTranscriptWithHandoff()
     const { adapter, getSessionTranscript } = makeAdapter(transcript)
     const initialProps: ActiveRunHookProps = {
@@ -532,10 +580,12 @@ describe('useHistoricalConversationTurns', () => {
 
     rerender({ activeRunId: 'run-B', runtimeStreamStatus: 'replaying' })
 
-    expect(result.current).toBeNull()
-    expect(getSessionTranscript).toHaveBeenCalledTimes(1)
-
-    rerender({ activeRunId: 'run-B', runtimeStreamStatus: 'complete' })
+    expect(result.current?.some(
+      (turn) => turn.kind === 'message' && turn.text === 'long original prompt',
+    )).toBe(true)
+    expect(result.current?.some(
+      (turn) => turn.kind === 'message' && turn.text === 'continuation in fresh run',
+    )).toBe(false)
 
     await waitFor(() => {
       expect(getSessionTranscript).toHaveBeenCalledTimes(2)
@@ -548,7 +598,33 @@ describe('useHistoricalConversationTurns', () => {
     })
   })
 
-  it('defers transcript fetches while a prompt or live runtime stream is active', async () => {
+  it('fetches source-run history while a known active run is live', async () => {
+    const transcript = makeTranscriptWithHandoff()
+    const { adapter, getSessionTranscript } = makeAdapter(transcript)
+    const { result } = renderHook(() =>
+      useHistoricalConversationTurns(
+        makeAgentPane({
+          activeRunId: 'run-B',
+          runtimeStreamStatus: 'live',
+        }),
+        adapter,
+      ),
+    )
+
+    await waitFor(() => {
+      expect(getSessionTranscript).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(result.current?.some(
+        (turn) => turn.kind === 'message' && turn.text === 'long original prompt',
+      )).toBe(true)
+    })
+    expect(result.current?.some(
+      (turn) => turn.kind === 'message' && turn.text === 'continuation in fresh run',
+    )).toBe(false)
+  })
+
+  it('defers transcript fetches while a prompt continuation is queued', async () => {
     const transcript = makeTranscriptWithHandoff()
     const { adapter, getSessionTranscript } = makeAdapter(transcript)
     const { result, rerender } = renderHook(
@@ -592,6 +668,6 @@ describe('useHistoricalConversationTurns', () => {
         {} as AgentRuntimeDesktopAdapter,
       ),
     )
-    expect(result.current).toEqual({ loading: false, turns: null })
+    expect(result.current).toEqual({ loading: false, turns: null, status: 'idle' })
   })
 })
